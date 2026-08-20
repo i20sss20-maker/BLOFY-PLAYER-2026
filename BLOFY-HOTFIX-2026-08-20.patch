@@ -1,0 +1,608 @@
+diff --git a/BLOFY-ANDROID-2026/README_AR.md b/BLOFY-ANDROID-2026/README_AR.md
+index ee54f7d..d570000 100644
+--- a/BLOFY-ANDROID-2026/README_AR.md
++++ b/BLOFY-ANDROID-2026/README_AR.md
+@@ -22,7 +22,7 @@
+ 4. شغّل:
+ 
+ ```bash
+-export BLOFY_BASE_URL="https://YOUR-PROJECT.up.railway.app"
++export BLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app"
+ ./scripts/build-apk.sh
+ ```
+ 
+diff --git a/BLOFY-ANDROID-2026/app/build.gradle.kts b/BLOFY-ANDROID-2026/app/build.gradle.kts
+index 4d89fda..c3c72ba 100644
+--- a/BLOFY-ANDROID-2026/app/build.gradle.kts
++++ b/BLOFY-ANDROID-2026/app/build.gradle.kts
+@@ -6,7 +6,7 @@ fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("
+ 
+ val portalUrl = providers.gradleProperty("BLOFY_BASE_URL")
+     .orElse(providers.environmentVariable("BLOFY_BASE_URL"))
+-    .orElse("https://YOUR-RAILWAY-DOMAIN.up.railway.app")
++    .orElse("https://blofy-player-2026-production.up.railway.app")
+ 
+ android {
+     namespace = "tv.blofy.player"
+@@ -16,8 +16,8 @@ android {
+         applicationId = "tv.blofy.player"
+         minSdk = 23
+         targetSdk = 36
+-        versionCode = 20260820
+-        versionName = "2026.08.20"
++        versionCode = 202608201
++        versionName = "2026.08.20.1"
+         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
+     }
+ 
+diff --git a/BLOFY-ANDROID-2026/app/src/main/AndroidManifest.xml b/BLOFY-ANDROID-2026/app/src/main/AndroidManifest.xml
+index 9a9a7a0..8f88eed 100644
+--- a/BLOFY-ANDROID-2026/app/src/main/AndroidManifest.xml
++++ b/BLOFY-ANDROID-2026/app/src/main/AndroidManifest.xml
+@@ -17,7 +17,7 @@
+         android:networkSecurityConfig="@xml/network_security_config"
+         android:supportsRtl="true"
+         android:theme="@style/Theme.Blofy"
+-        android:usesCleartextTraffic="false">
++        android:usesCleartextTraffic="true">
+ 
+         <activity
+             android:name=".PlayerActivity"
+diff --git a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
+index 6774bb0..21e35ce 100644
+--- a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
++++ b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
+@@ -251,17 +251,19 @@ public final class MainActivity extends Activity {
+                 try {
+                     Uri target = Uri.parse(url);
+                     Uri allowed = Uri.parse(activeBaseUrl);
+-                    if (!"https".equalsIgnoreCase(target.getScheme()) || allowed.getHost() == null || !allowed.getHost().equalsIgnoreCase(target.getHost()) || !target.getPath().startsWith("/api/play/")) {
++                    boolean signedNative = "/api/native-play".equals(target.getPath());
++                    boolean legacyPlay = target.getPath() != null && target.getPath().startsWith("/api/play/");
++                    if (!"https".equalsIgnoreCase(target.getScheme()) || allowed.getHost() == null || !allowed.getHost().equalsIgnoreCase(target.getHost()) || (!signedNative && !legacyPlay)) {
+                         throw new IllegalArgumentException("رابط تشغيل غير مسموح");
+                     }
+-                    String cookie = CookieManager.getInstance().getCookie(url);
++                    String cookie = signedNative ? "" : CookieManager.getInstance().getCookie(url);
+                     Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
+                     intent.putExtra(PlayerActivity.EXTRA_URL, url);
+                     intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
+                     intent.putExtra(PlayerActivity.EXTRA_KIND, kind);
+                     intent.putExtra(PlayerActivity.EXTRA_EXTENSION, extension);
+                     intent.putExtra(PlayerActivity.EXTRA_COOKIE, cookie == null ? "" : cookie);
+-                    intent.putExtra(PlayerActivity.EXTRA_DEVICE_ID, deviceId());
++                    intent.putExtra(PlayerActivity.EXTRA_DEVICE_ID, signedNative ? "" : deviceId());
+                     startActivity(intent);
+                 } catch (Exception error) {
+                     Toast.makeText(MainActivity.this, error.getMessage(), Toast.LENGTH_LONG).show();
+diff --git a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+index ca66c74..acf5ae6 100644
+--- a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
++++ b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+@@ -4,6 +4,8 @@ import android.app.Activity;
+ import android.graphics.Color;
+ import android.net.Uri;
+ import android.os.Bundle;
++import android.os.Handler;
++import android.os.Looper;
+ import android.view.Gravity;
+ import android.view.KeyEvent;
+ import android.view.View;
+@@ -59,6 +61,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+     private String deviceId;
+     private long resumePosition;
+     private boolean forceVideoCompatibility;
++    private final Handler playbackHandler = new Handler(Looper.getMainLooper());
++    private final Runnable playbackTimeout = () -> {
++        if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
++        player.stop();
++        progress.setVisibility(View.GONE);
++        errorPanel.setVisibility(View.VISIBLE);
++        errorText.setText(forceVideoCompatibility
++                ? "لم يستجب المصدر حتى بوضع التوافق. تحقق من المصدر أو جرّب قناة أخرى."
++                : "تأخر المصدر في الاستجابة. اضغط وضع التوافق لتحويل البث إلى H.264/AAC.");
++        retryButton.setText(forceVideoCompatibility ? "إعادة المحاولة" : "تشغيل بوضع التوافق");
++        retryButton.requestFocus();
++    };
+ 
+     @Override
+     protected void onCreate(@Nullable Bundle savedInstanceState) {
+@@ -175,7 +189,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+     }
+ 
+     private String mimeType() {
+-        if (forceVideoCompatibility || isLive() || "m3u8".equals(extension)) return "application/x-mpegURL";
++        if (forceVideoCompatibility || "m3u8".equals(extension)) return "application/x-mpegURL";
+         switch (extension) {
+             case "mpd": return "application/dash+xml";
+             case "mp4":
+@@ -196,6 +210,11 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+         return extension.matches("mp4|m4v|mov|mkv|webm|ts|mts|m2ts|mp3|aac|m3u8|mpd");
+     }
+ 
++    private void schedulePlaybackTimeout() {
++        playbackHandler.removeCallbacks(playbackTimeout);
++        playbackHandler.postDelayed(playbackTimeout, forceVideoCompatibility ? 35_000 : 20_000);
++    }
++
+     private void initializePlayer() {
+         if (player != null) return;
+         Map<String, String> headers = new HashMap<>();
+@@ -240,6 +259,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+         progress.setVisibility(View.VISIBLE);
+         errorPanel.setVisibility(View.GONE);
+         playerView.requestFocus();
++        schedulePlaybackTimeout();
+     }
+ 
+     private void retryPlayback() {
+@@ -254,6 +274,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+             progress.setVisibility(View.VISIBLE);
+             player.prepare();
+             player.play();
++            schedulePlaybackTimeout();
+         }
+     }
+ 
+@@ -261,11 +282,15 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+     public void onPlaybackStateChanged(int playbackState) {
+         if (playbackState == Player.STATE_BUFFERING) progress.setVisibility(View.VISIBLE);
+         else if (playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) progress.setVisibility(View.GONE);
+-        if (playbackState == Player.STATE_READY) titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
++        if (playbackState == Player.STATE_READY) {
++            playbackHandler.removeCallbacks(playbackTimeout);
++            titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
++        }
+     }
+ 
+     @Override
+     public void onPlayerError(PlaybackException error) {
++        playbackHandler.removeCallbacks(playbackTimeout);
+         progress.setVisibility(View.GONE);
+         errorPanel.setVisibility(View.VISIBLE);
+         errorText.setText(forceVideoCompatibility
+@@ -289,6 +314,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+     }
+ 
+     private void releasePlayer() {
++        playbackHandler.removeCallbacks(playbackTimeout);
+         if (player == null) return;
+         savePosition();
+         playerView.setPlayer(null);
+diff --git a/BLOFY-ANDROID-2026/app/src/main/res/xml/network_security_config.xml b/BLOFY-ANDROID-2026/app/src/main/res/xml/network_security_config.xml
+index 683208f..d7b4192 100644
+--- a/BLOFY-ANDROID-2026/app/src/main/res/xml/network_security_config.xml
++++ b/BLOFY-ANDROID-2026/app/src/main/res/xml/network_security_config.xml
+@@ -1,6 +1,6 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <network-security-config>
+-    <base-config cleartextTrafficPermitted="false">
++    <base-config cleartextTrafficPermitted="true">
+         <trust-anchors>
+             <certificates src="system" />
+         </trust-anchors>
+diff --git a/BLOFY-DELIVERY-2026-AR.md b/BLOFY-DELIVERY-2026-AR.md
+index 8d120ba..efa4f22 100644
+--- a/BLOFY-DELIVERY-2026-AR.md
++++ b/BLOFY-DELIVERY-2026-AR.md
+@@ -37,7 +37,7 @@ LICENSE_DB_PATH=/data/licenses.json
+ إنشاء رمز تفعيل لمدة 365 يومًا لجهاز واحد:
+ 
+ ```bash
+-curl -X POST "https://YOUR-PROJECT.up.railway.app/api/admin/codes" \
++curl -X POST "https://blofy-player-2026-production.up.railway.app/api/admin/codes" \
+   -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+   -H "Content-Type: application/json" \
+   -d '{"days":365,"maxUses":1,"label":"عميل 001"}'
+diff --git a/BLOFY-WEB-2026/web-test/README_AR.md b/BLOFY-WEB-2026/web-test/README_AR.md
+index 634373a..aac8325 100644
+--- a/BLOFY-WEB-2026/web-test/README_AR.md
++++ b/BLOFY-WEB-2026/web-test/README_AR.md
+@@ -29,7 +29,7 @@
+ إنشاء رمز تفعيل:
+ 
+ ```bash
+-curl -X POST "https://YOUR-PROJECT.up.railway.app/api/admin/codes" \
++curl -X POST "https://blofy-player-2026-production.up.railway.app/api/admin/codes" \
+   -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+   -H "Content-Type: application/json" \
+   -d '{"days":365,"maxUses":1,"label":"عميل 001"}'
+diff --git a/BLOFY-WEB-2026/web-test/lib/xtream.mjs b/BLOFY-WEB-2026/web-test/lib/xtream.mjs
+index 836f19f..7b73449 100644
+--- a/BLOFY-WEB-2026/web-test/lib/xtream.mjs
++++ b/BLOFY-WEB-2026/web-test/lib/xtream.mjs
+@@ -63,7 +63,7 @@ export class XtreamClient {
+       categoryId: String(row.category_id || ""),
+       rating: row.rating_5based || row.rating || "",
+       year: row.year || row.releaseDate || row.releasedate || "",
+-      extension: row.container_extension || (type === "live" ? "m3u8" : "mp4"),
++      extension: String(row.container_extension || (type === "live" ? "ts" : "mp4")).toLowerCase(),
+       epgId: row.epg_channel_id || "",
+       type,
+     }));
+@@ -105,7 +105,7 @@ export class XtreamClient {
+ 
+   streamUrl(type, id, extension = "") {
+     const segment = type === "live" ? "live" : type === "episode" ? "series" : "movie";
+-    const ext = String(extension || (type === "live" ? "m3u8" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || "mp4";
++    const ext = String(extension || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
+     return `${this.base}/${segment}/${encodeURIComponent(this.username)}/${encodeURIComponent(this.password)}/${encodeURIComponent(id)}.${ext}`;
+   }
+ }
+diff --git a/BLOFY-WEB-2026/web-test/public/app.js b/BLOFY-WEB-2026/web-test/public/app.js
+index 06e4464..6947f77 100644
+--- a/BLOFY-WEB-2026/web-test/public/app.js
++++ b/BLOFY-WEB-2026/web-test/public/app.js
+@@ -44,6 +44,8 @@ let searchTimer = null;
+ let toastTimer = null;
+ let playerItem = null;
+ let playerFailures = 0;
++let playerTimeout = null;
++let playerCompatibility = false;
+ 
+ function getDeviceId() {
+   try {
+@@ -438,17 +440,38 @@ function addHistory(item) {
+   storage.set("blofy_history", state.history);
+ }
+ 
+-async function openPlayer(item) {
++function clearPlayerTimeout() {
++  if (playerTimeout) clearTimeout(playerTimeout);
++  playerTimeout = null;
++}
++
++function armPlayerTimeout() {
++  clearPlayerTimeout();
++  playerTimeout = setTimeout(() => {
++    if (!playerModal.hidden && video.readyState < 2) {
++      showPlayerError(playerCompatibility
++        ? "لم يستجب المصدر حتى بوضع التوافق. تحقق من المصدر أو جرّب قناة أخرى."
++        : "تأخر المصدر في الاستجابة. جرّب وضع التوافق لتحويل البث إلى H.264/AAC.");
++    }
++  }, playerCompatibility ? 32_000 : 22_000);
++}
++
++async function openPlayer(item, compatibility = false) {
+   if (!item?.id) return;
+   playerItem = item;
+   playerFailures = 0;
++  playerCompatibility = compatibility;
++  clearPlayerTimeout();
+   addHistory(item);
+   const type = item.type === "series" ? "episode" : item.type;
+-  const url = `/api/play/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(item.extension || "")}`;
++  const extension = item.extension || (type === "live" ? "ts" : "mp4");
++  const url = `/api/play/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(extension)}${compatibility ? "&compat=2" : ""}`;
+   if (window.BlofyAndroid?.play) {
+     try {
+-      const nativeUrl = new URL(`${url}&native=1`, location.origin).toString();
+-      window.BlofyAndroid.play(nativeUrl, item.name || "BLOFY PLAYER", type, item.extension || (type === "live" ? "m3u8" : "mp4"));
++      const native = await api(`/api/native-link/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(extension)}`);
++      const nativeUrl = new URL(native.url, location.origin);
++      if (compatibility) nativeUrl.searchParams.set("compat", "2");
++      window.BlofyAndroid.play(nativeUrl.toString(), item.name || "BLOFY PLAYER", type, native.extension || extension);
+       return;
+     } catch (error) {
+       notify(`تعذر فتح Media3: ${error.message || "خطأ غير معروف"}`, "error");
+@@ -459,7 +482,7 @@ async function openPlayer(item) {
+   document.getElementById("playerSubtitle").textContent = item.type === "live" ? "بث مباشر" : item.type === "episode" ? "حلقة" : "فيلم";
+   document.getElementById("livePill").hidden = item.type !== "live";
+   playerStatus.hidden = false;
+-  playerStatus.innerHTML = `<span class="spinner"></span><b>جاري تجهيز البث…</b><small>نختار أسرع طريقة تشغيل متوافقة</small>`;
++  playerStatus.innerHTML = `<span class="spinner"></span><b>${compatibility ? "جاري تشغيل وضع التوافق…" : "جاري تجهيز البث…"}</b><small>${compatibility ? "تحويل آمن إلى H.264/AAC" : "نختار أسرع طريقة تشغيل متوافقة"}</small>`;
+   playerModal.hidden = false;
+   document.body.style.overflow = "hidden";
+   destroyHls();
+@@ -469,10 +492,10 @@ async function openPlayer(item) {
+   if (useHls && window.Hls?.isSupported()) attachHls(url);
+   else {
+     video.src = url;
+-    video.addEventListener("loadedmetadata", onPlayerReady, { once: true });
+     video.addEventListener("error", onNativeError, { once: true });
+     video.play().catch(() => {});
+   }
++  armPlayerTimeout();
+   setTimeout(() => document.querySelector('[data-player-action="play"]')?.focus(), 60);
+ }
+ 
+@@ -499,7 +522,6 @@ function attachHls(url) {
+   hls.attachMedia(video);
+   hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+     populateTracks();
+-    onPlayerReady();
+     video.play().catch(() => {});
+   });
+   hls.on(window.Hls.Events.LEVEL_SWITCHED, populateTracks);
+@@ -517,8 +539,14 @@ function attachHls(url) {
+ }
+ 
+ function onNativeError() { showPlayerError("صيغة هذا المحتوى غير مدعومة على الجهاز أو أن الرابط لا يستجيب."); }
+-function onPlayerReady() { playerStatus.hidden = true; populateTracks(); }
+-function showPlayerError(message) { playerStatus.hidden = false; playerStatus.innerHTML = `<b>تعذر التشغيل</b><small>${escapeHtml(message)}</small><button class="secondary-button" data-player-action="retry" data-focusable>إعادة المحاولة</button>`; }
++function onPlayerReady() { clearPlayerTimeout(); playerStatus.hidden = true; populateTracks(); }
++function showPlayerError(message) {
++  clearPlayerTimeout();
++  hls?.stopLoad();
++  playerStatus.hidden = false;
++  playerStatus.innerHTML = `<b>تعذر التشغيل</b><small>${escapeHtml(message)}</small><div class="button-row">${playerCompatibility ? `<button class="secondary-button" data-player-action="retry" data-focusable>إعادة المحاولة</button>` : `<button class="primary-button" data-player-action="compat" data-focusable>تشغيل بوضع التوافق</button>`}<button class="secondary-button" data-player-action="close" data-focusable>إغلاق</button></div>`;
++  setTimeout(() => playerStatus.querySelector("[data-focusable]")?.focus(), 30);
++}
+ 
+ function populateTracks() {
+   qualitySelect.innerHTML = `<option value="auto">تلقائي</option>${hls?.levels?.map((level, index) => `<option value="${index}" ${hls.currentLevel === index ? "selected" : ""}>${level.height ? `${level.height}p` : `جودة ${index + 1}`}</option>`).join("") || ""}`;
+@@ -527,7 +555,19 @@ function populateTracks() {
+ }
+ 
+ function destroyHls() { if (hls) { hls.destroy(); hls = null; } }
+-function closePlayer() { destroyHls(); video.pause(); video.removeAttribute("src"); video.load(); playerModal.hidden = true; document.body.style.overflow = ""; renderMain(); }
++function closePlayer() {
++  clearPlayerTimeout();
++  destroyHls();
++  video.pause();
++  video.removeAttribute("src");
++  video.load();
++  playerModal.hidden = true;
++  playerItem = null;
++  playerCompatibility = false;
++  document.body.style.overflow = "";
++  if (document.fullscreenElement === playerModal) document.exitFullscreen().catch(() => {});
++  renderMain();
++}
+ 
+ app.addEventListener("submit", async (event) => {
+   if (event.target.id !== "sourceForm") return;
+@@ -635,7 +675,8 @@ playerModal.addEventListener("click", (event) => {
+   if (action === "play") video.paused ? video.play().catch(() => {}) : video.pause();
+   if (action === "mute") video.muted = !video.muted;
+   if (action === "fullscreen") document.fullscreenElement ? document.exitFullscreen() : playerModal.requestFullscreen?.();
+-  if (action === "retry" && playerItem) openPlayer(playerItem);
++  if (action === "compat" && playerItem) openPlayer(playerItem, true);
++  if (action === "retry" && playerItem) openPlayer(playerItem, playerCompatibility);
+ });
+ 
+ qualitySelect.addEventListener("change", () => { if (hls) hls.currentLevel = qualitySelect.value === "auto" ? -1 : Number(qualitySelect.value); });
+@@ -648,7 +689,7 @@ video.addEventListener("timeupdate", () => {
+   document.getElementById("playerTime").textContent = duration ? `${formatTime(video.currentTime)} / ${formatTime(duration)}` : formatTime(video.currentTime);
+ });
+ video.addEventListener("waiting", () => { if (!video.paused) playerStatus.hidden = false; });
+-video.addEventListener("playing", () => { playerStatus.hidden = true; });
++video.addEventListener("playing", onPlayerReady);
+ 
+ function focusables() {
+   return [...document.querySelectorAll("[data-focusable]")].filter((element) => !element.disabled && !element.hidden && element.offsetParent !== null);
+diff --git a/BLOFY-WEB-2026/web-test/public/styles.css b/BLOFY-WEB-2026/web-test/public/styles.css
+index 2aed4db..151d28c 100644
+--- a/BLOFY-WEB-2026/web-test/public/styles.css
++++ b/BLOFY-WEB-2026/web-test/public/styles.css
+@@ -296,15 +296,17 @@ img { display: block; max-width: 100%; }
+ .player-shell { position:relative; width:100%; height:100%; overflow:hidden; background:#000; }
+ .player-shell video { width:100%; height:100%; object-fit:contain; background:#000; }
+ .player-gradient { pointer-events:none; position:absolute; inset:0; background:linear-gradient(#000b,transparent 24%,transparent 70%,#000e); opacity:.78; transition:.25s; }
+-.player-topbar { position:absolute; top:0; right:0; left:0; display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center; padding:26px 30px; }
++.player-topbar { position:absolute; z-index:4; top:0; right:0; left:0; display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center; padding:26px 30px; }
+ .player-topbar strong { display:block; font-size:18px; }
+ .player-topbar small { color:#b7b7c3; }
+ .live-pill { align-self:start; padding:6px 9px; border-radius:7px; background:#f3264b; font-size:10px; font-weight:900; }
+-.player-status { position:absolute; inset:0; display:grid; place-items:center; align-content:center; gap:10px; text-align:center; }
++.player-status { position:absolute; z-index:2; inset:0; display:grid; place-items:center; align-content:center; gap:10px; text-align:center; pointer-events:none; }
+ .player-status small { color:#aaa; }
++.player-status button { pointer-events:auto; }
++.player-status .button-row { justify-content:center; }
+ .spinner { width:45px; height:45px; border:3px solid rgba(255,255,255,.16); border-top-color:var(--purple-2); border-radius:50%; animation:spin .8s linear infinite; }
+ @keyframes spin { to { transform:rotate(360deg); } }
+-.player-controls { position:absolute; right:28px; bottom:25px; left:28px; display:flex; align-items:center; gap:10px; }
++.player-controls { position:absolute; z-index:4; right:28px; bottom:25px; left:28px; display:flex; align-items:center; gap:10px; }
+ .player-controls input[type=range] { flex:1; accent-color:var(--purple); }
+ .player-controls select { max-width:125px; height:42px; color:white; border:1px solid var(--line); border-radius:9px; background:#15151d; padding:0 9px; }
+ .icon-button { min-width:44px; height:44px; padding:0 11px; }
+diff --git a/BLOFY-WEB-2026/web-test/public/sw.js b/BLOFY-WEB-2026/web-test/public/sw.js
+index 924d96d..8d4a2c0 100644
+--- a/BLOFY-WEB-2026/web-test/public/sw.js
++++ b/BLOFY-WEB-2026/web-test/public/sw.js
+@@ -1,4 +1,4 @@
+-const CACHE = "blofy-shell-2026-08-20-r2";
++const CACHE = "blofy-shell-2026-08-20-r3";
+ const SHELL = ["/", "/styles.css", "/app.js", "/vendor/hls.min.js", "/assets/blofy-logo-192.png", "/assets/blofy-logo-512.png"];
+ self.addEventListener("install", (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())));
+ self.addEventListener("activate", (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim())));
+diff --git a/BLOFY-WEB-2026/web-test/server.mjs b/BLOFY-WEB-2026/web-test/server.mjs
+index ea28eb2..e4df42a 100644
+--- a/BLOFY-WEB-2026/web-test/server.mjs
++++ b/BLOFY-WEB-2026/web-test/server.mjs
+@@ -134,6 +134,14 @@ function signedPath(url, prefix = "/api/proxy", lifetime = 7200) {
+   return `${prefix}?u=${encodeURIComponent(encoded)}&e=${expires}&s=${encodeURIComponent(signature)}`;
+ }
+ 
++function transcodePath(url, transcodeVideo = false) {
++  return `${signedPath(url, "/api/transcode/index.m3u8", 21_600)}${transcodeVideo ? "&v=1" : ""}`;
++}
++
++function sourceHost(rawUrl) {
++  try { return new URL(rawUrl).host; } catch { return "unknown"; }
++}
++
+ function safeImage(url) {
+   return url ? signedPath(url, "/api/proxy", 86_400) : "";
+ }
+@@ -183,7 +191,7 @@ async function catalogFor(session, type, query) {
+ async function sourceFor(session, type, id, extension = "") {
+   if (session.kind === "xtream") {
+     const client = new XtreamClient(session);
+-    return client.streamUrl(type, id, type === "live" ? "m3u8" : extension);
++    return client.streamUrl(type, id, extension || (type === "live" ? "ts" : "mp4"));
+   }
+   const item = (await loadM3u(session)).find((entry) => entry.id === id);
+   if (!item) throw new Error("لم يتم العثور على رابط التشغيل.");
+@@ -202,7 +210,12 @@ function rewritePlaylist(text, baseUrl) {
+   }).join("\n");
+ }
+ 
+-async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls = false, transcodeVideo = false } = {}) {
++async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls = false, transcodeVideo = false, preferTranscode = false } = {}) {
++  if (allowTranscode && forceHls && preferTranscode) {
++    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
++    res.end();
++    return;
++  }
+   const headers = {};
+   if (req.headers.range) headers.range = req.headers.range;
+   const response = await fetchSafe(rawUrl, { headers });
+@@ -227,8 +240,7 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls
+   if (allowTranscode && (forceHls || !/video\/(mp4|webm)|audio\//.test(type))) {
+     await inspected?.reader?.cancel().catch(() => {});
+     if (!inspected && response.body) await response.body.cancel().catch(() => {});
+-    const target = `${signedPath(rawUrl, "/api/transcode/index.m3u8", 1800)}${transcodeVideo ? "&v=1" : ""}`;
+-    res.writeHead(302, { ...securityHeaders(), location: target, "cache-control": "no-store" });
++    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
+     res.end();
+     return;
+   }
+@@ -271,21 +283,26 @@ function startTranscode(url, forceVideo = false) {
+     "-nostdin", "-hide_banner", "-loglevel", "warning",
+     "-user_agent", "BLOFY-PLAYER/2026 Mozilla/5.0",
+     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
++    "-rw_timeout", "12000000", "-analyzeduration", "2500000", "-probesize", "2500000",
+     "-i", url,
+     "-map", "0:v:0?", "-map", "0:a:0?",
+     "-c:v", transcodeVideo ? "libx264" : "copy",
+     ...(transcodeVideo ? ["-preset", "veryfast", "-tune", "zerolatency"] : []),
+     "-c:a", "aac", "-ac", "2", "-b:a", "128k",
+-    "-f", "hls", "-hls_time", "2", "-hls_list_size", "6",
++    "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
+     "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",
+     "-hls_segment_filename", path.join(dir, "segment-%06d.ts"),
+     path.join(dir, "index.m3u8"),
+   ];
+   const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+   const record = { key, dir, process: child, lastAccess: Date.now(), error: "" };
++  console.log(`[media] ffmpeg-start key=${key} host=${sourceHost(url)} mode=${transcodeVideo ? "h264" : "copy"}`);
+   child.stderr.setEncoding("utf8");
+   child.stderr.on("data", (chunk) => { record.error = `${record.error}${chunk}`.slice(-1200); });
+-  child.on("exit", (code) => { if (code && !record.error) record.error = `FFmpeg stopped (${code})`; });
++  child.on("exit", (code) => {
++    if (code && !record.error) record.error = `FFmpeg stopped (${code})`;
++    console.log(`[media] ffmpeg-exit key=${key} code=${code ?? "signal"}`);
++  });
+   transcodes.set(key, record);
+   return record;
+ }
+@@ -314,7 +331,8 @@ async function serveTranscode(res, rawUrl, query, fileName) {
+   const safeName = fileName === "index.m3u8" || /^segment-\d{6}\.ts$/.test(fileName) ? fileName : "";
+   if (!safeName) throw new Error("ملف تشغيل غير صالح.");
+   const target = path.join(record.dir, safeName);
+-  if (!(await waitForFile(target, safeName === "index.m3u8" ? 8000 : 3500))) {
++  if (!(await waitForFile(target, safeName === "index.m3u8" ? 12_000 : 5000))) {
++    console.error(`[media] transcode-timeout key=${record.key} host=${sourceHost(rawUrl)} code=${record.process.exitCode ?? "running"}`);
+     throw new Error(record.error ? "تعذر تحويل هذا البث إلى صيغة متوافقة." : "البث لم يستجب بالسرعة المطلوبة.");
+   }
+   if (safeName === "index.m3u8") {
+@@ -336,7 +354,7 @@ setInterval(() => {
+ }, 30_000).unref();
+ 
+ async function handleApi(req, res, url) {
+-  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/transcode/");
++  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/native-") || url.pathname.startsWith("/api/transcode/");
+   if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
+ 
+   if (req.method === "GET" && url.pathname === "/api/health") {
+@@ -440,8 +458,19 @@ async function handleApi(req, res, url) {
+     return relayRemote(req, res, raw);
+   }
+ 
++  if (req.method === "GET" && url.pathname === "/api/native-play") {
++    const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
++    if (!raw) return json(res, 403, { error: "انتهى رابط Media3، أعد فتح المحتوى." }, securityHeaders());
++    await assertSafeUrl(raw);
++    const compatibility = url.searchParams.get("compat") === "2";
++    const location = compatibility ? transcodePath(raw, true) : raw;
++    console.log(`[media] native-open host=${sourceHost(raw)} mode=${compatibility ? "compat" : "direct"}`);
++    res.writeHead(302, { ...securityHeaders(), location, "cache-control": "no-store" });
++    res.end();
++    return;
++  }
++
+   if (req.method === "GET" && (url.pathname === "/api/transcode/index.m3u8" || url.pathname.startsWith("/api/transcode/segment-"))) {
+-    if (!requireActiveLicense(req, res)) return;
+     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
+     if (!raw) return json(res, 403, { error: "انتهت جلسة التشغيل." }, securityHeaders());
+     const fileName = url.pathname.split("/").pop();
+@@ -452,6 +481,15 @@ async function handleApi(req, res, url) {
+   if (!session) return json(res, 401, { error: "أضف قائمة تشغيل أولًا." }, securityHeaders());
+   if (!requireActiveLicense(req, res)) return;
+ 
++  const nativeLinkMatch = url.pathname.match(/^\/api\/native-link\/(live|movies|episode)\/([^/]+)$/);
++  if (req.method === "GET" && nativeLinkMatch) {
++    const [, type, id] = nativeLinkMatch;
++    const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
++    const source = await sourceFor(session, type, id, extension);
++    console.log(`[media] native-link type=${type} id=${id} ext=${extension} host=${sourceHost(source)}`);
++    return json(res, 200, { url: signedPath(source, "/api/native-play", 7200), extension }, securityHeaders());
++  }
++
+   if (req.method === "GET" && url.pathname === "/api/categories") {
+     const type = ["live", "movies", "series"].includes(url.searchParams.get("type")) ? url.searchParams.get("type") : "live";
+     return json(res, 200, { categories: await categoriesFor(session, type) }, securityHeaders());
+@@ -493,16 +531,16 @@ async function handleApi(req, res, url) {
+   const playMatch = url.pathname.match(/^\/api\/play\/(live|movies|episode)\/([^/]+)$/);
+   if (req.method === "GET" && playMatch) {
+     const [, type, id] = playMatch;
+-    const extension = String(url.searchParams.get("ext") || "").replace(/[^a-zA-Z0-9]/g, "");
++    const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
+     const source = await sourceFor(session, type, id, extension);
+-    const nativePlayback = url.searchParams.get("native") === "1";
+-    const compatibleNative = /^(?:m3u8|mpd|mp4|m4v|mov|mkv|webm|ts|mts|m2ts|mp3|aac)$/i.test(extension || (type === "live" ? "m3u8" : "mp4"));
+     const compatibilityLevel = url.searchParams.get("compat");
+-    const compatibilityMode = compatibilityLevel === "1" || compatibilityLevel === "2" || (nativePlayback && !compatibleNative);
++    const compatibilityMode = compatibilityLevel === "1" || compatibilityLevel === "2";
++    console.log(`[media] web-open type=${type} id=${id} ext=${extension} host=${sourceHost(source)} mode=${compatibilityLevel === "2" ? "compat" : "standard"}`);
+     return relayRemote(req, res, source, {
+-      allowTranscode: type === "live" || !nativePlayback || compatibilityMode,
++      allowTranscode: type === "live" || compatibilityMode,
+       forceHls: type === "live" || compatibilityMode,
+       transcodeVideo: compatibilityLevel === "2",
++      preferTranscode: type === "live" && !/^m3u8$/i.test(extension),
+     });
+   }
+ 
+@@ -549,6 +587,9 @@ const server = http.createServer(async (req, res) => {
+     await serveStatic(req, res, "/");
+   } catch (error) {
+     const message = error?.name === "AbortError" ? "انتهت مهلة اتصال الخادم." : error?.message || "حدث خطأ غير متوقع.";
++    if (String(req.url || "").startsWith("/api/play/") || String(req.url || "").startsWith("/api/native-") || String(req.url || "").startsWith("/api/transcode/")) {
++      console.error(`[media] request-failed path=${String(req.url || "").split("?")[0]} message=${message}`);
++    }
+     if (!res.headersSent) json(res, 500, { error: message }, securityHeaders());
+     else res.destroy();
+   }
+diff --git a/BLOFY-WEB-2026/web-test/test/xtream.test.mjs b/BLOFY-WEB-2026/web-test/test/xtream.test.mjs
+index e409701..408cdaa 100644
+--- a/BLOFY-WEB-2026/web-test/test/xtream.test.mjs
++++ b/BLOFY-WEB-2026/web-test/test/xtream.test.mjs
+@@ -1,6 +1,12 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+-import { normalizeSeriesInfo } from "../lib/xtream.mjs";
++import { normalizeSeriesInfo, XtreamClient } from "../lib/xtream.mjs";
++
++test("Xtream live streams default to transport stream and honor provider extensions", () => {
++  const client = new XtreamClient({ serverUrl: "https://provider.example", username: "user", password: "pass" });
++  assert.equal(client.streamUrl("live", "123"), "https://provider.example/live/user/pass/123.ts");
++  assert.equal(client.streamUrl("live", "123", "m3u8"), "https://provider.example/live/user/pass/123.m3u8");
++});
+ 
+ test("series normalization accepts provider-specific episode identifiers", () => {
+   const result = normalizeSeriesInfo({
+diff --git a/codemagic.yaml b/codemagic.yaml
+index 3cfd3d3..0c57616 100644
+--- a/codemagic.yaml
++++ b/codemagic.yaml
+@@ -6,7 +6,7 @@ workflows:
+     environment:
+       java: 17
+       vars:
+-        BLOFY_BASE_URL: "https://YOUR-RAILWAY-DOMAIN.up.railway.app"
++        BLOFY_BASE_URL: "https://blofy-player-2026-production.up.railway.app"
+     scripts:
+       - name: Create Gradle wrapper
+         script: |
