@@ -111,12 +111,15 @@ function formatTime(value) {
 function fetchWithTimeout(path, options, timeoutMs = 10_000) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    const controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
+    const requestOptions = controller ? { ...options, signal: controller.signal } : options;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      if (controller) controller.abort();
       reject(new Error("انتهت مهلة الاتصال بالخادم."));
     }, timeoutMs);
-    fetch(path, options).then((response) => {
+    fetch(path, requestOptions).then((response) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);

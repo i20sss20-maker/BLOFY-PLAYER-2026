@@ -11,8 +11,8 @@ function cleanDeviceId(value) {
 }
 
 function cleanCode(value) {
-  const code = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
-  if (!/^[A-Z0-9-]{6,32}$/.test(code)) throw new Error("رمز التفعيل غير صالح.");
+  const code = String(value || "").trim().replace(/\s+/g, "");
+  if (!/^[0-9]{6,12}$/.test(code)) throw new Error("رمز التفعيل يجب أن يكون من 6 إلى 12 رقمًا.");
   return code;
 }
 
@@ -125,7 +125,12 @@ export class LicenseStore {
 
   createCode({ code, days = 30, maxUses = 1, validDays = 365, label = "" } = {}) {
     return this.locked(async () => {
-      const generated = code || `BLOFY-${crypto.randomBytes(4).toString("hex").toUpperCase()}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
+      let generated = code;
+      if (!generated) {
+        do {
+          generated = String(crypto.randomInt(0, 100_000_000)).padStart(8, "0");
+        } while (this.data.codes[generated]);
+      }
       const clean = cleanCode(generated);
       if (this.data.codes[clean]) throw new Error("رمز التفعيل موجود مسبقًا.");
       const now = this.now();

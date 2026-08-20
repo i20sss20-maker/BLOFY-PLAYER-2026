@@ -21,6 +21,8 @@ test("legacy Android WebView bundle is ES5 and selected by the page", async () =
 
 test("native back bridge can leave the boot screen", async () => {
   const source = await readFile(new URL("app.js", publicUrl), "utf8");
+  assert.match(source, /AbortController/);
+  assert.match(source, /انتهت مهلة الاتصال بالخادم/);
   assert.match(source, /return goBack\(\)/);
   assert.match(source, /BlofyAndroid\?\.ready\?\.\(\)/);
 });

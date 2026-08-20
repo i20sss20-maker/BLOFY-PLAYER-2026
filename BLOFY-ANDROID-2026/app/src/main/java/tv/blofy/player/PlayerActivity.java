@@ -18,7 +18,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
-import androidx.annotation.OptIn;
+import androidx.annotation.Nullable;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -38,12 +38,17 @@ import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import androidx.media3.ui.PlayerView;
 
+import org.json.JSONObject;
+
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-@OptIn(markerClass = UnstableApi.class)
+@UnstableApi
 public final class PlayerActivity extends Activity implements Player.Listener {
     public static final String EXTRA_URL = "url";
+    public static final String EXTRA_ID = "id";
     public static final String EXTRA_TITLE = "title";
     public static final String EXTRA_KIND = "kind";
     public static final String EXTRA_EXTENSION = "extension";
@@ -54,12 +59,15 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private TextView titleView;
     private Button retryButton;
     private ExoPlayer player;
+    private String id;
     private String url;
     private String title;
     private String kind;
     private String extension;
     private long resumePosition;
     private int connectionAttempt;
+    private boolean resolving;
+    private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
     private final Runnable playbackTimeout = () -> {
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
@@ -72,21 +80,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     };
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         url = getIntent().getStringExtra(EXTRA_URL);
+        id = valueOr(getIntent().getStringExtra(EXTRA_ID), "");
         title = valueOr(getIntent().getStringExtra(EXTRA_TITLE), "BLOFY PLAYER");
         kind = valueOr(getIntent().getStringExtra(EXTRA_KIND), "movies");
         extension = PlaybackPolicy.normalizeExtension(
                 getIntent().getStringExtra(EXTRA_EXTENSION),
                 "live".equals(kind) ? "ts" : "mp4");
-        if (!validUrl(url)) {
-            finish();
-            return;
-        }
-        resumePosition = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
         buildUi();
         hideSystemUi();
+        if (validUrl(url)) prepareResolvedUrl();
+        else if (!id.isEmpty()) resolvePlaybackLink();
+        else showResolveError("بيانات المحتوى غير مكتملة.");
     }
 
     private static String valueOr(String value, String fallback) {
@@ -190,8 +197,49 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playbackHandler.postDelayed(playbackTimeout, PlaybackPolicy.startupTimeoutMs(connectionAttempt));
     }
 
+    private void resolvePlaybackLink() {
+        if (resolving) return;
+        resolving = true;
+        progress.setVisibility(View.VISIBLE);
+        errorPanel.setVisibility(View.GONE);
+        network.execute(() -> {
+            try {
+                String apiType = "series".equals(kind) ? "episode" : kind;
+                JSONObject data = new BlofyApi(this).get("/api/native-link/" + BlofyApi.encode(apiType) + "/"
+                        + BlofyApi.encode(id) + "?ext=" + BlofyApi.encode(extension));
+                String resolved = data.optString("url", "");
+                if (!resolved.startsWith("/api/native-play")) throw new Exception("الخادم لم يُصدر رابط Media3 صحيحًا.");
+                url = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + resolved;
+                extension = PlaybackPolicy.normalizeExtension(data.optString("extension", extension), extension);
+                runOnUiThread(() -> {
+                    resolving = false;
+                    prepareResolvedUrl();
+                    initializePlayer();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    resolving = false;
+                    showResolveError(error.getMessage());
+                });
+            }
+        });
+    }
+
+    private void prepareResolvedUrl() {
+        if (!validUrl(url)) return;
+        resumePosition = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
+    }
+
+    private void showResolveError(String message) {
+        progress.setVisibility(View.GONE);
+        errorPanel.setVisibility(View.VISIBLE);
+        errorText.setText(message == null ? "تعذر تجهيز رابط التشغيل." : message);
+        retryButton.setText("إعادة تجهيز الرابط");
+        retryButton.requestFocus();
+    }
+
     private void initializePlayer() {
-        if (player != null) return;
+        if (player != null || !validUrl(url)) return;
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", "VLC/3.0.20 LibVLC/3.0.20 BLOFY-Media3/1.11");
         headers.put("Accept", "*/*");
@@ -247,7 +295,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         connectionAttempt += 1;
         releasePlayer();
         titleView.setVisibility(View.VISIBLE);
-        initializePlayer();
+        if (!id.isEmpty()) {
+            url = null;
+            resolvePlaybackLink();
+        } else initializePlayer();
     }
 
     @Override
@@ -272,7 +323,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private String positionKey() {
-        return "position_" + Integer.toHexString(url.hashCode());
+        String key = id.isEmpty() ? String.valueOf(url) : kind + ":" + id;
+        return "position_" + Integer.toHexString(key.hashCode());
     }
 
     private void savePosition() {
@@ -297,7 +349,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     @Override
     protected void onStart() {
         super.onStart();
-        initializePlayer();
+        if (validUrl(url)) initializePlayer();
     }
 
     @Override
@@ -333,6 +385,12 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     @Override
     public void onBackPressed() {
         finish();
+    }
+
+    @Override
+    protected void onDestroy() {
+        network.shutdownNow();
+        super.onDestroy();
     }
 
     private void hideSystemUi() {

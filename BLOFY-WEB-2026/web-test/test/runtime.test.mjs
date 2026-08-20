@@ -6,5 +6,5 @@ test("native playback is permanently direct and never adds a Railway transcode U
   const source = "http://provider.example/live/private-user/private-password/985136.ts";
   assert.equal(nativePlaybackTarget(source), source);
   assert.equal(NATIVE_PLAYBACK_MODE, "direct");
-  assert.match(APP_VERSION, /^2026\.08\.20\.\d+$/);
+  assert.match(APP_VERSION, /^2026\.08\.\d{2}\.\d+$/);
 });

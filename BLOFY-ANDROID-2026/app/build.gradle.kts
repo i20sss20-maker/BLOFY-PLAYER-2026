@@ -16,8 +16,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 202608204
-        versionName = "2026.08.20.4"
+        versionCode = 202608215
+        versionName = "2026.08.21.5-native"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 
@@ -48,10 +48,11 @@ android {
 
 dependencies {
     val media3Version = "1.11.0"
-    implementation("androidx.annotation:annotation:1.9.1")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.recyclerview:recyclerview:1.4.0")
+    implementation("com.google.zxing:core:3.5.4")
     testImplementation("junit:junit:4.13.2")
 }

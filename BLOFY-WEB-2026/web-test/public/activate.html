@@ -13,12 +13,32 @@
       <section class="activation-card">
         <img class="activation-logo" src="/assets/blofy-logo-512.png" alt="BLOFY PLAYER" />
         <span class="eyebrow">تفعيل الجهاز</span>
-        <h1>أدخل رقم الجهاز ورمز التفعيل</h1>
-        <p class="muted">ستجد رقم الجهاز في شاشة الدخول أو الإعدادات داخل تطبيق BLOFY PLAYER.</p>
+        <h1>فعّل جهازك وأرسل بيانات الباقة</h1>
+        <p class="muted">امسح الباركود من التطبيق، ثم أدخل رمز التفعيل الرقمي وبيانات باقتك. تُحفظ البيانات مشفّرة ويستلمها جهازك مباشرة.</p>
         <form id="activationForm" class="activation-form">
           <div class="field"><label for="deviceId">رقم الجهاز</label><input id="deviceId" name="deviceId" dir="ltr" autocomplete="off" placeholder="BLOFY-XXXX-XXXX-XXXX-XXXX" required /></div>
-          <div class="field"><label for="activationCode">رمز التفعيل</label><input id="activationCode" name="code" dir="ltr" autocomplete="one-time-code" placeholder="BLOFY-XXXXXXXX-XXXX" required /></div>
-          <button class="primary-button" type="submit">تفعيل الآن</button>
+          <div class="field"><label for="activationCode">رمز التفعيل الرقمي</label><input id="activationCode" name="code" dir="ltr" inputmode="numeric" pattern="[0-9]{6,12}" maxlength="12" autocomplete="one-time-code" placeholder="12345678" /></div>
+
+          <section id="profileSection" class="activation-profile">
+            <label class="profile-toggle"><input id="saveProfile" type="checkbox" checked /> <span>إرسال بيانات الباقة إلى التطبيق بعد التفعيل</span></label>
+            <div id="profileFields">
+              <div class="source-tabs activation-tabs" role="tablist">
+                <button id="xtreamTab" class="source-tab active" type="button">Xtream Codes</button>
+                <button id="m3uTab" class="source-tab" type="button">M3U / M3U8</button>
+              </div>
+              <div class="activation-grid">
+                <div class="field full"><label for="profileName">اسم الباقة</label><input id="profileName" name="name" autocomplete="off" placeholder="باقتي الرئيسية" /></div>
+                <div id="xtreamFields" class="activation-grid nested full">
+                  <div class="field full"><label for="serverUrl">رابط الخادم</label><input id="serverUrl" name="serverUrl" dir="ltr" inputmode="url" autocomplete="url" placeholder="http://server.example:8080" /></div>
+                  <div class="field"><label for="username">اسم المستخدم</label><input id="username" name="username" dir="ltr" autocomplete="username" /></div>
+                  <div class="field"><label for="password">كلمة المرور</label><input id="password" name="password" dir="ltr" type="password" autocomplete="current-password" /></div>
+                </div>
+                <div id="m3uFields" class="field full" hidden><label for="playlistUrl">رابط M3U / M3U8</label><input id="playlistUrl" name="url" dir="ltr" inputmode="url" placeholder="http://server.example/list.m3u" /></div>
+              </div>
+            </div>
+          </section>
+
+          <button class="primary-button" type="submit">تفعيل وربط الجهاز</button>
           <div id="activationMessage" class="activation-message" role="status"></div>
         </form>
         <small class="muted">BLOFY PLAYER مشغل فقط ولا يوفّر المحتوى أو الاشتراكات.</small>

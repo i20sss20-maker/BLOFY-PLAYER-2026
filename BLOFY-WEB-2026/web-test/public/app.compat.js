@@ -189,13 +189,17 @@ function fetchWithTimeout(path, options, timeoutMs) {
     if (timeoutMs === void 0) { timeoutMs = 10000; }
     return new Promise(function (resolve, reject) {
         var settled = false;
+        var controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
+        var requestOptions = controller ? __assign(__assign({}, options), { signal: controller.signal }) : options;
         var timer = setTimeout(function () {
             if (settled)
                 return;
             settled = true;
+            if (controller)
+                controller.abort();
             reject(new Error("انتهت مهلة الاتصال بالخادم."));
         }, timeoutMs);
-        fetch(path, options).then(function (response) {
+        fetch(path, requestOptions).then(function (response) {
             if (settled)
                 return;
             settled = true;

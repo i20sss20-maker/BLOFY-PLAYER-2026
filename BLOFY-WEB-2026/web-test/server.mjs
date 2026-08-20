@@ -9,6 +9,7 @@ import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
 import QRCode from "qrcode";
 import { LicenseStore } from "./lib/license-store.mjs";
+import { DeviceProfileStore } from "./lib/device-profile-store.mjs";
 import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs";
 import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackTarget } from "./lib/runtime.mjs";
 import { XtreamClient } from "./lib/xtream.mjs";
@@ -39,10 +40,12 @@ const configuredActivationUrl = String(process.env.ACTIVATION_URL || "").trim();
 const trialDays = Math.max(1, Number(process.env.TRIAL_DAYS || 7));
 const maxTranscodes = Math.max(1, Number(process.env.MAX_TRANSCODE_SESSIONS || 4));
 const licenseDbPath = process.env.LICENSE_DB_PATH || path.join(here, "data", "licenses.json");
+const deviceProfileDbPath = process.env.DEVICE_PROFILE_DB_PATH || path.join(path.dirname(licenseDbPath), "device-profiles.json");
 const memoryCache = new Map();
 const rateBuckets = new Map();
 const transcodes = new Map();
 const licenses = new LicenseStore(licenseDbPath, { trialDays });
+const deviceProfiles = new DeviceProfileStore(deviceProfileDbPath);
 mkdirSync(transcodeRoot, { recursive: true });
 
 function requestOrigin(req) {
@@ -120,6 +123,26 @@ function getSession(req) {
   return session;
 }
 
+async function sessionFromInput(body) {
+  const kind = body.kind === "m3u" ? "m3u" : "xtream";
+  if (kind === "xtream") {
+    const serverUrl = String(body.serverUrl || "").trim().replace(/\/+$/, "");
+    const username = String(body.username || "").trim();
+    const password = String(body.password || "");
+    if (!serverUrl || !username || !password) throw new Error("أدخل رابط الخادم واسم المستخدم وكلمة المرور.");
+    await assertSafeUrl(serverUrl);
+    const client = new XtreamClient({ serverUrl, username, password });
+    const account = await client.validate();
+    return { kind, serverUrl, username, password, account, serverName: account.serverName, name: String(body.name || "قائمتي").slice(0, 50) };
+  }
+  const playlistUrl = String(body.url || "").trim();
+  if (!playlistUrl) throw new Error("أدخل رابط M3U أو M3U8.");
+  await assertSafeUrl(playlistUrl);
+  const session = { kind, url: playlistUrl, serverName: new URL(playlistUrl).host, name: String(body.name || "قائمتي").slice(0, 50) };
+  await loadM3u(session);
+  return session;
+}
+
 function publicSession(session) {
   if (!session) return null;
   return {
@@ -171,6 +194,8 @@ async function categoriesFor(session, type) {
 
 async function catalogFor(session, type, query) {
   const page = Math.max(1, Number(query.get("page") || 1));
+  const requestedPageSize = Math.max(30, Number(query.get("page_size") || 60));
+  const pageSize = Math.min(500, requestedPageSize);
   const category = query.get("category") || "";
   const search = query.get("search") || "";
   let rows;
@@ -184,7 +209,7 @@ async function catalogFor(session, type, query) {
     category,
     search,
     page,
-    pageSize: 60,
+    pageSize,
   });
   return result;
 }
@@ -460,6 +485,67 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, ...license, activationUrl: activationUrlFor(req) }, securityHeaders());
   }
 
+  if (req.method === "POST" && url.pathname === "/api/device/register") {
+    const body = await readJson(req, 4096);
+    const registered = await deviceProfiles.register(body.deviceId || body.device_id, body.deviceKey || body.device_key);
+    const pairToken = seal({
+      kind: "device-pair",
+      deviceId: registered.deviceId,
+      keyHash: registered.keyHash,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    });
+    return json(res, 201, { ok: true, deviceId: registered.deviceId, pairToken }, securityHeaders());
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/device/configure") {
+    const body = await readJson(req, 32_768);
+    const deviceId = String(body.deviceId || body.device_id || "").trim().toUpperCase();
+    const pairing = unseal(String(body.pairToken || body.pair_token || ""));
+    if (!pairing || pairing.kind !== "device-pair" || pairing.deviceId !== deviceId ||
+        Number(pairing.expiresAt || 0) <= Date.now() || !pairing.keyHash) {
+      return json(res, 403, { error: "انتهت صلاحية ربط الجهاز. حدّث الباركود من التطبيق." }, securityHeaders());
+    }
+
+    let license;
+    if (String(body.code || "").trim()) license = await licenses.redeem(deviceId, body.code);
+    else license = await licenses.get(deviceId, { create: false });
+    if (!license || !["trial", "active"].includes(license.plan)) {
+      return json(res, 402, { error: "أدخل رمز تفعيل رقمي صالح أولًا." }, securityHeaders());
+    }
+
+    const hasProfile = body.kind === "xtream" || body.kind === "m3u";
+    let configured = false;
+    if (hasProfile) {
+      const session = await sessionFromInput(body);
+      const result = await deviceProfiles.configure(deviceId, pairing.keyHash, seal(session));
+      configured = result.configured;
+    }
+    return json(res, 200, { ok: true, configured, ...license, activationUrl: activationUrlFor(req) }, securityHeaders());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/device/bootstrap") {
+    const deviceId = String(url.searchParams.get("device_id") || req.headers["x-blofy-device-id"] || "").trim().toUpperCase();
+    const deviceKey = String(req.headers["x-blofy-device-key"] || "");
+    const license = await licenses.get(deviceId, { create: false });
+    if (!license || !["trial", "active"].includes(license.plan)) {
+      return json(res, 402, { error: "الجهاز غير مفعّل أو انتهت صلاحيته." }, securityHeaders());
+    }
+    const profileToken = await deviceProfiles.profile(deviceId, deviceKey);
+    if (!profileToken) return json(res, 200, { ok: true, configured: false, license }, {
+      ...securityHeaders(),
+      "set-cookie": licenseCookie(seal({ deviceId, expiresAt: license.expiresAt, plan: license.plan })),
+    });
+    const session = unseal(profileToken);
+    if (!session || !["xtream", "m3u"].includes(session.kind)) throw new Error("بيانات الباقة المحفوظة غير صالحة. أعد إرسالها من صفحة الربط.");
+    return json(res, 200, { ok: true, configured: true, license, session: publicSession(session) }, {
+      ...securityHeaders(),
+      "set-cookie": [
+        licenseCookie(seal({ deviceId, expiresAt: license.expiresAt, plan: license.plan })),
+        sessionCookie(seal(session)),
+      ],
+    });
+  }
+
   if (url.pathname === "/api/admin/codes" && req.method === "POST") {
     if (!adminAuthorized(req)) return json(res, 401, { error: "رمز إدارة غير صحيح أو ADMIN_TOKEN غير مضبوط." }, securityHeaders());
     const entry = await licenses.createCode(await readJson(req, 8192));
@@ -487,24 +573,7 @@ async function handleApi(req, res, url) {
   if (url.pathname === "/api/session" && req.method === "POST") {
     if (!requireActiveLicense(req, res)) return;
     const body = await readJson(req);
-    const kind = body.kind === "m3u" ? "m3u" : "xtream";
-    let session;
-    if (kind === "xtream") {
-      const serverUrl = String(body.serverUrl || "").trim().replace(/\/+$/, "");
-      const username = String(body.username || "").trim();
-      const password = String(body.password || "");
-      if (!serverUrl || !username || !password) throw new Error("أدخل رابط الخادم واسم المستخدم وكلمة المرور.");
-      await assertSafeUrl(serverUrl);
-      const client = new XtreamClient({ serverUrl, username, password });
-      const account = await client.validate();
-      session = { kind, serverUrl, username, password, account, serverName: account.serverName, name: String(body.name || "قائمتي").slice(0, 50) };
-    } else {
-      const playlistUrl = String(body.url || "").trim();
-      if (!playlistUrl) throw new Error("أدخل رابط M3U أو M3U8.");
-      await assertSafeUrl(playlistUrl);
-      session = { kind, url: playlistUrl, serverName: new URL(playlistUrl).host, name: String(body.name || "قائمتي").slice(0, 50) };
-      await loadM3u(session);
-    }
+    const session = await sessionFromInput(body);
     return json(res, 200, { ok: true, session: publicSession(session) }, {
       ...securityHeaders(),
       "set-cookie": sessionCookie(seal(session)),
@@ -635,7 +704,7 @@ async function serveStatic(req, res, pathname) {
     ...securityHeaders(),
     "content-type": mime[path.extname(target).toLowerCase()] || "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": /(?:app(?:\.compat)?\.js|styles\.css|index\.html)$/.test(target) ? "no-cache" : "public, max-age=86400",
+    "cache-control": /(?:app(?:\.compat)?\.js|activate(?:\.html|\.js)|styles\.css|index\.html)$/.test(target) ? "no-cache" : "public, max-age=86400",
   });
   createReadStream(target).pipe(res);
   return true;
