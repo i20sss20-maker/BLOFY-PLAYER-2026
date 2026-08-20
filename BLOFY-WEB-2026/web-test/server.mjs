@@ -1,0 +1,567 @@
+import http from "node:http";
+import crypto from "node:crypto";
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Readable } from "node:stream";
+import { spawn } from "node:child_process";
+import QRCode from "qrcode";
+import { LicenseStore } from "./lib/license-store.mjs";
+import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs";
+import { XtreamClient } from "./lib/xtream.mjs";
+import { pageItems, parseM3u } from "./lib/playlist.mjs";
+import {
+  assertSafeUrl,
+  clearSessionCookie,
+  clientKey,
+  fetchSafe,
+  json,
+  licenseCookie,
+  parseCookies,
+  readJson,
+  readTextLimited,
+  seal,
+  sessionCookie,
+  signResource,
+  unseal,
+  verifyResource,
+} from "./lib/security.mjs";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const publicDir = path.join(here, "public");
+const transcodeRoot = path.join(os.tmpdir(), "blofy-player-transcodes");
+const port = Number(process.env.PORT || 3000);
+const cacheTtl = Number(process.env.CACHE_TTL_MS || 300_000);
+const configuredActivationUrl = String(process.env.ACTIVATION_URL || "").trim();
+const trialDays = Math.max(1, Number(process.env.TRIAL_DAYS || 7));
+const maxTranscodes = Math.max(1, Number(process.env.MAX_TRANSCODE_SESSIONS || 4));
+const licenseDbPath = process.env.LICENSE_DB_PATH || path.join(here, "data", "licenses.json");
+const memoryCache = new Map();
+const rateBuckets = new Map();
+const transcodes = new Map();
+const licenses = new LicenseStore(licenseDbPath, { trialDays });
+mkdirSync(transcodeRoot, { recursive: true });
+
+function requestOrigin(req) {
+  const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwarded === "https" ? "https" : process.env.NODE_ENV === "production" ? "https" : "http";
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || `localhost:${port}`).split(",")[0].trim();
+  return `${protocol}://${host}`;
+}
+
+function activationUrlFor(req) {
+  return configuredActivationUrl || `${requestOrigin(req)}/activate`;
+}
+
+function activeLicense(req) {
+  const token = parseCookies(req.headers.cookie || "").blofy_license;
+  const license = token ? unseal(token) : null;
+  if (!license?.deviceId || Number(license.expiresAt || 0) <= Date.now()) return null;
+  return license;
+}
+
+function requireActiveLicense(req, res) {
+  if (activeLicense(req)) return true;
+  json(res, 402, { error: "انتهت الفترة التجريبية. فعّل الجهاز ثم اضغط تحديث التفعيل." }, securityHeaders());
+  return false;
+}
+
+function adminAuthorized(req) {
+  const expected = String(process.env.ADMIN_TOKEN || "");
+  if (expected.length < 20) return false;
+  const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "") || String(req.headers["x-admin-token"] || "");
+  const left = Buffer.from(expected);
+  const right = Buffer.from(supplied);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function securityHeaders() {
+  return {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    ...(process.env.NODE_ENV === "production" ? { "strict-transport-security": "max-age=31536000; includeSubDomains" } : {}),
+  };
+}
+
+function limited(req, limit = 100, windowMs = 60_000, namespace = "api") {
+  const key = `${namespace}:${clientKey(req)}`;
+  const now = Date.now();
+  const bucket = rateBuckets.get(key);
+  if (!bucket || bucket.resetAt < now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > limit;
+}
+
+function cacheKey(session, suffix) {
+  return crypto.createHash("sha256").update(JSON.stringify(session)).update(suffix).digest("hex");
+}
+
+async function cached(key, loader, ttl = cacheTtl) {
+  const current = memoryCache.get(key);
+  if (current && current.expiresAt > Date.now()) return current.value;
+  const value = await loader();
+  memoryCache.set(key, { value, expiresAt: Date.now() + ttl });
+  return value;
+}
+
+function getSession(req) {
+  const token = parseCookies(req.headers.cookie || "").blofy_session;
+  const session = token ? unseal(token) : null;
+  if (!session || !["xtream", "m3u"].includes(session.kind)) return null;
+  return session;
+}
+
+function publicSession(session) {
+  if (!session) return null;
+  return {
+    kind: session.kind,
+    name: session.name || (session.kind === "xtream" ? "Xtream Codes" : "M3U / M3U8"),
+    serverName: session.serverName || "",
+    account: session.account || null,
+  };
+}
+
+function signedPath(url, prefix = "/api/proxy", lifetime = 7200) {
+  const { encoded, expires, signature } = signResource(url, lifetime);
+  return `${prefix}?u=${encodeURIComponent(encoded)}&e=${expires}&s=${encodeURIComponent(signature)}`;
+}
+
+function safeImage(url) {
+  return url ? signedPath(url, "/api/proxy", 86_400) : "";
+}
+
+async function loadM3u(session) {
+  return cached(cacheKey(session, "m3u"), async () => {
+    const response = await fetchSafe(session.url, { headers: { accept: "application/x-mpegURL,text/plain,*/*" } });
+    if (!response.ok) throw new Error(`تعذر تحميل القائمة (${response.status}).`);
+    const text = await readTextLimited(response, 64_000_000, 15_000);
+    const items = parseM3u(text);
+    if (!items.length) throw new Error("القائمة لا تحتوي على قنوات صالحة.");
+    return items;
+  }, 120_000);
+}
+
+async function categoriesFor(session, type) {
+  if (session.kind === "xtream") {
+    const client = new XtreamClient(session);
+    return cached(cacheKey(session, `categories:${type}`), () => client.categories(type));
+  }
+  const items = await loadM3u(session);
+  return [...new Set(items.filter((item) => item.type === type).map((item) => item.category))]
+    .sort((a, b) => a.localeCompare(b, "ar"))
+    .map((name) => ({ id: name, name }));
+}
+
+async function catalogFor(session, type, query) {
+  const page = Math.max(1, Number(query.get("page") || 1));
+  const category = query.get("category") || "";
+  const search = query.get("search") || "";
+  let rows;
+  if (session.kind === "xtream") {
+    const client = new XtreamClient(session);
+    rows = await cached(cacheKey(session, `catalog:${type}:${category}`), () => client.catalog(type, category));
+  } else {
+    rows = (await loadM3u(session)).filter((item) => item.type === type);
+  }
+  const result = pageItems(rows.map((item) => ({ ...item, image: safeImage(item.image), backdrop: safeImage(item.backdrop) })), {
+    category,
+    search,
+    page,
+    pageSize: 60,
+  });
+  return result;
+}
+
+async function sourceFor(session, type, id, extension = "") {
+  if (session.kind === "xtream") {
+    const client = new XtreamClient(session);
+    return client.streamUrl(type, id, type === "live" ? "m3u8" : extension);
+  }
+  const item = (await loadM3u(session)).find((entry) => entry.id === id);
+  if (!item) throw new Error("لم يتم العثور على رابط التشغيل.");
+  return item.sourceUrl;
+}
+
+function rewritePlaylist(text, baseUrl) {
+  return text.split(/\r?\n/).map((line) => {
+    if (!line.trim()) return line;
+    if (!line.startsWith("#")) {
+      try { return signedPath(new URL(line.trim(), baseUrl).toString()); } catch { return line; }
+    }
+    return line.replace(/URI="([^"]+)"/g, (_, value) => {
+      try { return `URI="${signedPath(new URL(value, baseUrl).toString())}"`; } catch { return `URI="${value}"`; }
+    });
+  }).join("\n");
+}
+
+async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls = false, transcodeVideo = false } = {}) {
+  const headers = {};
+  if (req.headers.range) headers.range = req.headers.range;
+  const response = await fetchSafe(rawUrl, { headers });
+  if (!response.ok && response.status !== 206) throw new Error(`مصدر التشغيل أعاد الخطأ ${response.status}.`);
+  const type = (response.headers.get("content-type") || "").toLowerCase();
+  const looksPlaylist = /mpegurl|m3u8/.test(type) || /\.m3u8(?:$|\?)/i.test(rawUrl);
+  let inspected = null;
+  if (looksPlaylist) {
+    inspected = await inspectPlaylistBody(response);
+    if (inspected.playlist && !transcodeVideo) {
+      const body = rewritePlaylist(inspected.playlist, response.url || rawUrl);
+      res.writeHead(200, {
+        ...securityHeaders(),
+        "content-type": "application/vnd.apple.mpegurl; charset=utf-8",
+        "cache-control": "no-store",
+        "content-length": Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
+    }
+  }
+  if (allowTranscode && (forceHls || !/video\/(mp4|webm)|audio\//.test(type))) {
+    await inspected?.reader?.cancel().catch(() => {});
+    if (!inspected && response.body) await response.body.cancel().catch(() => {});
+    const target = `${signedPath(rawUrl, "/api/transcode/index.m3u8", 1800)}${transcodeVideo ? "&v=1" : ""}`;
+    res.writeHead(302, { ...securityHeaders(), location: target, "cache-control": "no-store" });
+    res.end();
+    return;
+  }
+  const passthrough = {
+    ...securityHeaders(),
+    "content-type": response.headers.get("content-type") || "application/octet-stream",
+    "cache-control": "no-store",
+    "accept-ranges": response.headers.get("accept-ranges") || "bytes",
+  };
+  for (const name of ["content-length", "content-range"]) {
+    const value = response.headers.get(name);
+    if (value) passthrough[name] = value;
+  }
+  res.writeHead(response.status, passthrough);
+  if (inspected) return pipeInspectedBody(res, inspected.reader, inspected.prefix);
+  if (!response.body) return res.end();
+  Readable.fromWeb(response.body).on("error", () => res.destroy()).pipe(res);
+}
+
+function transcodeKey(url, transcodeVideo) {
+  return crypto.createHash("sha256").update(url).update(transcodeVideo ? ":h264" : ":copy").digest("hex").slice(0, 24);
+}
+
+function startTranscode(url, forceVideo = false) {
+  const transcodeVideo = forceVideo || String(process.env.TRANSCODE_VIDEO || "false") === "true";
+  const key = transcodeKey(url, transcodeVideo);
+  const existing = transcodes.get(key);
+  if (existing?.process && !existing.process.killed && existing.process.exitCode === null) {
+    existing.lastAccess = Date.now();
+    return existing;
+  }
+  if (transcodes.size >= maxTranscodes) {
+    const oldest = [...transcodes.values()].sort((a, b) => a.lastAccess - b.lastAccess)[0];
+    if (oldest) stopTranscode(oldest.key);
+  }
+  const dir = path.join(transcodeRoot, key);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const args = [
+    "-nostdin", "-hide_banner", "-loglevel", "warning",
+    "-user_agent", "BLOFY-PLAYER/2026 Mozilla/5.0",
+    "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
+    "-i", url,
+    "-map", "0:v:0?", "-map", "0:a:0?",
+    "-c:v", transcodeVideo ? "libx264" : "copy",
+    ...(transcodeVideo ? ["-preset", "veryfast", "-tune", "zerolatency"] : []),
+    "-c:a", "aac", "-ac", "2", "-b:a", "128k",
+    "-f", "hls", "-hls_time", "2", "-hls_list_size", "6",
+    "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",
+    "-hls_segment_filename", path.join(dir, "segment-%06d.ts"),
+    path.join(dir, "index.m3u8"),
+  ];
+  const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+  const record = { key, dir, process: child, lastAccess: Date.now(), error: "" };
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { record.error = `${record.error}${chunk}`.slice(-1200); });
+  child.on("exit", (code) => { if (code && !record.error) record.error = `FFmpeg stopped (${code})`; });
+  transcodes.set(key, record);
+  return record;
+}
+
+function stopTranscode(key) {
+  const record = transcodes.get(key);
+  if (!record) return;
+  try { record.process.kill("SIGTERM"); } catch {}
+  try { rmSync(record.dir, { recursive: true, force: true }); } catch {}
+  transcodes.delete(key);
+}
+
+async function waitForFile(file, timeout = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    if (existsSync(file) && statSync(file).size > 20) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function serveTranscode(res, rawUrl, query, fileName) {
+  await assertSafeUrl(rawUrl);
+  const record = startTranscode(rawUrl, query.get("v") === "1");
+  record.lastAccess = Date.now();
+  const safeName = fileName === "index.m3u8" || /^segment-\d{6}\.ts$/.test(fileName) ? fileName : "";
+  if (!safeName) throw new Error("ملف تشغيل غير صالح.");
+  const target = path.join(record.dir, safeName);
+  if (!(await waitForFile(target, safeName === "index.m3u8" ? 8000 : 3500))) {
+    throw new Error(record.error ? "تعذر تحويل هذا البث إلى صيغة متوافقة." : "البث لم يستجب بالسرعة المطلوبة.");
+  }
+  if (safeName === "index.m3u8") {
+    let text = await readFile(target, "utf8");
+    const suffix = `?u=${encodeURIComponent(query.get("u"))}&e=${encodeURIComponent(query.get("e"))}&s=${encodeURIComponent(query.get("s"))}${query.get("v") === "1" ? "&v=1" : ""}`;
+    text = text.split(/\r?\n/).map((line) => /^segment-\d{6}\.ts$/.test(line) ? `/api/transcode/${line}${suffix}` : line).join("\n");
+    res.writeHead(200, { ...securityHeaders(), "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" });
+    return res.end(text);
+  }
+  res.writeHead(200, { ...securityHeaders(), "content-type": "video/mp2t", "cache-control": "no-store" });
+  createReadStream(target).pipe(res);
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - 120_000;
+  for (const [key, record] of transcodes) if (record.lastAccess < cutoff) stopTranscode(key);
+  const rateCutoff = Date.now() - 120_000;
+  for (const [key, bucket] of rateBuckets) if (bucket.resetAt < rateCutoff) rateBuckets.delete(key);
+}, 30_000).unref();
+
+async function handleApi(req, res, url) {
+  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/transcode/");
+  if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
+
+  if (req.method === "GET" && url.pathname === "/api/health") {
+    return json(res, 200, { ok: true, service: "BLOFY PLAYER", time: new Date().toISOString() }, securityHeaders());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/license") {
+    const deviceId = String(url.searchParams.get("device_id") || "").slice(0, 40);
+    if (!/^BLOFY-[A-Z0-9-]{8,32}$/.test(deviceId)) return json(res, 400, { error: "رقم الجهاز غير صالح." }, securityHeaders());
+    let data;
+    if (process.env.LICENSE_API_URL) {
+      const remote = new URL(process.env.LICENSE_API_URL);
+      remote.searchParams.set("device_id", deviceId);
+      const response = await fetchSafe(remote.toString(), { headers: { accept: "application/json" } });
+      if (!response.ok) throw new Error("تعذر التحقق من التفعيل حاليًا.");
+      data = JSON.parse(await readTextLimited(response, 1_000_000, 9000));
+    } else {
+      data = await licenses.get(deviceId);
+    }
+    const rawExpiry = data?.expiresAt ?? data?.expires_at ?? 0;
+    let expiresAt = Number(rawExpiry);
+    if (!Number.isFinite(expiresAt)) expiresAt = Date.parse(String(rawExpiry)) || 0;
+    if (expiresAt > 0 && expiresAt < 10_000_000_000) expiresAt *= 1000;
+    const plan = data?.plan || (data?.active === true || expiresAt > Date.now() ? "active" : "expired");
+    const cookie = licenseCookie(seal({ deviceId, expiresAt, plan }));
+    return json(res, 200, {
+      ...data,
+      deviceId,
+      plan,
+      status: data?.status || (plan === "active" ? "مفعّل" : plan === "trial" ? "تجريبي" : "منتهي"),
+      expiresAt,
+      remainingDays: data?.remainingDays ?? Math.max(0, Math.ceil((expiresAt - Date.now()) / 86_400_000)),
+      activationUrl: activationUrlFor(req),
+    }, {
+      ...securityHeaders(),
+      "set-cookie": cookie,
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/activate") {
+    const body = await readJson(req, 4096);
+    const license = await licenses.redeem(body.deviceId || body.device_id, body.code);
+    return json(res, 200, { ok: true, ...license, activationUrl: activationUrlFor(req) }, securityHeaders());
+  }
+
+  if (url.pathname === "/api/admin/codes" && req.method === "POST") {
+    if (!adminAuthorized(req)) return json(res, 401, { error: "رمز إدارة غير صحيح أو ADMIN_TOKEN غير مضبوط." }, securityHeaders());
+    const entry = await licenses.createCode(await readJson(req, 8192));
+    return json(res, 201, { ok: true, code: entry }, securityHeaders());
+  }
+
+  if (url.pathname === "/api/admin/codes" && req.method === "GET") {
+    if (!adminAuthorized(req)) return json(res, 401, { error: "رمز إدارة غير صحيح أو ADMIN_TOKEN غير مضبوط." }, securityHeaders());
+    return json(res, 200, { codes: await licenses.listCodes() }, securityHeaders());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/qr") {
+    const text = String(url.searchParams.get("text") || "").slice(0, 500);
+    const svg = await QRCode.toString(text || activationUrlFor(req), { type: "svg", margin: 1, width: 220, color: { dark: "#120033", light: "#ffffff" } });
+    res.writeHead(200, { ...securityHeaders(), "content-type": "image/svg+xml; charset=utf-8", "cache-control": "private, max-age=300" });
+    return res.end(svg);
+  }
+
+  if (url.pathname === "/api/session" && req.method === "GET") {
+    return json(res, 200, { session: publicSession(getSession(req)) }, securityHeaders());
+  }
+  if (url.pathname === "/api/session" && req.method === "DELETE") {
+    return json(res, 200, { ok: true }, { ...securityHeaders(), "set-cookie": clearSessionCookie() });
+  }
+  if (url.pathname === "/api/session" && req.method === "POST") {
+    if (!requireActiveLicense(req, res)) return;
+    const body = await readJson(req);
+    const kind = body.kind === "m3u" ? "m3u" : "xtream";
+    let session;
+    if (kind === "xtream") {
+      const serverUrl = String(body.serverUrl || "").trim().replace(/\/+$/, "");
+      const username = String(body.username || "").trim();
+      const password = String(body.password || "");
+      if (!serverUrl || !username || !password) throw new Error("أدخل رابط الخادم واسم المستخدم وكلمة المرور.");
+      await assertSafeUrl(serverUrl);
+      const client = new XtreamClient({ serverUrl, username, password });
+      const account = await client.validate();
+      session = { kind, serverUrl, username, password, account, serverName: account.serverName, name: String(body.name || "قائمتي").slice(0, 50) };
+    } else {
+      const playlistUrl = String(body.url || "").trim();
+      if (!playlistUrl) throw new Error("أدخل رابط M3U أو M3U8.");
+      await assertSafeUrl(playlistUrl);
+      session = { kind, url: playlistUrl, serverName: new URL(playlistUrl).host, name: String(body.name || "قائمتي").slice(0, 50) };
+      await loadM3u(session);
+    }
+    return json(res, 200, { ok: true, session: publicSession(session) }, {
+      ...securityHeaders(),
+      "set-cookie": sessionCookie(seal(session)),
+    });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/proxy") {
+    if (!requireActiveLicense(req, res)) return;
+    const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
+    if (!raw) return json(res, 403, { error: "انتهى رابط الوسيط، أعد فتح المحتوى." }, securityHeaders());
+    return relayRemote(req, res, raw);
+  }
+
+  if (req.method === "GET" && (url.pathname === "/api/transcode/index.m3u8" || url.pathname.startsWith("/api/transcode/segment-"))) {
+    if (!requireActiveLicense(req, res)) return;
+    const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
+    if (!raw) return json(res, 403, { error: "انتهت جلسة التشغيل." }, securityHeaders());
+    const fileName = url.pathname.split("/").pop();
+    return serveTranscode(res, raw, url.searchParams, fileName);
+  }
+
+  const session = getSession(req);
+  if (!session) return json(res, 401, { error: "أضف قائمة تشغيل أولًا." }, securityHeaders());
+  if (!requireActiveLicense(req, res)) return;
+
+  if (req.method === "GET" && url.pathname === "/api/categories") {
+    const type = ["live", "movies", "series"].includes(url.searchParams.get("type")) ? url.searchParams.get("type") : "live";
+    return json(res, 200, { categories: await categoriesFor(session, type) }, securityHeaders());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/catalog") {
+    const type = ["live", "movies", "series"].includes(url.searchParams.get("type")) ? url.searchParams.get("type") : "live";
+    return json(res, 200, await catalogFor(session, type, url.searchParams), securityHeaders());
+  }
+
+  const movieMatch = url.pathname.match(/^\/api\/movie\/([^/]+)$/);
+  if (req.method === "GET" && movieMatch) {
+    if (session.kind !== "xtream") return json(res, 400, { error: "تفاصيل الفيلم غير متوفرة لهذا النوع من القوائم." }, securityHeaders());
+    const client = new XtreamClient(session);
+    const item = await cached(cacheKey(session, `movie:${movieMatch[1]}`), () => client.movieInfo(movieMatch[1]));
+    return json(res, 200, { ...item, image: safeImage(item.image), backdrop: safeImage(item.backdrop) }, securityHeaders());
+  }
+
+  const seriesMatch = url.pathname.match(/^\/api\/series\/([^/]+)$/);
+  if (req.method === "GET" && seriesMatch) {
+    if (session.kind !== "xtream") return json(res, 400, { error: "المواسم والحلقات تحتاج مصدر Xtream Codes." }, securityHeaders());
+    const client = new XtreamClient(session);
+    const item = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
+    if (!item.seasons.length) return json(res, 404, { error: "لم يرسل مزود القائمة مواسم أو حلقات لهذا المسلسل." }, securityHeaders());
+    item.image = safeImage(item.image);
+    item.backdrop = safeImage(item.backdrop);
+    for (const season of item.seasons) for (const episode of season.episodes) episode.image = safeImage(episode.image);
+    return json(res, 200, item, securityHeaders());
+  }
+
+  const epgMatch = url.pathname.match(/^\/api\/epg\/([^/]+)$/);
+  if (req.method === "GET" && epgMatch) {
+    if (session.kind !== "xtream") return json(res, 200, { entries: [] }, securityHeaders());
+    const client = new XtreamClient(session);
+    const entries = await cached(cacheKey(session, `epg:${epgMatch[1]}`), () => client.epg(epgMatch[1], 5), 120_000);
+    return json(res, 200, { entries }, securityHeaders());
+  }
+
+  const playMatch = url.pathname.match(/^\/api\/play\/(live|movies|episode)\/([^/]+)$/);
+  if (req.method === "GET" && playMatch) {
+    const [, type, id] = playMatch;
+    const extension = String(url.searchParams.get("ext") || "").replace(/[^a-zA-Z0-9]/g, "");
+    const source = await sourceFor(session, type, id, extension);
+    const nativePlayback = url.searchParams.get("native") === "1";
+    const compatibleNative = /^(?:m3u8|mpd|mp4|m4v|mov|mkv|webm|ts|mts|m2ts|mp3|aac)$/i.test(extension || (type === "live" ? "m3u8" : "mp4"));
+    const compatibilityLevel = url.searchParams.get("compat");
+    const compatibilityMode = compatibilityLevel === "1" || compatibilityLevel === "2" || (nativePlayback && !compatibleNative);
+    return relayRemote(req, res, source, {
+      allowTranscode: type === "live" || !nativePlayback || compatibilityMode,
+      forceHls: type === "live" || compatibilityMode,
+      transcodeVideo: compatibilityLevel === "2",
+    });
+  }
+
+  return json(res, 404, { error: "المسار غير موجود." }, securityHeaders());
+}
+
+const mime = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+};
+
+async function serveStatic(req, res, pathname) {
+  let target;
+  if (pathname === "/vendor/hls.min.js") target = path.join(here, "node_modules", "hls.js", "dist", "hls.min.js");
+  else {
+    const relative = pathname === "/" ? "index.html" : pathname === "/activate" || pathname === "/activate/" ? "activate.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
+    target = path.resolve(publicDir, relative);
+    if (!target.startsWith(publicDir)) return false;
+  }
+  if (!existsSync(target) || !statSync(target).isFile()) return false;
+  const stat = statSync(target);
+  res.writeHead(200, {
+    ...securityHeaders(),
+    "content-type": mime[path.extname(target).toLowerCase()] || "application/octet-stream",
+    "content-length": stat.size,
+    "cache-control": /(?:app\.js|styles\.css|index\.html)$/.test(target) ? "no-cache" : "public, max-age=86400",
+  });
+  createReadStream(target).pipe(res);
+  return true;
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
+    if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "الطريقة غير مسموحة." }, securityHeaders());
+    if (await serveStatic(req, res, url.pathname)) return;
+    await serveStatic(req, res, "/");
+  } catch (error) {
+    const message = error?.name === "AbortError" ? "انتهت مهلة اتصال الخادم." : error?.message || "حدث خطأ غير متوقع.";
+    if (!res.headersSent) json(res, 500, { error: message }, securityHeaders());
+    else res.destroy();
+  }
+});
+
+server.listen(port, "0.0.0.0", () => {
+  console.log(`BLOFY PLAYER is ready on port ${port}`);
+});
+
+function shutdown() {
+  for (const key of transcodes.keys()) stopTranscode(key);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 5000).unref();
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
