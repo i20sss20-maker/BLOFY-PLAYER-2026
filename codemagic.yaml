@@ -19,8 +19,3 @@ workflows:
     artifacts:
       - BLOFY-ANDROID-2026/app/build/outputs/apk/debug/*.apk
       - BLOFY-ANDROID-2026/app/build/reports/lint-results-debug.html
-    publishing:
-      email:
-        notify:
-          success: true
-          failure: true
