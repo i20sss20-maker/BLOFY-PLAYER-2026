@@ -44,6 +44,8 @@ let searchTimer = null;
 let toastTimer = null;
 let playerItem = null;
 let playerFailures = 0;
+let playerTimeout = null;
+let playerCompatibility = false;
 
 function getDeviceId() {
   try {
@@ -438,17 +440,38 @@ function addHistory(item) {
   storage.set("blofy_history", state.history);
 }
 
-async function openPlayer(item) {
+function clearPlayerTimeout() {
+  if (playerTimeout) clearTimeout(playerTimeout);
+  playerTimeout = null;
+}
+
+function armPlayerTimeout() {
+  clearPlayerTimeout();
+  playerTimeout = setTimeout(() => {
+    if (!playerModal.hidden && video.readyState < 2) {
+      showPlayerError(playerCompatibility
+        ? "لم يستجب المصدر حتى بوضع التوافق. تحقق من المصدر أو جرّب قناة أخرى."
+        : "تأخر المصدر في الاستجابة. جرّب وضع التوافق لتحويل البث إلى H.264/AAC.");
+    }
+  }, playerCompatibility ? 32_000 : 22_000);
+}
+
+async function openPlayer(item, compatibility = false) {
   if (!item?.id) return;
   playerItem = item;
   playerFailures = 0;
+  playerCompatibility = compatibility;
+  clearPlayerTimeout();
   addHistory(item);
   const type = item.type === "series" ? "episode" : item.type;
-  const url = `/api/play/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(item.extension || "")}`;
+  const extension = item.extension || (type === "live" ? "ts" : "mp4");
+  const url = `/api/play/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(extension)}${compatibility ? "&compat=2" : ""}`;
   if (window.BlofyAndroid?.play) {
     try {
-      const nativeUrl = new URL(`${url}&native=1`, location.origin).toString();
-      window.BlofyAndroid.play(nativeUrl, item.name || "BLOFY PLAYER", type, item.extension || (type === "live" ? "m3u8" : "mp4"));
+      const native = await api(`/api/native-link/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(extension)}`);
+      const nativeUrl = new URL(native.url, location.origin);
+      if (compatibility) nativeUrl.searchParams.set("compat", "2");
+      window.BlofyAndroid.play(nativeUrl.toString(), item.name || "BLOFY PLAYER", type, native.extension || extension);
       return;
     } catch (error) {
       notify(`تعذر فتح Media3: ${error.message || "خطأ غير معروف"}`, "error");
@@ -459,7 +482,7 @@ async function openPlayer(item) {
   document.getElementById("playerSubtitle").textContent = item.type === "live" ? "بث مباشر" : item.type === "episode" ? "حلقة" : "فيلم";
   document.getElementById("livePill").hidden = item.type !== "live";
   playerStatus.hidden = false;
-  playerStatus.innerHTML = `<span class="spinner"></span><b>جاري تجهيز البث…</b><small>نختار أسرع طريقة تشغيل متوافقة</small>`;
+  playerStatus.innerHTML = `<span class="spinner"></span><b>${compatibility ? "جاري تشغيل وضع التوافق…" : "جاري تجهيز البث…"}</b><small>${compatibility ? "تحويل آمن إلى H.264/AAC" : "نختار أسرع طريقة تشغيل متوافقة"}</small>`;
   playerModal.hidden = false;
   document.body.style.overflow = "hidden";
   destroyHls();
@@ -469,10 +492,10 @@ async function openPlayer(item) {
   if (useHls && window.Hls?.isSupported()) attachHls(url);
   else {
     video.src = url;
-    video.addEventListener("loadedmetadata", onPlayerReady, { once: true });
     video.addEventListener("error", onNativeError, { once: true });
     video.play().catch(() => {});
   }
+  armPlayerTimeout();
   setTimeout(() => document.querySelector('[data-player-action="play"]')?.focus(), 60);
 }
 
@@ -499,7 +522,6 @@ function attachHls(url) {
   hls.attachMedia(video);
   hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
     populateTracks();
-    onPlayerReady();
     video.play().catch(() => {});
   });
   hls.on(window.Hls.Events.LEVEL_SWITCHED, populateTracks);
@@ -517,8 +539,14 @@ function attachHls(url) {
 }
 
 function onNativeError() { showPlayerError("صيغة هذا المحتوى غير مدعومة على الجهاز أو أن الرابط لا يستجيب."); }
-function onPlayerReady() { playerStatus.hidden = true; populateTracks(); }
-function showPlayerError(message) { playerStatus.hidden = false; playerStatus.innerHTML = `<b>تعذر التشغيل</b><small>${escapeHtml(message)}</small><button class="secondary-button" data-player-action="retry" data-focusable>إعادة المحاولة</button>`; }
+function onPlayerReady() { clearPlayerTimeout(); playerStatus.hidden = true; populateTracks(); }
+function showPlayerError(message) {
+  clearPlayerTimeout();
+  hls?.stopLoad();
+  playerStatus.hidden = false;
+  playerStatus.innerHTML = `<b>تعذر التشغيل</b><small>${escapeHtml(message)}</small><div class="button-row">${playerCompatibility ? `<button class="secondary-button" data-player-action="retry" data-focusable>إعادة المحاولة</button>` : `<button class="primary-button" data-player-action="compat" data-focusable>تشغيل بوضع التوافق</button>`}<button class="secondary-button" data-player-action="close" data-focusable>إغلاق</button></div>`;
+  setTimeout(() => playerStatus.querySelector("[data-focusable]")?.focus(), 30);
+}
 
 function populateTracks() {
   qualitySelect.innerHTML = `<option value="auto">تلقائي</option>${hls?.levels?.map((level, index) => `<option value="${index}" ${hls.currentLevel === index ? "selected" : ""}>${level.height ? `${level.height}p` : `جودة ${index + 1}`}</option>`).join("") || ""}`;
@@ -527,7 +555,19 @@ function populateTracks() {
 }
 
 function destroyHls() { if (hls) { hls.destroy(); hls = null; } }
-function closePlayer() { destroyHls(); video.pause(); video.removeAttribute("src"); video.load(); playerModal.hidden = true; document.body.style.overflow = ""; renderMain(); }
+function closePlayer() {
+  clearPlayerTimeout();
+  destroyHls();
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+  playerModal.hidden = true;
+  playerItem = null;
+  playerCompatibility = false;
+  document.body.style.overflow = "";
+  if (document.fullscreenElement === playerModal) document.exitFullscreen().catch(() => {});
+  renderMain();
+}
 
 app.addEventListener("submit", async (event) => {
   if (event.target.id !== "sourceForm") return;
@@ -635,7 +675,8 @@ playerModal.addEventListener("click", (event) => {
   if (action === "play") video.paused ? video.play().catch(() => {}) : video.pause();
   if (action === "mute") video.muted = !video.muted;
   if (action === "fullscreen") document.fullscreenElement ? document.exitFullscreen() : playerModal.requestFullscreen?.();
-  if (action === "retry" && playerItem) openPlayer(playerItem);
+  if (action === "compat" && playerItem) openPlayer(playerItem, true);
+  if (action === "retry" && playerItem) openPlayer(playerItem, playerCompatibility);
 });
 
 qualitySelect.addEventListener("change", () => { if (hls) hls.currentLevel = qualitySelect.value === "auto" ? -1 : Number(qualitySelect.value); });
@@ -648,7 +689,7 @@ video.addEventListener("timeupdate", () => {
   document.getElementById("playerTime").textContent = duration ? `${formatTime(video.currentTime)} / ${formatTime(duration)}` : formatTime(video.currentTime);
 });
 video.addEventListener("waiting", () => { if (!video.paused) playerStatus.hidden = false; });
-video.addEventListener("playing", () => { playerStatus.hidden = true; });
+video.addEventListener("playing", onPlayerReady);
 
 function focusables() {
   return [...document.querySelectorAll("[data-focusable]")].filter((element) => !element.disabled && !element.hidden && element.offsetParent !== null);

@@ -134,6 +134,14 @@ function signedPath(url, prefix = "/api/proxy", lifetime = 7200) {
   return `${prefix}?u=${encodeURIComponent(encoded)}&e=${expires}&s=${encodeURIComponent(signature)}`;
 }
 
+function transcodePath(url, transcodeVideo = false) {
+  return `${signedPath(url, "/api/transcode/index.m3u8", 21_600)}${transcodeVideo ? "&v=1" : ""}`;
+}
+
+function sourceHost(rawUrl) {
+  try { return new URL(rawUrl).host; } catch { return "unknown"; }
+}
+
 function safeImage(url) {
   return url ? signedPath(url, "/api/proxy", 86_400) : "";
 }
@@ -183,7 +191,7 @@ async function catalogFor(session, type, query) {
 async function sourceFor(session, type, id, extension = "") {
   if (session.kind === "xtream") {
     const client = new XtreamClient(session);
-    return client.streamUrl(type, id, type === "live" ? "m3u8" : extension);
+    return client.streamUrl(type, id, extension || (type === "live" ? "ts" : "mp4"));
   }
   const item = (await loadM3u(session)).find((entry) => entry.id === id);
   if (!item) throw new Error("لم يتم العثور على رابط التشغيل.");
@@ -202,7 +210,12 @@ function rewritePlaylist(text, baseUrl) {
   }).join("\n");
 }
 
-async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls = false, transcodeVideo = false } = {}) {
+async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls = false, transcodeVideo = false, preferTranscode = false } = {}) {
+  if (allowTranscode && forceHls && preferTranscode) {
+    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
+    res.end();
+    return;
+  }
   const headers = {};
   if (req.headers.range) headers.range = req.headers.range;
   const response = await fetchSafe(rawUrl, { headers });
@@ -227,8 +240,7 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
   if (allowTranscode && (forceHls || !/video\/(mp4|webm)|audio\//.test(type))) {
     await inspected?.reader?.cancel().catch(() => {});
     if (!inspected && response.body) await response.body.cancel().catch(() => {});
-    const target = `${signedPath(rawUrl, "/api/transcode/index.m3u8", 1800)}${transcodeVideo ? "&v=1" : ""}`;
-    res.writeHead(302, { ...securityHeaders(), location: target, "cache-control": "no-store" });
+    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
     res.end();
     return;
   }
@@ -271,21 +283,26 @@ function startTranscode(url, forceVideo = false) {
     "-nostdin", "-hide_banner", "-loglevel", "warning",
     "-user_agent", "BLOFY-PLAYER/2026 Mozilla/5.0",
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
+    "-rw_timeout", "12000000", "-analyzeduration", "2500000", "-probesize", "2500000",
     "-i", url,
     "-map", "0:v:0?", "-map", "0:a:0?",
     "-c:v", transcodeVideo ? "libx264" : "copy",
     ...(transcodeVideo ? ["-preset", "veryfast", "-tune", "zerolatency"] : []),
     "-c:a", "aac", "-ac", "2", "-b:a", "128k",
-    "-f", "hls", "-hls_time", "2", "-hls_list_size", "6",
+    "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
     "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",
     "-hls_segment_filename", path.join(dir, "segment-%06d.ts"),
     path.join(dir, "index.m3u8"),
   ];
   const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
   const record = { key, dir, process: child, lastAccess: Date.now(), error: "" };
+  console.log(`[media] ffmpeg-start key=${key} host=${sourceHost(url)} mode=${transcodeVideo ? "h264" : "copy"}`);
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => { record.error = `${record.error}${chunk}`.slice(-1200); });
-  child.on("exit", (code) => { if (code && !record.error) record.error = `FFmpeg stopped (${code})`; });
+  child.on("exit", (code) => {
+    if (code && !record.error) record.error = `FFmpeg stopped (${code})`;
+    console.log(`[media] ffmpeg-exit key=${key} code=${code ?? "signal"}`);
+  });
   transcodes.set(key, record);
   return record;
 }
@@ -314,7 +331,8 @@ async function serveTranscode(res, rawUrl, query, fileName) {
   const safeName = fileName === "index.m3u8" || /^segment-\d{6}\.ts$/.test(fileName) ? fileName : "";
   if (!safeName) throw new Error("ملف تشغيل غير صالح.");
   const target = path.join(record.dir, safeName);
-  if (!(await waitForFile(target, safeName === "index.m3u8" ? 8000 : 3500))) {
+  if (!(await waitForFile(target, safeName === "index.m3u8" ? 12_000 : 5000))) {
+    console.error(`[media] transcode-timeout key=${record.key} host=${sourceHost(rawUrl)} code=${record.process.exitCode ?? "running"}`);
     throw new Error(record.error ? "تعذر تحويل هذا البث إلى صيغة متوافقة." : "البث لم يستجب بالسرعة المطلوبة.");
   }
   if (safeName === "index.m3u8") {
@@ -336,7 +354,7 @@ setInterval(() => {
 }, 30_000).unref();
 
 async function handleApi(req, res, url) {
-  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/transcode/");
+  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/native-") || url.pathname.startsWith("/api/transcode/");
   if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
 
   if (req.method === "GET" && url.pathname === "/api/health") {
@@ -440,8 +458,19 @@ async function handleApi(req, res, url) {
     return relayRemote(req, res, raw);
   }
 
+  if (req.method === "GET" && url.pathname === "/api/native-play") {
+    const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
+    if (!raw) return json(res, 403, { error: "انتهى رابط Media3، أعد فتح المحتوى." }, securityHeaders());
+    await assertSafeUrl(raw);
+    const compatibility = url.searchParams.get("compat") === "2";
+    const location = compatibility ? transcodePath(raw, true) : raw;
+    console.log(`[media] native-open host=${sourceHost(raw)} mode=${compatibility ? "compat" : "direct"}`);
+    res.writeHead(302, { ...securityHeaders(), location, "cache-control": "no-store" });
+    res.end();
+    return;
+  }
+
   if (req.method === "GET" && (url.pathname === "/api/transcode/index.m3u8" || url.pathname.startsWith("/api/transcode/segment-"))) {
-    if (!requireActiveLicense(req, res)) return;
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
     if (!raw) return json(res, 403, { error: "انتهت جلسة التشغيل." }, securityHeaders());
     const fileName = url.pathname.split("/").pop();
@@ -451,6 +480,15 @@ async function handleApi(req, res, url) {
   const session = getSession(req);
   if (!session) return json(res, 401, { error: "أضف قائمة تشغيل أولًا." }, securityHeaders());
   if (!requireActiveLicense(req, res)) return;
+
+  const nativeLinkMatch = url.pathname.match(/^\/api\/native-link\/(live|movies|episode)\/([^/]+)$/);
+  if (req.method === "GET" && nativeLinkMatch) {
+    const [, type, id] = nativeLinkMatch;
+    const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
+    const source = await sourceFor(session, type, id, extension);
+    console.log(`[media] native-link type=${type} id=${id} ext=${extension} host=${sourceHost(source)}`);
+    return json(res, 200, { url: signedPath(source, "/api/native-play", 7200), extension }, securityHeaders());
+  }
 
   if (req.method === "GET" && url.pathname === "/api/categories") {
     const type = ["live", "movies", "series"].includes(url.searchParams.get("type")) ? url.searchParams.get("type") : "live";
@@ -493,16 +531,16 @@ async function handleApi(req, res, url) {
   const playMatch = url.pathname.match(/^\/api\/play\/(live|movies|episode)\/([^/]+)$/);
   if (req.method === "GET" && playMatch) {
     const [, type, id] = playMatch;
-    const extension = String(url.searchParams.get("ext") || "").replace(/[^a-zA-Z0-9]/g, "");
+    const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
     const source = await sourceFor(session, type, id, extension);
-    const nativePlayback = url.searchParams.get("native") === "1";
-    const compatibleNative = /^(?:m3u8|mpd|mp4|m4v|mov|mkv|webm|ts|mts|m2ts|mp3|aac)$/i.test(extension || (type === "live" ? "m3u8" : "mp4"));
     const compatibilityLevel = url.searchParams.get("compat");
-    const compatibilityMode = compatibilityLevel === "1" || compatibilityLevel === "2" || (nativePlayback && !compatibleNative);
+    const compatibilityMode = compatibilityLevel === "1" || compatibilityLevel === "2";
+    console.log(`[media] web-open type=${type} id=${id} ext=${extension} host=${sourceHost(source)} mode=${compatibilityLevel === "2" ? "compat" : "standard"}`);
     return relayRemote(req, res, source, {
-      allowTranscode: type === "live" || !nativePlayback || compatibilityMode,
+      allowTranscode: type === "live" || compatibilityMode,
       forceHls: type === "live" || compatibilityMode,
       transcodeVideo: compatibilityLevel === "2",
+      preferTranscode: type === "live" && !/^m3u8$/i.test(extension),
     });
   }
 
@@ -549,6 +587,9 @@ const server = http.createServer(async (req, res) => {
     await serveStatic(req, res, "/");
   } catch (error) {
     const message = error?.name === "AbortError" ? "انتهت مهلة اتصال الخادم." : error?.message || "حدث خطأ غير متوقع.";
+    if (String(req.url || "").startsWith("/api/play/") || String(req.url || "").startsWith("/api/native-") || String(req.url || "").startsWith("/api/transcode/")) {
+      console.error(`[media] request-failed path=${String(req.url || "").split("?")[0]} message=${message}`);
+    }
     if (!res.headersSent) json(res, 500, { error: message }, securityHeaders());
     else res.destroy();
   }

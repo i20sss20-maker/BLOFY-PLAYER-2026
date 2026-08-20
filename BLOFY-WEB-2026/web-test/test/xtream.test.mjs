@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeSeriesInfo } from "../lib/xtream.mjs";
+import { normalizeSeriesInfo, XtreamClient } from "../lib/xtream.mjs";
+
+test("Xtream live streams default to transport stream and honor provider extensions", () => {
+  const client = new XtreamClient({ serverUrl: "https://provider.example", username: "user", password: "pass" });
+  assert.equal(client.streamUrl("live", "123"), "https://provider.example/live/user/pass/123.ts");
+  assert.equal(client.streamUrl("live", "123", "m3u8"), "https://provider.example/live/user/pass/123.m3u8");
+});
 
 test("series normalization accepts provider-specific episode identifiers", () => {
   const result = normalizeSeriesInfo({

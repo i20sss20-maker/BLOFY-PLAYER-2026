@@ -251,17 +251,19 @@ public final class MainActivity extends Activity {
                 try {
                     Uri target = Uri.parse(url);
                     Uri allowed = Uri.parse(activeBaseUrl);
-                    if (!"https".equalsIgnoreCase(target.getScheme()) || allowed.getHost() == null || !allowed.getHost().equalsIgnoreCase(target.getHost()) || !target.getPath().startsWith("/api/play/")) {
+                    boolean signedNative = "/api/native-play".equals(target.getPath());
+                    boolean legacyPlay = target.getPath() != null && target.getPath().startsWith("/api/play/");
+                    if (!"https".equalsIgnoreCase(target.getScheme()) || allowed.getHost() == null || !allowed.getHost().equalsIgnoreCase(target.getHost()) || (!signedNative && !legacyPlay)) {
                         throw new IllegalArgumentException("رابط تشغيل غير مسموح");
                     }
-                    String cookie = CookieManager.getInstance().getCookie(url);
+                    String cookie = signedNative ? "" : CookieManager.getInstance().getCookie(url);
                     Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
                     intent.putExtra(PlayerActivity.EXTRA_URL, url);
                     intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
                     intent.putExtra(PlayerActivity.EXTRA_KIND, kind);
                     intent.putExtra(PlayerActivity.EXTRA_EXTENSION, extension);
                     intent.putExtra(PlayerActivity.EXTRA_COOKIE, cookie == null ? "" : cookie);
-                    intent.putExtra(PlayerActivity.EXTRA_DEVICE_ID, deviceId());
+                    intent.putExtra(PlayerActivity.EXTRA_DEVICE_ID, signedNative ? "" : deviceId());
                     startActivity(intent);
                 } catch (Exception error) {
                     Toast.makeText(MainActivity.this, error.getMessage(), Toast.LENGTH_LONG).show();

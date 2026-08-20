@@ -37,7 +37,7 @@ LICENSE_DB_PATH=/data/licenses.json
 إنشاء رمز تفعيل لمدة 365 يومًا لجهاز واحد:
 
 ```bash
-curl -X POST "https://YOUR-PROJECT.up.railway.app/api/admin/codes" \
+curl -X POST "https://blofy-player-2026-production.up.railway.app/api/admin/codes" \
   -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"days":365,"maxUses":1,"label":"عميل 001"}'

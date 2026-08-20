@@ -6,7 +6,7 @@ workflows:
     environment:
       java: 17
       vars:
-        BLOFY_BASE_URL: "https://YOUR-RAILWAY-DOMAIN.up.railway.app"
+        BLOFY_BASE_URL: "https://blofy-player-2026-production.up.railway.app"
     scripts:
       - name: Create Gradle wrapper
         script: |

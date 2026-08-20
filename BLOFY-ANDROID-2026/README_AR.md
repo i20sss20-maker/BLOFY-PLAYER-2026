@@ -22,7 +22,7 @@
 4. شغّل:
 
 ```bash
-export BLOFY_BASE_URL="https://YOUR-PROJECT.up.railway.app"
+export BLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app"
 ./scripts/build-apk.sh
 ```
 

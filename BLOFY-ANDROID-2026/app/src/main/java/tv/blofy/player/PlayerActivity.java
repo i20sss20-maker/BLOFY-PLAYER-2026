@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -59,6 +61,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private String deviceId;
     private long resumePosition;
     private boolean forceVideoCompatibility;
+    private final Handler playbackHandler = new Handler(Looper.getMainLooper());
+    private final Runnable playbackTimeout = () -> {
+        if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
+        player.stop();
+        progress.setVisibility(View.GONE);
+        errorPanel.setVisibility(View.VISIBLE);
+        errorText.setText(forceVideoCompatibility
+                ? "لم يستجب المصدر حتى بوضع التوافق. تحقق من المصدر أو جرّب قناة أخرى."
+                : "تأخر المصدر في الاستجابة. اضغط وضع التوافق لتحويل البث إلى H.264/AAC.");
+        retryButton.setText(forceVideoCompatibility ? "إعادة المحاولة" : "تشغيل بوضع التوافق");
+        retryButton.requestFocus();
+    };
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -175,7 +189,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private String mimeType() {
-        if (forceVideoCompatibility || isLive() || "m3u8".equals(extension)) return "application/x-mpegURL";
+        if (forceVideoCompatibility || "m3u8".equals(extension)) return "application/x-mpegURL";
         switch (extension) {
             case "mpd": return "application/dash+xml";
             case "mp4":
@@ -194,6 +208,11 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private boolean directContainer() {
         return extension.matches("mp4|m4v|mov|mkv|webm|ts|mts|m2ts|mp3|aac|m3u8|mpd");
+    }
+
+    private void schedulePlaybackTimeout() {
+        playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.postDelayed(playbackTimeout, forceVideoCompatibility ? 35_000 : 20_000);
     }
 
     private void initializePlayer() {
@@ -240,6 +259,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         progress.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.GONE);
         playerView.requestFocus();
+        schedulePlaybackTimeout();
     }
 
     private void retryPlayback() {
@@ -254,6 +274,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             progress.setVisibility(View.VISIBLE);
             player.prepare();
             player.play();
+            schedulePlaybackTimeout();
         }
     }
 
@@ -261,11 +282,15 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     public void onPlaybackStateChanged(int playbackState) {
         if (playbackState == Player.STATE_BUFFERING) progress.setVisibility(View.VISIBLE);
         else if (playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) progress.setVisibility(View.GONE);
-        if (playbackState == Player.STATE_READY) titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
+        if (playbackState == Player.STATE_READY) {
+            playbackHandler.removeCallbacks(playbackTimeout);
+            titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
+        }
     }
 
     @Override
     public void onPlayerError(PlaybackException error) {
+        playbackHandler.removeCallbacks(playbackTimeout);
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
         errorText.setText(forceVideoCompatibility
@@ -289,6 +314,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private void releasePlayer() {
+        playbackHandler.removeCallbacks(playbackTimeout);
         if (player == null) return;
         savePosition();
         playerView.setPlayer(null);

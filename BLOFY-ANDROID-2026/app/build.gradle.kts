@@ -6,7 +6,7 @@ fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("
 
 val portalUrl = providers.gradleProperty("BLOFY_BASE_URL")
     .orElse(providers.environmentVariable("BLOFY_BASE_URL"))
-    .orElse("https://YOUR-RAILWAY-DOMAIN.up.railway.app")
+    .orElse("https://blofy-player-2026-production.up.railway.app")
 
 android {
     namespace = "tv.blofy.player"
@@ -16,8 +16,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 20260820
-        versionName = "2026.08.20"
+        versionCode = 202608201
+        versionName = "2026.08.20.1"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 

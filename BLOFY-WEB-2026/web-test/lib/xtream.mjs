@@ -63,7 +63,7 @@ export class XtreamClient {
       categoryId: String(row.category_id || ""),
       rating: row.rating_5based || row.rating || "",
       year: row.year || row.releaseDate || row.releasedate || "",
-      extension: row.container_extension || (type === "live" ? "m3u8" : "mp4"),
+      extension: String(row.container_extension || (type === "live" ? "ts" : "mp4")).toLowerCase(),
       epgId: row.epg_channel_id || "",
       type,
     }));
@@ -105,7 +105,7 @@ export class XtreamClient {
 
   streamUrl(type, id, extension = "") {
     const segment = type === "live" ? "live" : type === "episode" ? "series" : "movie";
-    const ext = String(extension || (type === "live" ? "m3u8" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || "mp4";
+    const ext = String(extension || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
     return `${this.base}/${segment}/${encodeURIComponent(this.username)}/${encodeURIComponent(this.password)}/${encodeURIComponent(id)}.${ext}`;
   }
 }

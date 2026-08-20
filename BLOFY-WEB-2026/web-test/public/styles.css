@@ -296,15 +296,17 @@ img { display: block; max-width: 100%; }
 .player-shell { position:relative; width:100%; height:100%; overflow:hidden; background:#000; }
 .player-shell video { width:100%; height:100%; object-fit:contain; background:#000; }
 .player-gradient { pointer-events:none; position:absolute; inset:0; background:linear-gradient(#000b,transparent 24%,transparent 70%,#000e); opacity:.78; transition:.25s; }
-.player-topbar { position:absolute; top:0; right:0; left:0; display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center; padding:26px 30px; }
+.player-topbar { position:absolute; z-index:4; top:0; right:0; left:0; display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center; padding:26px 30px; }
 .player-topbar strong { display:block; font-size:18px; }
 .player-topbar small { color:#b7b7c3; }
 .live-pill { align-self:start; padding:6px 9px; border-radius:7px; background:#f3264b; font-size:10px; font-weight:900; }
-.player-status { position:absolute; inset:0; display:grid; place-items:center; align-content:center; gap:10px; text-align:center; }
+.player-status { position:absolute; z-index:2; inset:0; display:grid; place-items:center; align-content:center; gap:10px; text-align:center; pointer-events:none; }
 .player-status small { color:#aaa; }
+.player-status button { pointer-events:auto; }
+.player-status .button-row { justify-content:center; }
 .spinner { width:45px; height:45px; border:3px solid rgba(255,255,255,.16); border-top-color:var(--purple-2); border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-.player-controls { position:absolute; right:28px; bottom:25px; left:28px; display:flex; align-items:center; gap:10px; }
+.player-controls { position:absolute; z-index:4; right:28px; bottom:25px; left:28px; display:flex; align-items:center; gap:10px; }
 .player-controls input[type=range] { flex:1; accent-color:var(--purple); }
 .player-controls select { max-width:125px; height:42px; color:white; border:1px solid var(--line); border-radius:9px; background:#15151d; padding:0 9px; }
 .icon-button { min-width:44px; height:44px; padding:0 11px; }
