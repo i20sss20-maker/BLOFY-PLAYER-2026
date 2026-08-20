@@ -18,6 +18,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import androidx.annotation.OptIn;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -40,7 +41,7 @@ import androidx.media3.ui.PlayerView;
 import java.util.HashMap;
 import java.util.Map;
 
-@UnstableApi
+@OptIn(markerClass = UnstableApi.class)
 public final class PlayerActivity extends Activity implements Player.Listener {
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_TITLE = "title";
