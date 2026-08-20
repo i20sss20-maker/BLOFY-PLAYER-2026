@@ -1,0 +1,1133 @@
+diff --git a/BLOFY-ANDROID-2026/README_AR.md b/BLOFY-ANDROID-2026/README_AR.md
+index d570000..0c9aac7 100644
+--- a/BLOFY-ANDROID-2026/README_AR.md
++++ b/BLOFY-ANDROID-2026/README_AR.md
+@@ -1,37 +1,49 @@
+ # BLOFY PLAYER Android 2026
+ 
+-هذا مشروع Android أصلي خفيف يحمّل واجهة BLOFY المنشورة على Railway، لكن التشغيل لا يحدث داخل WebView. عند الضغط على قناة أو فيلم أو حلقة تنتقل البيانات مباشرة إلى شاشة Android أصلية تستخدم **AndroidX Media3 1.11.0** فقط.
++الإصدار: `2026.08.20.3`
+ 
+-## ما عولج هنا
++تطبيق Android للهاتف والتابلت وAndroid TV والريسيفر. واجهة الحساب والفئات تأتي من Railway داخل WebView، لكن الفيديو لا يعمل داخل WebView ولا يمر عبر Railway: عند اختيار المحتوى يحصل التطبيق على رابط قصير مشفّر وموقّع، ثم يعيد Railway توجيه **Media3 على الجهاز مباشرة إلى مصدر المستخدم**.
+ 
+-- لا توجد سلسلة محاولات بين عدة مشغلات؛ Media3 هو محرك Android الوحيد.
+-- مهلة اتصال قصيرة وذاكرة بدء صغيرة لتقليل انتظار «جاري التجهيز».
+-- القنوات تُجهّز كـ HLS في الخادم إذا كان المزود يرسل MPEG-TS خامًا باسم M3U8.
+-- الأفلام والحلقات المتوافقة تمر مباشرة إلى Media3 دون تحويل غير ضروري.
+-- الأسهم وOK والرجوع تُرسل صراحة إلى نظام التركيز في الواجهة، مع تحكم ريموت مستقل داخل المشغل.
+-- رقم جهاز ثابت مشتق محليًا من Android ID، لا يتغير عند مسح بيانات المتصفح.
+-- Cookie الجلسة المشفّرة ينتقل من WebView إلى Media3 دون إظهار بيانات Xtream في الرابط.
+-- حفظ موضع الفيلم والحلقة محليًا واستكمالهما لاحقًا.
+-- يعمل على الهاتف والتابلت وAndroid TV وأجهزة الاستقبال التي تدعم Android 6 أو أحدث.
++## مسار التشغيل النهائي
+ 
+-## الربط والبناء
++1. الواجهة تطلب `/api/native-link/...` باستخدام جلسة المستخدم المشفّرة.
++2. Railway يعيد رابط `/api/native-play` مؤقتًا لا يكشف بيانات المصدر للواجهة.
++3. `PlayerActivity` يفتح الرابط بواسطة Media3.
++4. `/api/native-play` يتحقق من التوقيع ثم يعيد `302` إلى المصدر الأصلي فقط.
++5. بيانات الفيديو تنتقل من المزود إلى الجهاز مباشرة؛ لا يوجد FFmpeg أو Proxy في مسار APK.
+ 
+-1. انشر مجلد `BLOFY-WEB-2026/web-test` على Railway وتأكد أن `/api/health` يعيد `ok: true`.
+-2. انسخ رابط Railway العام، مثل `https://blofy-production.up.railway.app`.
+-3. افتح هذا المجلد في Android Studio (JDK 17، Android SDK 36).
+-4. شغّل:
++## المشاكل التي عولجت
++
++- إزالة التحويل التلقائي إلى `compat=2` بعد 20 ثانية؛ هذا التحويل كان ينقل القناة إلى FFmpeg على Railway ويفشل مع المزود.
++- رفع مهلة بدء المصدر إلى 60 ثانية، و90 ثانية عند إعادة الاتصال، حتى لا تُغلق قناة بطيئة قبل وصول أول إطار.
++- تفعيل علمَي Media3 الرسميين `FLAG_DETECT_ACCESS_UNITS` و`FLAG_ALLOW_NON_IDR_KEYFRAMES` لبث MPEG‑TS الذي ينقصه AUD أو IDR.
++- دعم MPEG‑TS وHLS وDASH وMP4/MKV/WebM والصوت، وترك الامتداد غير المعروف لـ Media3 كي يكتشفه بدل إجباره خطأً على HLS.
++- تفعيل تحويلات HTTP/HTTPS المتقاطعة لأن بعض مزودي Xtream يعيدون من رابط HTTPS إلى بث HTTP.
++- استخدام Decoder fallback، وBuffer مناسب للبث المباشر، وحفظ موضع الأفلام والحلقات، وأزرار ريموت ورجوع أصلية.
++- قبول رابط تشغيل موقّع من نفس أصل Railway فقط؛ لم يعد التطبيق يقبل مسار `/api/play` القديم.
++- تطبيع رابط Railway إلى الأصل فقط ومنع اسم مستخدم/كلمة مرور أو منفذ مختلف داخل رابط الجسر.
++
++## البناء
++
++المتطلبات: JDK 17، Android SDK 36، Gradle 8.13، وAGP 8.12.2.
+ 
+ ```bash
++cd BLOFY-ANDROID-2026
+ export BLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app"
+ ./scripts/build-apk.sh
+ ```
+ 
+-يظهر APK التجريبي القابل للتثبيت في:
++الناتج:
+ 
+ `app/build/outputs/apk/debug/app-debug.apk`
+ 
+-إذا بنيت بدون وضع الرابط، ستظهر داخل التطبيق شاشة آمنة لإدخال رابط Railway أول مرة، ويمكن تغييره لاحقًا من إعدادات BLOFY.
++أو ادفع التحديث إلى GitHub؛ ملف `codemagic.yaml` يشغّل `lintDebug` و`testDebugUnitTest` ثم يبني APK تلقائيًا.
++
++## اختبار القبول
+ 
+-## إصدار المتجر
++- تأكد أن `/api/health` يعيد `version: 2026.08.20.3` و`nativePlayback: direct`.
++- ابنِ APK جديدًا؛ تحديث موقع Railway وحده لا يغيّر كود Media3 المثبت سابقًا.
++- اختبر قناة TS وقناة M3U8 وفيلمًا، ثم استخدم زر الرجوع للخروج من المشغل.
++- في Deploy Logs يجب أن يظهر `native-open ... mode=direct`، ويجب ألا يظهر `ffmpeg-start` عند التشغيل من APK.
+ 
+-نسخة `release` موجودة، لكنها تحتاج مفتاح توقيع خاص بك قبل النشر. لا ترفع مفتاح التوقيع داخل المشروع. APK التجريبي مناسب للاختبار على أجهزة Honor والتلفزيون والريسيفر قبل توقيع النسخة النهائية.
++> التطبيق مشغل فقط ولا يضم محتوى أو اشتراكات. استخدم مصدرًا تملك حق الوصول إليه.
+diff --git a/BLOFY-ANDROID-2026/app/build.gradle.kts b/BLOFY-ANDROID-2026/app/build.gradle.kts
+index c3c72ba..7b04855 100644
+--- a/BLOFY-ANDROID-2026/app/build.gradle.kts
++++ b/BLOFY-ANDROID-2026/app/build.gradle.kts
+@@ -16,8 +16,8 @@ android {
+         applicationId = "tv.blofy.player"
+         minSdk = 23
+         targetSdk = 36
+-        versionCode = 202608201
+-        versionName = "2026.08.20.1"
++        versionCode = 202608203
++        versionName = "2026.08.20.3"
+         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
+     }
+ 
+@@ -50,5 +50,7 @@ dependencies {
+     val media3Version = "1.11.0"
+     implementation("androidx.media3:media3-exoplayer:$media3Version")
+     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
++    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
+     implementation("androidx.media3:media3-ui:$media3Version")
++    testImplementation("junit:junit:4.13.2")
+ }
+diff --git a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
+index 21e35ce..b0f3e48 100644
+--- a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
++++ b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
+@@ -65,15 +65,36 @@ public final class MainActivity extends Activity {
+     private static String normalizedBaseUrl(String value) {
+         try {
+             String clean = String.valueOf(value).trim();
+-            while (clean.endsWith("/")) clean = clean.substring(0, clean.length() - 1);
+             Uri uri = Uri.parse(clean);
+-            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) return null;
+-            return clean;
++            if (!"https".equalsIgnoreCase(uri.getScheme())
++                    || uri.getHost() == null
++                    || uri.getUserInfo() != null
++                    || uri.getEncodedAuthority() == null) return null;
++            String host = uri.getHost().toLowerCase(Locale.US);
++            if (!host.matches("^[a-z0-9.-]+$") || host.startsWith(".") || host.endsWith(".")) return null;
++            int port = uri.getPort();
++            if (port == 0 || port > 65_535) return null;
++            if (port == 443) port = -1;
++            return "https://" + host + (port > 0 ? ":" + port : "");
+         } catch (Exception ignored) {
+             return null;
+         }
+     }
+ 
++    private static boolean sameOrigin(Uri target, Uri allowed) {
++        return target != null
++                && allowed != null
++                && "https".equalsIgnoreCase(target.getScheme())
++                && target.getUserInfo() == null
++                && allowed.getHost() != null
++                && allowed.getHost().equalsIgnoreCase(target.getHost())
++                && effectiveHttpsPort(allowed) == effectiveHttpsPort(target);
++    }
++
++    private static int effectiveHttpsPort(Uri uri) {
++        return uri.getPort() < 0 ? 443 : uri.getPort();
++    }
++
+     private int dp(int value) {
+         return Math.round(value * getResources().getDisplayMetrics().density);
+     }
+@@ -199,7 +220,7 @@ public final class MainActivity extends Activity {
+             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                 Uri target = request.getUrl();
+                 Uri allowed = Uri.parse(activeBaseUrl);
+-                if ("https".equalsIgnoreCase(target.getScheme()) && allowed.getHost() != null && allowed.getHost().equalsIgnoreCase(target.getHost())) return false;
++                if (sameOrigin(target, allowed)) return false;
+                 try { startActivity(new Intent(Intent.ACTION_VIEW, target)); } catch (Exception ignored) {}
+                 return true;
+             }
+@@ -252,18 +273,14 @@ public final class MainActivity extends Activity {
+                     Uri target = Uri.parse(url);
+                     Uri allowed = Uri.parse(activeBaseUrl);
+                     boolean signedNative = "/api/native-play".equals(target.getPath());
+-                    boolean legacyPlay = target.getPath() != null && target.getPath().startsWith("/api/play/");
+-                    if (!"https".equalsIgnoreCase(target.getScheme()) || allowed.getHost() == null || !allowed.getHost().equalsIgnoreCase(target.getHost()) || (!signedNative && !legacyPlay)) {
++                    if (!sameOrigin(target, allowed) || !signedNative) {
+                         throw new IllegalArgumentException("رابط تشغيل غير مسموح");
+                     }
+-                    String cookie = signedNative ? "" : CookieManager.getInstance().getCookie(url);
+                     Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
+                     intent.putExtra(PlayerActivity.EXTRA_URL, url);
+                     intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
+                     intent.putExtra(PlayerActivity.EXTRA_KIND, kind);
+                     intent.putExtra(PlayerActivity.EXTRA_EXTENSION, extension);
+-                    intent.putExtra(PlayerActivity.EXTRA_COOKIE, cookie == null ? "" : cookie);
+-                    intent.putExtra(PlayerActivity.EXTRA_DEVICE_ID, signedNative ? "" : deviceId());
+                     startActivity(intent);
+                 } catch (Exception error) {
+                     Toast.makeText(MainActivity.this, error.getMessage(), Toast.LENGTH_LONG).show();
+diff --git a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
+new file mode 100644
+index 0000000..f1ea3c5
+--- /dev/null
++++ b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
+@@ -0,0 +1,49 @@
++package tv.blofy.player;
++
++import java.util.Locale;
++
++final class PlaybackPolicy {
++    static final int INITIAL_STARTUP_TIMEOUT_MS = 60_000;
++    static final int RETRY_STARTUP_TIMEOUT_MS = 90_000;
++
++    private PlaybackPolicy() {}
++
++    static String normalizeExtension(String value, String fallback) {
++        String clean = String.valueOf(value == null ? "" : value)
++                .trim()
++                .replaceFirst("^\\.+", "")
++                .replaceAll("[^a-zA-Z0-9]", "")
++                .toLowerCase(Locale.US);
++        return clean.isEmpty() ? fallback : clean;
++    }
++
++    static boolean isHls(String extension) {
++        return "m3u8".equals(normalizeExtension(extension, ""));
++    }
++
++    static String mimeType(String extension) {
++        switch (normalizeExtension(extension, "")) {
++            case "m3u8": return "application/x-mpegURL";
++            case "mpd": return "application/dash+xml";
++            case "mp4":
++            case "m4v":
++            case "mov": return "video/mp4";
++            case "mkv": return "video/x-matroska";
++            case "webm": return "video/webm";
++            case "ts":
++            case "mts":
++            case "m2ts": return "video/mp2t";
++            case "mp3": return "audio/mpeg";
++            case "aac": return "audio/mp4a-latm";
++            default: return null;
++        }
++    }
++
++    static int startupTimeoutMs(int connectionAttempt) {
++        return connectionAttempt > 0 ? RETRY_STARTUP_TIMEOUT_MS : INITIAL_STARTUP_TIMEOUT_MS;
++    }
++
++    static String directPlaybackUrl(String signedNativeUrl) {
++        return signedNativeUrl;
++    }
++}
+diff --git a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+index acf5ae6..0acb972 100644
+--- a/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
++++ b/BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+@@ -30,11 +30,15 @@ import androidx.media3.datasource.DefaultHttpDataSource;
+ import androidx.media3.exoplayer.DefaultLoadControl;
+ import androidx.media3.exoplayer.DefaultRenderersFactory;
+ import androidx.media3.exoplayer.ExoPlayer;
++import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory;
++import androidx.media3.exoplayer.hls.HlsMediaSource;
+ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
++import androidx.media3.exoplayer.source.MediaSource;
++import androidx.media3.extractor.DefaultExtractorsFactory;
++import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
+ import androidx.media3.ui.PlayerView;
+ 
+ import java.util.HashMap;
+-import java.util.Locale;
+ import java.util.Map;
+ 
+ @UnstableApi
+@@ -43,9 +47,6 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+     public static final String EXTRA_TITLE = "title";
+     public static final String EXTRA_KIND = "kind";
+     public static final String EXTRA_EXTENSION = "extension";
+-    public static final String EXTRA_COOKIE = "cookie";
+-    public static final String EXTRA_DEVICE_ID = "device_id";
+-
+     private PlayerView playerView;
+     private ProgressBar progress;
+     private LinearLayout errorPanel;
+@@ -57,20 +58,16 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+     private String title;
+     private String kind;
+     private String extension;
+-    private String cookie;
+-    private String deviceId;
+     private long resumePosition;
+-    private boolean forceVideoCompatibility;
++    private int connectionAttempt;
+     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
+     private final Runnable playbackTimeout = () -> {
+         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
+         player.stop();
+         progress.setVisibility(View.GONE);
+         errorPanel.setVisibility(View.VISIBLE);
+-        errorText.setText(forceVideoCompatibility
+-                ? "لم يستجب المصدر حتى بوضع التوافق. تحقق من المصدر أو جرّب قناة أخرى."
+-                : "تأخر المصدر في الاستجابة. اضغط وضع التوافق لتحويل البث إلى H.264/AAC.");
+-        retryButton.setText(forceVideoCompatibility ? "إعادة المحاولة" : "تشغيل بوضع التوافق");
++        errorText.setText("لم تصل بيانات فيديو قابلة للتشغيل خلال المهلة. أعد الاتصال مباشرة بالمصدر أو جرّب قناة أخرى. لا يمر الفيديو عبر Railway.");
++        retryButton.setText("إعادة الاتصال مباشرة");
+         retryButton.requestFocus();
+     };
+ 
+@@ -80,9 +77,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+         url = getIntent().getStringExtra(EXTRA_URL);
+         title = valueOr(getIntent().getStringExtra(EXTRA_TITLE), "BLOFY PLAYER");
+         kind = valueOr(getIntent().getStringExtra(EXTRA_KIND), "movies");
+-        extension = valueOr(getIntent().getStringExtra(EXTRA_EXTENSION), "mp4").toLowerCase(Locale.US);
+-        cookie = valueOr(getIntent().getStringExtra(EXTRA_COOKIE), "");
+-        deviceId = valueOr(getIntent().getStringExtra(EXTRA_DEVICE_ID), "");
++        extension = PlaybackPolicy.normalizeExtension(
++                getIntent().getStringExtra(EXTRA_EXTENSION),
++                "live".equals(kind) ? "ts" : "mp4");
+         if (!validUrl(url)) {
+             finish();
+             return;
+@@ -162,7 +159,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+         errorPanel.addView(errorText, new LinearLayout.LayoutParams(dp(520), ViewGroup.LayoutParams.WRAP_CONTENT));
+ 
+         retryButton = new Button(this);
+-        retryButton.setText("تشغيل بوضع التوافق");
++        retryButton.setText("إعادة الاتصال مباشرة");
+         retryButton.setTextColor(Color.WHITE);
+         retryButton.setTextSize(15);
+         retryButton.setAllCaps(false);
+@@ -188,52 +185,33 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+                 .build();
+     }
+ 
+-    private String mimeType() {
+-        if (forceVideoCompatibility || "m3u8".equals(extension)) return "application/x-mpegURL";
+-        switch (extension) {
+-            case "mpd": return "application/dash+xml";
+-            case "mp4":
+-            case "m4v":
+-            case "mov": return "video/mp4";
+-            case "mkv": return "video/x-matroska";
+-            case "webm": return "video/webm";
+-            case "ts":
+-            case "mts":
+-            case "m2ts": return "video/mp2t";
+-            case "mp3": return "audio/mpeg";
+-            case "aac": return "audio/mp4a-latm";
+-            default: return "application/x-mpegURL";
+-        }
+-    }
+-
+-    private boolean directContainer() {
+-        return extension.matches("mp4|m4v|mov|mkv|webm|ts|mts|m2ts|mp3|aac|m3u8|mpd");
+-    }
+-
+     private void schedulePlaybackTimeout() {
+         playbackHandler.removeCallbacks(playbackTimeout);
+-        playbackHandler.postDelayed(playbackTimeout, forceVideoCompatibility ? 35_000 : 20_000);
++        playbackHandler.postDelayed(playbackTimeout, PlaybackPolicy.startupTimeoutMs(connectionAttempt));
+     }
+ 
+     private void initializePlayer() {
+         if (player != null) return;
+         Map<String, String> headers = new HashMap<>();
+-        headers.put("User-Agent", "BLOFY-PLAYER-ANDROID/2026 Media3/1.11");
++        headers.put("User-Agent", "VLC/3.0.20 LibVLC/3.0.20 BLOFY-Media3/1.11");
+         headers.put("Accept", "*/*");
+-        if (!cookie.isEmpty()) headers.put("Cookie", cookie);
+-        if (!deviceId.isEmpty()) headers.put("X-Blofy-Device-Id", deviceId);
+ 
+         DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
+-                .setConnectTimeoutMs(7_000)
+-                .setReadTimeoutMs(12_000)
++                .setConnectTimeoutMs(15_000)
++                .setReadTimeoutMs(30_000)
+                 .setAllowCrossProtocolRedirects(true)
+                 .setDefaultRequestProperties(headers);
+         DefaultDataSource.Factory dataSourceFactory = new DefaultDataSource.Factory(this, httpFactory);
++        int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
++                | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
++        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory()
++                .setTsExtractorFlags(tsFlags);
++        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory);
+         DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
+                 .setEnableDecoderFallback(true);
+ 
+         player = new ExoPlayer.Builder(this, renderers)
+-                .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSourceFactory))
++                .setMediaSourceFactory(mediaSourceFactory)
+                 .setLoadControl(createLoadControl())
+                 .build();
+         player.addListener(this);
+@@ -245,15 +223,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+         player.setWakeMode(C.WAKE_MODE_NETWORK);
+         playerView.setPlayer(player);
+ 
+-        String playbackUrl = url;
+-        if (forceVideoCompatibility) playbackUrl += url.contains("?") ? "&compat=2" : "?compat=2";
+-        else if (!directContainer() && !url.contains("compat=1")) playbackUrl += url.contains("?") ? "&compat=1" : "?compat=1";
+-        MediaItem item = new MediaItem.Builder()
+-                .setUri(playbackUrl)
+-                .setMediaId(title)
+-                .setMimeType(mimeType())
+-                .build();
+-        player.setMediaItem(item, Math.max(0, resumePosition));
++        MediaItem.Builder itemBuilder = new MediaItem.Builder()
++                .setUri(PlaybackPolicy.directPlaybackUrl(url))
++                .setMediaId(title);
++        String mimeType = PlaybackPolicy.mimeType(extension);
++        if (mimeType != null) itemBuilder.setMimeType(mimeType);
++        MediaItem item = itemBuilder.build();
++        MediaSource mediaSource = PlaybackPolicy.isHls(extension)
++                ? new HlsMediaSource.Factory(dataSourceFactory)
++                    .setExtractorFactory(new DefaultHlsExtractorFactory(tsFlags, true))
++                    .createMediaSource(item)
++                : mediaSourceFactory.createMediaSource(item);
++        player.setMediaSource(mediaSource, Math.max(0, resumePosition));
+         player.prepare();
+         player.play();
+         progress.setVisibility(View.VISIBLE);
+@@ -263,19 +244,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+     }
+ 
+     private void retryPlayback() {
+-        if (!forceVideoCompatibility) {
+-            forceVideoCompatibility = true;
+-            releasePlayer();
+-            titleView.setVisibility(View.VISIBLE);
+-            initializePlayer();
+-        } else if (player == null) initializePlayer();
+-        else {
+-            errorPanel.setVisibility(View.GONE);
+-            progress.setVisibility(View.VISIBLE);
+-            player.prepare();
+-            player.play();
+-            schedulePlaybackTimeout();
+-        }
++        connectionAttempt += 1;
++        releasePlayer();
++        titleView.setVisibility(View.VISIBLE);
++        initializePlayer();
+     }
+ 
+     @Override
+@@ -284,6 +256,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+         else if (playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) progress.setVisibility(View.GONE);
+         if (playbackState == Player.STATE_READY) {
+             playbackHandler.removeCallbacks(playbackTimeout);
++            connectionAttempt = 0;
+             titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
+         }
+     }
+@@ -293,10 +266,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
+         playbackHandler.removeCallbacks(playbackTimeout);
+         progress.setVisibility(View.GONE);
+         errorPanel.setVisibility(View.VISIBLE);
+-        errorText.setText(forceVideoCompatibility
+-                ? "لم يستجب المصدر حتى بعد تحويله إلى H.264/AAC. تحقق من الرابط أو جرّب محتوى آخر.\n" + error.getErrorCodeName()
+-                : "لم يستجب الرابط أو أن ترميز الفيديو غير مدعوم على الجهاز. اضغط وضع التوافق ليحوّل الخادم الفيديو، مع بقاء Media3 هو المشغل الوحيد.\n" + error.getErrorCodeName());
+-        retryButton.setText(forceVideoCompatibility ? "إعادة المحاولة" : "تشغيل بوضع التوافق");
++        errorText.setText("تعذر الاتصال المباشر بالمصدر أو أن ترميز القناة غير مدعوم على هذا الجهاز. أعد الاتصال أو جرّب قناة أخرى.\n" + error.getErrorCodeName());
++        retryButton.setText("إعادة الاتصال مباشرة");
+         retryButton.requestFocus();
+     }
+ 
+diff --git a/BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java b/BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java
+new file mode 100644
+index 0000000..ae2cb13
+--- /dev/null
++++ b/BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java
+@@ -0,0 +1,36 @@
++package tv.blofy.player;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.Test;
++
++public final class PlaybackPolicyTest {
++    @Test
++    public void signedNativeUrlStaysDirectAndUnmodified() {
++        String signed = "https://blofy.example/api/native-play?u=sealed&e=123&s=signed";
++        String result = PlaybackPolicy.directPlaybackUrl(signed);
++        assertEquals(signed, result);
++        assertFalse(result.contains("compat="));
++    }
++
++    @Test
++    public void transportStreamsUseProgressiveMpegTsMimeType() {
++        assertEquals("video/mp2t", PlaybackPolicy.mimeType(".TS"));
++        assertFalse(PlaybackPolicy.isHls("ts"));
++        assertTrue(PlaybackPolicy.isHls("m3u8"));
++    }
++
++    @Test
++    public void unknownExtensionsAreLeftForMedia3Sniffing() {
++        assertNull(PlaybackPolicy.mimeType("unknown"));
++    }
++
++    @Test
++    public void retryAllowsAProviderMoreStartupTime() {
++        assertEquals(60_000, PlaybackPolicy.startupTimeoutMs(0));
++        assertEquals(90_000, PlaybackPolicy.startupTimeoutMs(1));
++    }
++}
+diff --git a/BLOFY-AUDIT-FINAL-2026-AR.md b/BLOFY-AUDIT-FINAL-2026-AR.md
+new file mode 100644
+index 0000000..090788f
+--- /dev/null
++++ b/BLOFY-AUDIT-FINAL-2026-AR.md
+@@ -0,0 +1,39 @@
++# خلاصة التدقيق النهائي — BLOFY PLAYER
++
++الإصدار المستهدف: `2026.08.20.3`
++
++## التشخيص المثبت
++
++Railway والجلسة وقاعدة التفعيل والواجهة كانت تعمل. الخطأ الأحمر `500` ظهر في `/api/play/live` لأن اختبار Safari أخذ بث TS الخام إلى FFmpeg على Railway؛ سجل التشغيل أثبت `ffmpeg-exit code=1`. أما Media3 الذي عمل سابقًا فهو مسار Android مختلف.
++
++داخل APK كان يوجد خطأ منطقي ثانٍ: إذا لم تبدأ القناة خلال 20 ثانية يضيف المشغل `compat=2`، فيحوّل طلب Media3 المباشر إلى نفس مسار Railway/FFmpeg الفاشل. لذلك بدا أن Media3 توقف، بينما الكود هو الذي غادر Media3 المباشر مبكرًا.
++
++## ما تغير
++
++- Media3 مباشر دائمًا، ولا توجد ترقية تلقائية إلى FFmpeg.
++- Railway يتأكد من التوقيع ثم يعيد `302` للمصدر الأصلي حتى لو أرسل عميل قديم `compat=2`.
++- دعم MPEG‑TS غير المنتظم بأعلام Media3 الرسمية.
++- مهلة واقعية واتصال مباشر جديد عند الضغط على إعادة المحاولة.
++- HLS وDASH ومحتوى Progressive مربوط بأنواع صحيحة؛ الامتداد المجهول يُكتشف بدل إجباره على HLS.
++- جسر Android ورابط Railway أكثر تقييدًا وأمانًا.
++- رقم إصدار ظاهر في `/api/health` لمنع اختبار Deployment قديم بالخطأ.
++
++## كيف نعرف أن النسخة الصحيحة وصلت
++
++1. `/api/health` يعرض `2026.08.20.3` و`direct`.
++2. APK التجريبي من Codemagic يحمل Version Name `2026.08.20.3-test` (الإصدار الأساسي `2026.08.20.3`).
++3. عند اختيار قناة من APK يظهر `native-open ... mode=direct` في Railway.
++4. لا يظهر `ffmpeg-start` لهذا التشغيل.
++
++## الحكم
++
++التصميم والربط والمصدر بعد هذا التحديث صحيحون وفق السجلات والكود واختبارات الخادم والمراجع الرسمية. لا يجوز وصف التطبيق بأنه مختبر 100% على جهازك قبل أن يبني Codemagic هذا الإصدار ويُجرب APK فعليًا؛ هذا اختبار جهاز، وليس تعديلًا إضافيًا في Railway.
++
++## المراجع الرسمية التي بُني عليها الإصلاح
++
++- Android Media3 — معالجة MPEG‑TS الذي يفتقد AUD أو IDR، والسماح بإعادة التوجيه بين HTTPS وHTTP: <https://developer.android.com/media/media3/exoplayer/troubleshooting>
++- Android Media3 — الصيغ والحاويات المدعومة: <https://developer.android.com/media/media3/exoplayer/supported-formats>
++- إصدارات Media3 الرسمية: <https://developer.android.com/jetpack/androidx/releases/media3>
++- توافق Android Gradle Plugin 8.12: <https://developer.android.com/build/releases/agp-8-12-0-release-notes>
++- Railway — Healthchecks: <https://docs.railway.com/deployments/healthchecks>
++- Railway — Volumes والتخزين الدائم: <https://docs.railway.com/volumes/reference>
+diff --git a/BLOFY-DELIVERY-2026-AR.md b/BLOFY-DELIVERY-2026-AR.md
+index efa4f22..902225d 100644
+--- a/BLOFY-DELIVERY-2026-AR.md
++++ b/BLOFY-DELIVERY-2026-AR.md
+@@ -1,52 +1,51 @@
+-# تسليم BLOFY PLAYER 2026
++# تسليم BLOFY PLAYER 2026 — الإصدار 2026.08.20.3
+ 
+-الحزمة موحّدة وتحتوي على جزأين يعملان معًا:
++الحزمة موحدة وتحتوي على:
+ 
+-1. `BLOFY-WEB-2026/web-test`: خادم Railway، واجهة BLOFY الكاملة، Xtream/M3U، كاش، EPG، مواسم وحلقات، Proxy آمن، تحويل FFmpeg، وتجربة/تفعيل الأجهزة.
+-2. `BLOFY-ANDROID-2026`: تطبيق Android للهاتف والتابلت والتلفزيون والريسيفر، بواجهة Railway نفسها وتشغيل أصلي عبر Media3.
++1. `BLOFY-WEB-2026/web-test`: واجهة وخادم Railway والجلسة والتفعيل والكتالوج والروابط الموقّعة.
++2. `BLOFY-ANDROID-2026`: تطبيق Android وAndroid TV وتشغيل أصلي مباشر عبر Media3 1.11.0.
++3. `codemagic.yaml`: فحص وبناء APK تجريبي من GitHub.
+ 
+-## المشاكل السابقة وما يقابلها في هذه النسخة
++## القرار المعماري النهائي
+ 
+-| المشكلة السابقة | العلاج في الحزمة |
+-|---|---|
+-| «جاري التجربة» لأكثر من 30 ثانية | إلغاء تسلسل المشغلات؛ Media3 فقط على Android، مهلات اتصال محددة، وتحميل الفئات والمحتوى بالتوازي. |
+-| رابط ينتهي M3U8 لكنه يرسل بث TS خام ويعلق | الخادم يقرأ بداية الاستجابة فقط؛ إذا لم تكن قائمة HLS يبدأ تحويلًا متوافقًا فورًا بدل انتظار نهاية بث لا تنتهي. |
+-| تبديل القنوات بطيء | مخزن مؤقت لبيانات Xtream، HLS مقاطع قصيرة، وBuffer بدء منخفض للقنوات داخل Media3. |
+-| الفيلم يتأخر دقائق | الحاويات التي يدعمها Media3 تمر مباشرة دون FFmpeg؛ التحويل يستخدم فقط للصيغ غير المتوافقة. |
+-| المسلسل بلا رابط تشغيل | تطبيع عدة صيغ مختلفة لاستجابة `get_series_info` ودعم `id` و`stream_id` و`episode_id` وترتيب المواسم والحلقات. |
+-| الأسهم وOK والتمرير لا تعمل | جسر Android صريح لـ D-pad مع خوارزمية تركيز مرئية، ودعم Back وأزرار الوسائط في المشغل. |
+-| التصميم السابق ناقص | واجهة RTL سوداء/بنفسجية متجاوبة: دخول، رئيسية، مباشر، أفلام، مسلسلات، تفاصيل، مواسم، حلقات، مفضلة، سجل، إعدادات، QR وEPG. |
+-| Honor أو بعض الأجهزة لا تشغّل عبر WebView | الفيديو لا يعمل في WebView على Android؛ ينتقل إلى PlayerActivity أصلية تستخدم Media3 وفك ترميز الجهاز مع Decoder fallback. |
+-| التجربة تُعاد بمسح Cookie | سجل التراخيص أصبح على الخادم حسب رقم الجهاز الثابت، مع أكواد تفعيل ومسار إدارة محمي. |
++Railway يدير الحساب والجلسة والتفعيل والبيانات، لكنه **لا يحمل فيديو APK**. التطبيق يحصل على رابط موقّع قصير، ثم يتصل Media3 من الجهاز إلى مزود المستخدم مباشرة. هذا يمنع مشكلة مزود يعمل من المنزل لكنه يرفض Railway/FFmpeg أو عنوان مركز البيانات.
+ 
+-## نشر Railway
++| المشكلة التي ظهرت | السبب المثبت | الإصلاح النهائي |
++|---|---|---|
++| `/api/play/live` يعيد 500 | Safari أرسل TS الخام إلى مسار تحويل Railway، وFFmpeg خرج بالرمز 1 | لم يعد هذا المسار مستخدمًا في APK |
++| كان Media3 يعمل ثم أصبح يفشل | مهلة 20 ثانية كانت تحوله إلى `compat=2` ثم إلى FFmpeg | حذف التحويل نهائيًا؛ إعادة المحاولة تبقى مباشرة |
++| القناة عالقة على التخزين المؤقت | بعض MPEG‑TS لا يحتوي AUD/IDR بالشكل المتوقع | تفعيل أعلام TS الرسمية في Media3 |
++| الخروج من القناة يحتاج تحديث الصفحة | الاعتماد على مشغل الويب أو حالة قديمة | `PlayerActivity` أصلية؛ Back ينفذ `finish()` فورًا، وإغلاق الويب ينظف الفيديو وHLS |
++| مسلسلات أو حلقات ناقصة | اختلاف صيغ Xtream بين المزودين | تطبيع `id` و`stream_id` و`episode_id` والمواسم المسطحة أو المجمعة |
++| فقدان التفعيل بعد النشر | التخزين داخل الحاوية المؤقتة | `LICENSE_DB_PATH=/data/licenses.json` مع Railway Volume |
++| احتمال تشغيل رابط غير موثوق من WebView | الجسر القديم قبل مسار التوقيع | الجسر يقبل `/api/native-play` الموقّع ومن نفس الأصل والمنفذ فقط |
+ 
+-- Root Directory: `BLOFY-WEB-2026/web-test`
+-- المتغيرات الإلزامية:
++## إعداد Railway الثابت
+ 
+-```text
+-SESSION_SECRET=قيمة_عشوائية_ثابتة_32_حرفًا_أو_أكثر
+-ADMIN_TOKEN=رمز_إدارة_طويل_وسري_20_حرفًا_أو_أكثر
+-LICENSE_DB_PATH=/data/licenses.json
+-```
++- Root Directory: `BLOFY-WEB-2026/web-test`
++- Volume mount: `/data`
++- `LICENSE_DB_PATH=/data/licenses.json`
++- `SESSION_SECRET` ثابت وطويل
++- `ADMIN_TOKEN` ثابت وطويل
++- `TRANSCODE_VIDEO=false`
+ 
+-- أنشئ Volume في Railway واربطه بالمسار `/data` حتى لا تضيع التفعيلات عند إعادة النشر.
+-- اترك `ACTIVATION_URL` فارغًا لاستخدام صفحة التفعيل المدمجة `/activate`، أو ضع رابطك الخارجي.
+-- فحص الجاهزية: `GET /api/health`.
++بعد كل نشر افتح:
+ 
+-إنشاء رمز تفعيل لمدة 365 يومًا لجهاز واحد:
++`https://blofy-player-2026-production.up.railway.app/api/health`
+ 
+-```bash
+-curl -X POST "https://blofy-player-2026-production.up.railway.app/api/admin/codes" \
+-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+-  -H "Content-Type: application/json" \
+-  -d '{"days":365,"maxUses":1,"label":"عميل 001"}'
+-```
++ويجب أن تجد `version` مساويًا `2026.08.20.3` و`nativePlayback` مساويًا `direct`.
+ 
+ ## بناء APK
+ 
+-حدّث `BLOFY_BASE_URL` في Codemagic أو مرّره إلى سكربت البناء. ملف `codemagic.yaml` يبني APK تجريبيًا قابلًا للتثبيت. النسخة النهائية للمتجر تحتاج مفتاح توقيع خاص بصاحب المشروع.
++ادفع الملفات إلى `main`. Codemagic يشغّل الفحص واختبارات Android ثم ينتج:
++
++`BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk`
++
++النسخة التجريبية قابلة للتثبيت. نسخة المتجر تحتاج توقيعًا خاصًا لا يوضع داخل GitHub.
+ 
+-## حدود التحقق
++## معيار النجاح الحقيقي
+ 
+-اختبارات المصدر والبناء الآلي تكشف أخطاء المشروع، لكن الحكم النهائي على زمن القناة وتوافق الترميز يحتاج قائمة IPTV مصرحًا بها وتجربة فعلية على Honor وتلفزيون/ريسيفر؛ أداء المصدر نفسه خارج سيطرة المشغل.
++- في APK: يظهر في Railway Log سطر `native-open ... mode=direct`.
++- لا يظهر `ffmpeg-start` بسبب تشغيل APK.
++- تظهر أول صورة وتعمل Back على الجهاز الفعلي.
++- تجربة Safari ليست بديلًا عن اختبار APK لأن Safari لا يشغّل Media3.
+diff --git a/BLOFY-WEB-2026/web-test/.gitignore b/BLOFY-WEB-2026/web-test/.gitignore
+index 86acb29..114ff40 100644
+--- a/BLOFY-WEB-2026/web-test/.gitignore
++++ b/BLOFY-WEB-2026/web-test/.gitignore
+@@ -1,4 +1,5 @@
+ node_modules/
++.npm-cache/
+ .env
+ npm-debug.log*
+ .DS_Store
+diff --git a/BLOFY-WEB-2026/web-test/README_AR.md b/BLOFY-WEB-2026/web-test/README_AR.md
+index aac8325..3bf0654 100644
+--- a/BLOFY-WEB-2026/web-test/README_AR.md
++++ b/BLOFY-WEB-2026/web-test/README_AR.md
+@@ -1,48 +1,65 @@
+-# BLOFY PLAYER WEB 2026
++# BLOFY PLAYER WEB / Railway 2026
+ 
+-نسخة ويب كاملة تعمل على الجوال والتابلت ومتصفحات التلفزيون، ومجهزة للنشر على Railway من المجلد:
++الإصدار: `2026.08.20.3`
++
++هذا المجلد هو Root Directory الصحيح في Railway:
+ 
+ `BLOFY-WEB-2026/web-test`
+ 
+-## الوظائف
++## مسؤولية الخادم
+ 
+-- تسجيل Xtream Codes أو رابط M3U/M3U8.
+-- بث مباشر وأفلام ومسلسلات ومواسم وحلقات.
+-- EPG، بحث، مفضلة، سجل مشاهدة، وإعدادات تشغيل.
+-- تنقّل بالأسهم وOK/Enter وBack/Escape لأجهزة التلفزيون.
+-- HLS أصلي على Safari وhls.js على بقية المتصفحات.
+-- وسيط آمن لتجاوز CORS والمحتوى المختلط مع إخفاء بيانات الاشتراك.
+-- تحويل سريع للبث الخام إلى HLS عبر FFmpeg عند الحاجة.
+-- تجربة 7 أيام محفوظة على الخادم، صفحة QR وتفعيل مدمجة، وأكواد تفعيل تُنشأ بمسار إدارة محمي.
+-- PWA قابلة للإضافة للشاشة الرئيسية، ولا يتم تخزين بيانات البث في Service Worker.
++- جلسة Xtream أو M3U مشفّرة داخل Cookie آمنة و`HttpOnly`.
++- فئات، قنوات، أفلام، مسلسلات، مواسم، حلقات، EPG وصور عبر Proxy موقّع.
++- تجربة وتفعيل محفوظان حسب رقم الجهاز داخل Railway Volume.
++- رابط Media3 مؤقت ومشفّر؛ `/api/native-play` يتحقق منه ثم يعيد توجيه التطبيق إلى المصدر مباشرة.
++- واجهة RTL كاملة وPWA، مع تنقّل ريموت وBack وإغلاق المشغل.
+ 
+ ## إعداد Railway
+ 
+-1. اجعل **Root Directory**: `BLOFY-WEB-2026/web-test`
+-2. سيستخدم Railway ملف `Dockerfile` تلقائيًا.
+-3. أضف متغير `SESSION_SECRET` بقيمة عشوائية طويلة وثابتة.
+-4. أضف `ADMIN_TOKEN` طويلًا وسريًا لإنشاء أكواد التفعيل.
+-5. أنشئ Railway Volume على `/data` واضبط `LICENSE_DB_PATH=/data/licenses.json`.
+-6. اترك `ACTIVATION_URL` فارغًا لاستخدام `/activate` المدمج، أو ضع رابط صفحة التفعيل النهائية.
+-7. عند توفر نظام تراخيص خارجي، ضع رابط API في `LICENSE_API_URL`.
++1. Root Directory: `BLOFY-WEB-2026/web-test`
++2. أنشئ Volume واربطه بالمسار `/data`.
++3. أضف المتغيرات التالية:
+ 
+-إنشاء رمز تفعيل:
++```text
++SESSION_SECRET=قيمة عشوائية ثابتة 32 حرفًا أو أكثر
++ADMIN_TOKEN=قيمة إدارة سرية 20 حرفًا أو أكثر
++LICENSE_DB_PATH=/data/licenses.json
++TRIAL_DAYS=7
++REQUEST_TIMEOUT_MS=9000
++CACHE_TTL_MS=300000
++MAX_TRANSCODE_SESSIONS=4
++TRANSCODE_VIDEO=false
++```
+ 
+-```bash
+-curl -X POST "https://blofy-player-2026-production.up.railway.app/api/admin/codes" \
+-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+-  -H "Content-Type: application/json" \
+-  -d '{"days":365,"maxUses":1,"label":"عميل 001"}'
++4. اترك `ACTIVATION_URL` فارغًا لاستخدام `/activate` المدمج.
++5. بعد النشر افتح `/api/health`. الإصدار الصحيح يعيد:
++
++```json
++{"ok":true,"version":"2026.08.20.3","nativePlayback":"direct"}
+ ```
+ 
+-## التشغيل المحلي
++## مهم: المتصفح مقابل APK
++
++Safari والمتصفح لا يستخدمان Media3. تشغيل HLS الحقيقي في المتصفح مدعوم، أما رابط TS حي خام فقد يحتاج تحويل FFmpeg من Railway، وقد يرفضه بعض المزودين أو يحظرون عناوين مراكز البيانات. لذلك نجاح أو فشل القناة على iPad لا يثبت نجاح أو فشل APK.
++
++المسار المعتمد للقنوات في Android هو Media3 المباشر. FFmpeg باقٍ فقط كأفضل محاولة لمتصفح الويب، وليس ضمن مسار APK.
++
++## الاختبارات المحلية
+ 
+ ```bash
+ npm ci
+-cp .env.example .env
++npm run check
++npm test
+ npm start
+ ```
+ 
+-ثم افتح `http://localhost:3000`.
++إنشاء رمز تفعيل:
++
++```bash
++curl -X POST "https://blofy-player-2026-production.up.railway.app/api/admin/codes" \
++  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
++  -H "Content-Type: application/json" \
++  -d '{"days":365,"maxUses":1,"label":"عميل 001"}'
++```
+ 
+-> التطبيق مشغل فقط ولا يضم أي محتوى أو اشتراكات. المستخدم يضيف مصدره المصرح له.
++> لا تضع `SESSION_SECRET` أو `ADMIN_TOKEN` داخل GitHub أو الصور العامة.
+diff --git a/BLOFY-WEB-2026/web-test/lib/playlist.mjs b/BLOFY-WEB-2026/web-test/lib/playlist.mjs
+index a577751..fb4711d 100644
+--- a/BLOFY-WEB-2026/web-test/lib/playlist.mjs
++++ b/BLOFY-WEB-2026/web-test/lib/playlist.mjs
+@@ -18,10 +18,13 @@ function kindFor(group, url) {
+ 
+ function extensionFor(url, type) {
+   try {
+-    const match = new URL(url).pathname.match(/\.([a-zA-Z0-9]{2,6})$/);
+-    return match?.[1]?.toLowerCase() || (type === "live" ? "m3u8" : "mp4");
++    const parsed = new URL(url);
++    const match = parsed.pathname.match(/\.([a-zA-Z0-9]{2,6})$/);
++    if (match?.[1]) return match[1].toLowerCase();
++    if (type === "live" && /(?:m3u8|hls)/i.test(`${parsed.pathname} ${parsed.search}`)) return "m3u8";
++    return type === "live" ? "ts" : "mp4";
+   } catch {
+-    return type === "live" ? "m3u8" : "mp4";
++    return type === "live" ? "ts" : "mp4";
+   }
+ }
+ 
+diff --git a/BLOFY-WEB-2026/web-test/lib/runtime.mjs b/BLOFY-WEB-2026/web-test/lib/runtime.mjs
+new file mode 100644
+index 0000000..0edde0b
+--- /dev/null
++++ b/BLOFY-WEB-2026/web-test/lib/runtime.mjs
+@@ -0,0 +1,8 @@
++export const APP_VERSION = "2026.08.20.3";
++export const NATIVE_PLAYBACK_MODE = "direct";
++
++export function nativePlaybackTarget(rawUrl) {
++  const value = String(rawUrl || "");
++  if (!value) throw new Error("رابط Media3 غير موجود.");
++  return value;
++}
+diff --git a/BLOFY-WEB-2026/web-test/lib/security.mjs b/BLOFY-WEB-2026/web-test/lib/security.mjs
+index ed6e7ab..037d309 100644
+--- a/BLOFY-WEB-2026/web-test/lib/security.mjs
++++ b/BLOFY-WEB-2026/web-test/lib/security.mjs
+@@ -34,11 +34,14 @@ export function unseal(token) {
+ }
+ 
+ export function parseCookies(header = "") {
++  const decode = (value) => {
++    try { return decodeURIComponent(value); } catch { return value; }
++  };
+   return Object.fromEntries(
+     header.split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
+       const at = part.indexOf("=");
+       if (at < 0) return [part, ""];
+-      return [decodeURIComponent(part.slice(0, at)), decodeURIComponent(part.slice(at + 1))];
++      return [decode(part.slice(0, at)), decode(part.slice(at + 1))];
+     }),
+   );
+ }
+@@ -66,7 +69,14 @@ export function licenseCookie(token, maxAge = 60 * 60 * 24 * 400) {
+ }
+ 
+ export function clearSessionCookie() {
+-  return "blofy_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
++  return [
++    "blofy_session=",
++    "Path=/",
++    "HttpOnly",
++    "SameSite=Lax",
++    production ? "Secure" : "",
++    "Max-Age=0",
++  ].filter(Boolean).join("; ");
+ }
+ 
+ export function signResource(url, expiresInSeconds = 1800) {
+@@ -88,14 +98,27 @@ export function verifyResource(encoded, expires, signature) {
+   return payload.url;
+ }
+ 
+-function isPrivateIp(address) {
++export function isPrivateIp(address) {
+   if (net.isIP(address) === 4) {
+-    const [a, b] = address.split(".").map(Number);
+-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
+-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
++    const [a, b, c] = address.split(".").map(Number);
++    return a === 0 || a === 10 || a === 127 ||
++      (a === 100 && b >= 64 && b <= 127) ||
++      (a === 169 && b === 254) ||
++      (a === 172 && b >= 16 && b <= 31) ||
++      (a === 192 && (b === 0 || b === 168)) ||
++      (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
++      (a === 203 && b === 0 && c === 113) ||
++      a >= 224;
+   }
+   const value = address.toLowerCase();
+-  return value === "::1" || value === "::" || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("fe80:");
++  const mapped = value.match(/(?:^|:)ffff:(\d+\.\d+\.\d+\.\d+)$/);
++  if (mapped) return isPrivateIp(mapped[1]);
++  const first = Number.parseInt(value.split(":")[0] || "0", 16);
++  return value.startsWith("::") ||
++    (first >= 0xfc00 && first <= 0xfdff) ||
++    (first >= 0xfe80 && first <= 0xfebf) ||
++    first >= 0xff00 ||
++    value.startsWith("2001:db8:");
+ }
+ 
+ export async function assertSafeUrl(raw) {
+@@ -156,15 +179,29 @@ export function json(res, status, data, extraHeaders = {}) {
+ export function readJson(req, maxBytes = 32_768) {
+   return new Promise((resolve, reject) => {
+     let body = "";
++    let received = 0;
++    let settled = false;
+     req.setEncoding("utf8");
+     req.on("data", (chunk) => {
++      if (settled) return;
++      received += Buffer.byteLength(chunk);
++      if (received > maxBytes) {
++        settled = true;
++        reject(new Error("الطلب أكبر من المسموح."));
++        return;
++      }
+       body += chunk;
+-      if (body.length > maxBytes) reject(new Error("الطلب أكبر من المسموح."));
+     });
+     req.on("end", () => {
++      if (settled) return;
++      settled = true;
+       try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error("صيغة الطلب غير صحيحة.")); }
+     });
+-    req.on("error", reject);
++    req.on("error", (error) => {
++      if (settled) return;
++      settled = true;
++      reject(error);
++    });
+   });
+ }
+ 
+diff --git a/BLOFY-WEB-2026/web-test/package-lock.json b/BLOFY-WEB-2026/web-test/package-lock.json
+index 19549cc..78aeea8 100644
+--- a/BLOFY-WEB-2026/web-test/package-lock.json
++++ b/BLOFY-WEB-2026/web-test/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "blofy-player-web",
+-  "version": "2026.8.20",
++  "version": "2026.8.20-3",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "blofy-player-web",
+-      "version": "2026.8.20",
++      "version": "2026.8.20-3",
+       "dependencies": {
+         "hls.js": "1.6.13",
+         "qrcode": "1.5.4"
+diff --git a/BLOFY-WEB-2026/web-test/package.json b/BLOFY-WEB-2026/web-test/package.json
+index 8de8127..c0b085b 100644
+--- a/BLOFY-WEB-2026/web-test/package.json
++++ b/BLOFY-WEB-2026/web-test/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "blofy-player-web",
+-  "version": "2026.8.20",
++  "version": "2026.8.20-3",
+   "private": true,
+   "type": "module",
+   "engines": {
+@@ -9,7 +9,7 @@
+   "scripts": {
+     "start": "node server.mjs",
+     "dev": "NODE_ENV=development node --watch server.mjs",
+-    "check": "node --check server.mjs && node --check lib/security.mjs && node --check lib/playlist.mjs && node --check lib/xtream.mjs && node --check lib/license-store.mjs && node --check lib/media-response.mjs && node --check public/app.js && node --check public/activate.js",
++    "check": "node --check server.mjs && node --check lib/security.mjs && node --check lib/playlist.mjs && node --check lib/xtream.mjs && node --check lib/license-store.mjs && node --check lib/media-response.mjs && node --check lib/runtime.mjs && node --check public/app.js && node --check public/activate.js",
+     "test": "node --test"
+   },
+   "dependencies": {
+diff --git a/BLOFY-WEB-2026/web-test/public/app.js b/BLOFY-WEB-2026/web-test/public/app.js
+index 6947f77..1db2d0c 100644
+--- a/BLOFY-WEB-2026/web-test/public/app.js
++++ b/BLOFY-WEB-2026/web-test/public/app.js
+@@ -168,7 +168,7 @@ function renderLogin(error = "") {
+           <div class="device-card">
+             <div class="device-head"><h2>حالة الجهاز</h2><p>فعّل التطبيق أو استخدم الفترة التجريبية</p></div>
+             <div class="device-row"><label>رقم الجهاز</label><div class="device-code"><b>${escapeHtml(state.deviceId)}</b><button class="copy-button" data-action="copy-device" data-focusable aria-label="نسخ رقم الجهاز">▣</button></div></div>
+-            <div class="device-row"><label>حالة الاشتراك</label><div class="license-line"><b>${escapeHtml(license.status || "جاري التحقق")}</b><span class="status-badge ${expired ? "expired" : ""}">${expired ? "منتهي" : `${license.remainingDays ?? "—"} أيام متبقية`}</span></div><div class="small muted" style="margin-top:9px">الانتهاء: ${formatDate(license.expiresAt)}</div></div>
++            <div class="device-row"><label>حالة الاشتراك</label><div class="license-line"><b>${escapeHtml(license.status || "جاري التحقق")}</b><span class="status-badge ${expired ? "expired" : ""}">${expired ? "منتهي" : `${escapeHtml(license.remainingDays ?? "—")} أيام متبقية`}</span></div><div class="small muted" style="margin-top:9px">الانتهاء: ${formatDate(license.expiresAt)}</div></div>
+             <div class="qr-block"><b>تفعيل الجهاز</b><p class="small muted">امسح الرمز ثم أدخل رقم الجهاز</p><div class="qr-wrap"><img src="/api/qr?text=${encodeURIComponent(`${license.activationUrl || "https://blofy.tv/activate"}?device_id=${state.deviceId}`)}" alt="رمز تفعيل الجهاز" /></div><div class="activation-link">${escapeHtml(license.activationUrl || "https://blofy.tv/activate")}</div></div>
+           </div>
+         </aside>
+@@ -469,8 +469,8 @@ async function openPlayer(item, compatibility = false) {
+   if (window.BlofyAndroid?.play) {
+     try {
+       const native = await api(`/api/native-link/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(extension)}`);
++      if (native.mode !== "direct") throw new Error("الخادم لا يستخدم وضع Media3 المباشر");
+       const nativeUrl = new URL(native.url, location.origin);
+-      if (compatibility) nativeUrl.searchParams.set("compat", "2");
+       window.BlofyAndroid.play(nativeUrl.toString(), item.name || "BLOFY PLAYER", type, native.extension || extension);
+       return;
+     } catch (error) {
+diff --git a/BLOFY-WEB-2026/web-test/public/sw.js b/BLOFY-WEB-2026/web-test/public/sw.js
+index 8d4a2c0..46c3b70 100644
+--- a/BLOFY-WEB-2026/web-test/public/sw.js
++++ b/BLOFY-WEB-2026/web-test/public/sw.js
+@@ -1,4 +1,4 @@
+-const CACHE = "blofy-shell-2026-08-20-r3";
++const CACHE = "blofy-shell-2026-08-20-r4";
+ const SHELL = ["/", "/styles.css", "/app.js", "/vendor/hls.min.js", "/assets/blofy-logo-192.png", "/assets/blofy-logo-512.png"];
+ self.addEventListener("install", (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())));
+ self.addEventListener("activate", (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim())));
+diff --git a/BLOFY-WEB-2026/web-test/server.mjs b/BLOFY-WEB-2026/web-test/server.mjs
+index b9e6b00..79fdf15 100644
+--- a/BLOFY-WEB-2026/web-test/server.mjs
++++ b/BLOFY-WEB-2026/web-test/server.mjs
+@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
+ import QRCode from "qrcode";
+ import { LicenseStore } from "./lib/license-store.mjs";
+ import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs";
++import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackTarget } from "./lib/runtime.mjs";
+ import { XtreamClient } from "./lib/xtream.mjs";
+ import { pageItems, parseM3u } from "./lib/playlist.mjs";
+ import {
+@@ -411,7 +412,13 @@ async function handleApi(req, res, url) {
+   if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
+ 
+   if (req.method === "GET" && url.pathname === "/api/health") {
+-    return json(res, 200, { ok: true, service: "BLOFY PLAYER", time: new Date().toISOString() }, securityHeaders());
++    return json(res, 200, {
++      ok: true,
++      service: "BLOFY PLAYER",
++      version: APP_VERSION,
++      nativePlayback: NATIVE_PLAYBACK_MODE,
++      time: new Date().toISOString(),
++    }, securityHeaders());
+   }
+ 
+   if (req.method === "GET" && url.pathname === "/api/license") {
+@@ -515,9 +522,8 @@ async function handleApi(req, res, url) {
+     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
+     if (!raw) return json(res, 403, { error: "انتهى رابط Media3، أعد فتح المحتوى." }, securityHeaders());
+     await assertSafeUrl(raw);
+-    const compatibility = url.searchParams.get("compat") === "2";
+-    const location = compatibility ? transcodePath(raw, true) : raw;
+-    console.log(`[media] native-open host=${sourceHost(raw)} mode=${compatibility ? "compat" : "direct"}`);
++    const location = nativePlaybackTarget(raw);
++    console.log(`[media] native-open host=${sourceHost(raw)} mode=${NATIVE_PLAYBACK_MODE}`);
+     res.writeHead(302, { ...securityHeaders(), location, "cache-control": "no-store" });
+     res.end();
+     return;
+@@ -540,7 +546,11 @@ async function handleApi(req, res, url) {
+     const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
+     const source = await sourceFor(session, type, id, extension);
+     console.log(`[media] native-link type=${type} id=${id} ext=${extension} host=${sourceHost(source)}`);
+-    return json(res, 200, { url: signedPath(source, "/api/native-play", 7200), extension }, securityHeaders());
++    return json(res, 200, {
++      url: signedPath(source, "/api/native-play", 7200),
++      extension,
++      mode: NATIVE_PLAYBACK_MODE,
++    }, securityHeaders());
+   }
+ 
+   if (req.method === "GET" && url.pathname === "/api/categories") {
+@@ -617,7 +627,7 @@ async function serveStatic(req, res, pathname) {
+   else {
+     const relative = pathname === "/" ? "index.html" : pathname === "/activate" || pathname === "/activate/" ? "activate.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
+     target = path.resolve(publicDir, relative);
+-    if (!target.startsWith(publicDir)) return false;
++    if (target !== publicDir && !target.startsWith(`${publicDir}${path.sep}`)) return false;
+   }
+   if (!existsSync(target) || !statSync(target).isFile()) return false;
+   const stat = statSync(target);
+diff --git a/BLOFY-WEB-2026/web-test/test/playlist.test.mjs b/BLOFY-WEB-2026/web-test/test/playlist.test.mjs
+index c62da0a..4ef5059 100644
+--- a/BLOFY-WEB-2026/web-test/test/playlist.test.mjs
++++ b/BLOFY-WEB-2026/web-test/test/playlist.test.mjs
+@@ -24,3 +24,10 @@ test("paginates and filters Xtream category ids", () => {
+   assert.equal(result.total, 1);
+   assert.equal(result.items[0].id, "1");
+ });
++
++test("extensionless live M3U sources default to raw transport stream", () => {
++  const [item] = parseM3u(`#EXTM3U
++#EXTINF:-1 group-title="Live",Channel
++https://media.example/live/channel?id=42`);
++  assert.equal(item.extension, "ts");
++});
+diff --git a/BLOFY-WEB-2026/web-test/test/runtime.test.mjs b/BLOFY-WEB-2026/web-test/test/runtime.test.mjs
+new file mode 100644
+index 0000000..3095400
+--- /dev/null
++++ b/BLOFY-WEB-2026/web-test/test/runtime.test.mjs
+@@ -0,0 +1,10 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackTarget } from "../lib/runtime.mjs";
++
++test("native playback is permanently direct and never adds a Railway transcode URL", () => {
++  const source = "http://provider.example/live/private-user/private-password/985136.ts";
++  assert.equal(nativePlaybackTarget(source), source);
++  assert.equal(NATIVE_PLAYBACK_MODE, "direct");
++  assert.match(APP_VERSION, /^2026\.08\.20\.\d+$/);
++});
+diff --git a/BLOFY-WEB-2026/web-test/test/security.test.mjs b/BLOFY-WEB-2026/web-test/test/security.test.mjs
+index 899d33f..a4b83e3 100644
+--- a/BLOFY-WEB-2026/web-test/test/security.test.mjs
++++ b/BLOFY-WEB-2026/web-test/test/security.test.mjs
+@@ -1,6 +1,6 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+-import { signResource, verifyResource } from "../lib/security.mjs";
++import { isPrivateIp, parseCookies, signResource, verifyResource } from "../lib/security.mjs";
+ 
+ test("signed media token encrypts credentials and verifies the original URL", () => {
+   const source = "https://provider.example/live/private-user/private-password/123.m3u8";
+@@ -10,3 +10,17 @@ test("signed media token encrypts credentials and verifies the original URL", ()
+   assert.equal(token.encoded.includes(Buffer.from(source).toString("base64url")), false);
+   assert.equal(verifyResource(token.encoded, token.expires, `${token.signature}x`), null);
+ });
++
++test("malformed cookie encoding does not crash the request", () => {
++  const cookies = parseCookies("blofy_session=%E0%A4%A; plain=value");
++  assert.equal(cookies.blofy_session, "%E0%A4%A");
++  assert.equal(cookies.plain, "value");
++});
++
++test("SSRF guard blocks local, metadata, mapped, and reserved network ranges", () => {
++  for (const address of ["127.0.0.1", "10.0.0.8", "169.254.169.254", "100.64.0.1", "::1", "::ffff:127.0.0.1", "fe80::1"]) {
++    assert.equal(isPrivateIp(address), true, address);
++  }
++  assert.equal(isPrivateIp("8.8.8.8"), false);
++  assert.equal(isPrivateIp("2606:4700:4700::1111"), false);
++});
+diff --git a/TEST-REPORT-2026-AR.md b/TEST-REPORT-2026-AR.md
+index 331e4a5..86af2be 100644
+--- a/TEST-REPORT-2026-AR.md
++++ b/TEST-REPORT-2026-AR.md
+@@ -1,30 +1,42 @@
+ # تقرير التحقق — BLOFY PLAYER 2026
+ 
+-تاريخ التحقق: 20 أغسطس 2026
+-
+-## خادم Railway والواجهة
+-
+-- فحص صياغة JavaScript/Node لكل ملفات الخادم والواجهة: ناجح.
+-- اختبارات Node: **8/8 ناجحة**.
+-  - تحليل M3U وتصنيف المحتوى.
+-  - البحث والترقيم حسب الفئة.
+-  - تطبيع صيغ مواسم وحلقات Xtream المختلفة.
+-  - اكتشاف MPEG-TS الخام فورًا دون انتظار نهاية البث.
+-  - قراءة HLS المجزأة على أكثر من chunk.
+-  - حفظ التجربة والتفعيل واستهلاك الأكواد.
+-  - تشفير روابط الوسيط وعدم كشف اسم المستخدم أو كلمة المرور.
+-- اختبار تكامل محلي للخادم: `/api/health` وبدء التجربة وإنشاء كود وتفعيل الجهاز وصفحة `/activate`: ناجح.
+-- XML الخاص بمشروع Android: صالح.
+-- الفحص البنيوي لملفات Java: ناجح.
+-
+-## ما يحتاج اختبار جهاز فعلي
+-
+-لا توجد داخل بيئة التسليم Android SDK/Gradle كاملة لبناء APK محليًا، لذلك أُضيف مسار Codemagic جاهز للبناء. كما أن قياس زمن بدء القناة وتوافق ترميز مزود بعينه يحتاج رابط IPTV مصرحًا به وتجربة على Honor وجهاز TV/Receiver فعلي. لا تُعتبر هذه النقطة فشلًا في المصدر، لكنها بوابة القبول العملية قبل توقيع نسخة المتجر.
+-
+-اختبار القبول المقترح بعد النشر:
+-
+-1. تشغيل 10 قنوات متتالية وقياس أول صورة لكل قناة.
+-2. تشغيل MP4 وMKV وفيلم طويل، ثم الرجوع واستكمال الموضع.
+-3. فتح مسلسلين من مزودين مختلفين والتحقق من المواسم والحلقات.
+-4. اختبار الأسهم وOK وBack والتمرير دون ماوس.
+-5. اختبار قناة HEVC على Honor، ثم زر «تشغيل بوضع التوافق» إن لم يدعم الجهاز الترميز.
++التاريخ: 20 أغسطس 2026
++الإصدار: `2026.08.20.3`
++
++## النتيجة
++
++المصدر أصبح متسقًا مع المعمارية الصحيحة: Android/Media3 مباشر، وRailway للجلسة والترخيص والبيانات والرابط الموقّع فقط. أزيل مسار التحويل التلقائي الذي سبب العطل.
++
++## ما تم التحقق منه محليًا
++
++- فحص صياغة جميع ملفات Node وJavaScript: ناجح.
++- اختبارات الخادم: **13/13 ناجحة**، صفر فشل.
++- اختبار تشغيل محلي فعلي للخادم: ناجح.
++- `/api/health`: يعيد `version: 2026.08.20.3` و`nativePlayback: direct`.
++- الصفحة الرئيسية: `HTTP 200` مع CSP و`X-Frame-Options` و`nosniff` و`no-cache` للواجهة.
++- تشفير رابط المصدر وتوقيعه وعدم ظهور بيانات Xtream داخل الرابط المرسل للواجهة: ناجح.
++- ثبات التفعيل وذرّية كتابة ملف الرخص: ناجح.
++- تحليل M3U وXtream والمواسم والحلقات واكتشاف TS/HLS: ناجح.
++- أضيف اختبار Android يمنع تغيير رابط Media3 أو إضافة `compat`، ويتأكد أن TS لا يُجبر على HLS؛ سيشغله Codemagic ضمن `testDebugUnitTest`.
++- تطابق إصدارات Android: JDK 17 + Gradle 8.13 + AGP 8.12.2 + SDK 36.
++
++## إصلاحات أمان ضمن التدقيق
++
++- رابط Railway يطبع إلى أصل HTTPS فقط، دون مسار أو بيانات دخول.
++- جسر Android يقارن المضيف والمنفذ ولا يقبل إلا `/api/native-play`.
++- Cookie غير سليم الترميز لا يسقط الخادم.
++- حد JSON يُحسب بالبايت ويُرفض مرة واحدة بأمان.
++- فحص منع عبور المسار للملفات العامة أصبح يعتمد حد المجلد الصحيح.
++- Cookie تسجيل الخروج يحتفظ بعلم `Secure` في الإنتاج.
++- لا توجد أسرار فعلية مضمنة في ملفات المصدر المفحوصة.
++
++## البوابة المتبقية قبل قول 100% على جهاز المستخدم
++
++بيئة التدقيق الحالية لا تحتوي Android SDK/Gradle كاملين، لذلك لا يمكن استخراج APK هنا. `codemagic.yaml` جاهز ليشغّل `lintDebug` و`testDebugUnitTest` و`assembleDebug` بعد رفع التحديث.
++
++القبول النهائي يحتاج خطوتين فقط:
++
++1. نجاح Build في Codemagic للإصدار `2026.08.20.3`.
++2. تشغيل قناة على APK ومشاهدة `native-open ... mode=direct` دون `ffmpeg-start`.
++
++إذا نجحت هاتان الخطوتان فالتوصيل مكتمل. فشل قناة بعينها بعد ذلك يعني عادةً رابط المصدر أو ترميز الجهاز، لا جلسة Railway ولا مسار التحويل القديم.
