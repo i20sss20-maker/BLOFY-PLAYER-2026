@@ -1,0 +1,110 @@
+--- a/BLOFY-WEB-2026/web-test/server.mjs
++++ b/BLOFY-WEB-2026/web-test/server.mjs
+@@ -264,8 +264,50 @@
+   return crypto.createHash("sha256").update(url).update(transcodeVideo ? ":h264" : ":copy").digest("hex").slice(0, 24);
+ }
+ 
++function mediaErrorSummary(value) {
++  return String(value || "")
++    .replace(/https?:\/\/\S+/gi, "[source]")
++    .replace(/\/(live|movie|series)\/[^/\s]+\/[^/\s]+/gi, "/$1/[redacted]/[redacted]")
++    .split(/\r?\n/)
++    .map((line) => line.trim())
++    .filter(Boolean)
++    .slice(-3)
++    .join(" | ")
++    .slice(0, 600);
++}
++
++function appendMediaError(record, value) {
++  record.error = `${record.error}\n${String(value || "")}`.slice(-2400);
++}
++
++async function pipeTransportSource(url, child, record) {
++  try {
++    const response = await fetchSafe(url, {
++      headers: {
++        accept: "video/mp2t,application/octet-stream,*/*",
++        "user-agent": "VLC/3.0.20 LibVLC/3.0.20",
++      },
++    });
++    if (!response.ok && response.status !== 206) throw new Error(`Source HTTP ${response.status}`);
++    if (!response.body) throw new Error("Source returned an empty response");
++    console.log(`[media] source-open key=${record.key} status=${response.status} type=${String(response.headers.get("content-type") || "unknown").split(";")[0]}`);
++    const sourceStream = Readable.fromWeb(response.body);
++    record.sourceStream = sourceStream;
++    sourceStream.on("error", (error) => {
++      appendMediaError(record, error.message);
++      child.stdin?.destroy(error);
++    });
++    child.stdin?.on("error", () => sourceStream.destroy());
++    sourceStream.pipe(child.stdin);
++  } catch (error) {
++    appendMediaError(record, error?.name === "AbortError" ? "Source connection timed out" : error?.message || error);
++    if (!child.killed && child.exitCode === null) child.kill("SIGTERM");
++  }
++}
++
+ function startTranscode(url, forceVideo = false) {
+   const transcodeVideo = forceVideo || String(process.env.TRANSCODE_VIDEO || "false") === "true";
++  const pipeSource = /\.ts(?:$|\?)/i.test(url);
+   const key = transcodeKey(url, transcodeVideo);
+   const existing = transcodes.get(key);
+   if (existing?.process && !existing.process.killed && existing.process.exitCode === null) {
+@@ -281,35 +323,46 @@
+   mkdirSync(dir, { recursive: true });
+   const args = [
+     "-nostdin", "-hide_banner", "-loglevel", "warning",
+-    "-user_agent", "BLOFY-PLAYER/2026 Mozilla/5.0",
+-    "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
+-    "-rw_timeout", "12000000", "-analyzeduration", "2500000", "-probesize", "2500000",
+-    "-i", url,
++    "-fflags", "+genpts+discardcorrupt",
++    ...(pipeSource
++      ? ["-f", "mpegts", "-analyzeduration", "2500000", "-probesize", "2500000", "-i", "pipe:0"]
++      : [
++        "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
++        "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
++        "-rw_timeout", "12000000", "-analyzeduration", "2500000", "-probesize", "2500000",
++        "-i", url,
++      ]),
+     "-map", "0:v:0?", "-map", "0:a:0?",
+     "-c:v", transcodeVideo ? "libx264" : "copy",
+     ...(transcodeVideo ? ["-preset", "veryfast", "-tune", "zerolatency"] : []),
+     "-c:a", "aac", "-ac", "2", "-b:a", "128k",
+     "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
+-    "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",
++    "-hls_flags", transcodeVideo
++      ? "delete_segments+append_list+omit_endlist+independent_segments"
++      : "delete_segments+append_list+omit_endlist+split_by_time",
+     "-hls_segment_filename", path.join(dir, "segment-%06d.ts"),
+     path.join(dir, "index.m3u8"),
+   ];
+-  const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+-  const record = { key, dir, process: child, lastAccess: Date.now(), error: "" };
+-  console.log(`[media] ffmpeg-start key=${key} host=${sourceHost(url)} mode=${transcodeVideo ? "h264" : "copy"}`);
++  const child = spawn("ffmpeg", args, { stdio: [pipeSource ? "pipe" : "ignore", "ignore", "pipe"] });
++  const record = { key, dir, process: child, sourceStream: null, lastAccess: Date.now(), error: "" };
++  console.log(`[media] ffmpeg-start key=${key} host=${sourceHost(url)} mode=${transcodeVideo ? "h264" : "copy"} input=${pipeSource ? "node-pipe" : "direct"}`);
+   child.stderr.setEncoding("utf8");
+-  child.stderr.on("data", (chunk) => { record.error = `${record.error}${chunk}`.slice(-1200); });
++  child.stderr.on("data", (chunk) => appendMediaError(record, chunk));
+   child.on("exit", (code) => {
++    record.sourceStream?.destroy();
+     if (code && !record.error) record.error = `FFmpeg stopped (${code})`;
+-    console.log(`[media] ffmpeg-exit key=${key} code=${code ?? "signal"}`);
++    const detail = mediaErrorSummary(record.error);
++    console.log(`[media] ffmpeg-exit key=${key} code=${code ?? "signal"}${detail ? ` detail=${detail}` : ""}`);
+   });
+   transcodes.set(key, record);
++  if (pipeSource) void pipeTransportSource(url, child, record);
+   return record;
+ }
+ 
+ function stopTranscode(key) {
+   const record = transcodes.get(key);
+   if (!record) return;
++  try { record.sourceStream?.destroy(); } catch {}
+   try { record.process.kill("SIGTERM"); } catch {}
+   try { rmSync(record.dir, { recursive: true, force: true }); } catch {}
+   transcodes.delete(key);
