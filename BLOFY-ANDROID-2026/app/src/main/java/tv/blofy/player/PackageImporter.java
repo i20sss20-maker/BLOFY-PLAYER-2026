@@ -48,16 +48,16 @@ final class PackageImporter {
 
         emit(12, "تحليل الخادم", "تحديد نوع الباقة وإمكانات التشغيل");
         database.beginFreshImport();
-        database.metadata("server_name", session.serverName);
-        database.metadata("session_kind", session.kind);
+        database.putMetadata("server_name", session.serverName);
+        database.putMetadata("session_kind", session.kind);
 
         importType("live", "القنوات المباشرة", 14, 42);
         importType("movies", "الأفلام", 42, 69);
         importType("series", "المسلسلات", 69, 94);
 
         String profile = profile();
-        database.metadata("playback_profile", profile);
-        database.metadata("last_sync", String.valueOf(System.currentTimeMillis()));
+        database.putMetadata("playback_profile", profile);
+        database.putMetadata("last_sync", String.valueOf(System.currentTimeMillis()));
         emit(98, "تجهيز التشغيل", profile);
         emit(100, "اكتملت قراءة الباقة", "جاهز للتشغيل المباشر عبر Media3");
         return new Result(database.count("live"), database.count("movies"), database.count("series"), profile);

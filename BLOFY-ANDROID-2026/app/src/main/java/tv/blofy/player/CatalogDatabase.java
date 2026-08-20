@@ -138,7 +138,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         getWritableDatabase().insertWithOnConflict("history", null, values, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
-    void metadata(String key, String value) {
+    void putMetadata(String key, String value) {
         ContentValues values = new ContentValues();
         values.put("key", key);
         values.put("value", value == null ? "" : value);
