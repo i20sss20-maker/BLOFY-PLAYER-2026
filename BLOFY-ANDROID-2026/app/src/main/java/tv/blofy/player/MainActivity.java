@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -43,6 +45,13 @@ public final class MainActivity extends Activity {
     private WebView webView;
     private View setupView;
     private String activeBaseUrl;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private boolean webAppReady;
+    private final Runnable webAppTimeout = () -> {
+        if (!webAppReady && setupView == null) {
+            showSetup("تعذر بدء واجهة التطبيق خلال المهلة. تحقق من الإنترنت أو حدّث Android System WebView ثم أعد المحاولة.");
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -110,6 +119,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showSetup(String error) {
+        mainHandler.removeCallbacks(webAppTimeout);
         if (webView != null) webView.setVisibility(View.GONE);
         if (setupView != null) root.removeView(setupView);
 
@@ -181,6 +191,8 @@ public final class MainActivity extends Activity {
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     private void loadPortal(String baseUrl) {
         activeBaseUrl = baseUrl;
+        webAppReady = false;
+        mainHandler.removeCallbacks(webAppTimeout);
         if (setupView != null) {
             root.removeView(setupView);
             setupView = null;
@@ -232,7 +244,10 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) showSetup("تعذر الاتصال بالخادم. تأكد من نشر Railway ومن صحة الرابط ثم أعد المحاولة.");
+                if (request.isForMainFrame()) {
+                    mainHandler.removeCallbacks(webAppTimeout);
+                    showSetup("تعذر الاتصال بالخادم. تأكد من نشر Railway ومن صحة الرابط ثم أعد المحاولة.");
+                }
             }
 
             @Override
@@ -242,8 +257,9 @@ public final class MainActivity extends Activity {
             }
         });
         root.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        webView.loadUrl(baseUrl + "/");
+        webView.loadUrl(baseUrl + "/?app=" + Uri.encode(BuildConfig.VERSION_NAME));
         webView.requestFocus();
+        mainHandler.postDelayed(webAppTimeout, 18_000);
     }
 
     private String deviceId() {
@@ -261,6 +277,19 @@ public final class MainActivity extends Activity {
     }
 
     private final class AndroidBridge {
+        @JavascriptInterface
+        public void ready() {
+            runOnUiThread(() -> {
+                webAppReady = true;
+                mainHandler.removeCallbacks(webAppTimeout);
+            });
+        }
+
+        @JavascriptInterface
+        public void exitApp() {
+            runOnUiThread(MainActivity.this::finish);
+        }
+
         @JavascriptInterface
         public String getDeviceId() {
             return deviceId();
@@ -299,9 +328,30 @@ public final class MainActivity extends Activity {
         webView.evaluateJavascript("window.BlofyRemote && window.BlofyRemote.key(" + JSONObject.quote(key) + ")", null);
     }
 
+    private void handleBackPress() {
+        if (setupView != null) {
+            String saved = normalizedBaseUrl(getPreferences().getString(KEY_BASE_URL, ""));
+            if (saved != null) loadPortal(saved); else finish();
+            return;
+        }
+        if (!webAppReady || webView == null || webView.getVisibility() != View.VISIBLE) {
+            finish();
+            return;
+        }
+        webView.evaluateJavascript(
+                "(function(){try{return !!(window.BlofyRemote&&window.BlofyRemote.key('Back'));}catch(e){return false;}})()",
+                result -> { if (!"true".equals(result)) finish(); });
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() == KeyEvent.ACTION_DOWN && setupView == null) {
+        if (setupView == null && (event.getKeyCode() == KeyEvent.KEYCODE_BACK
+                || event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
+                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) handleBackPress();
+            return true;
+        }
+        if (event.getAction() == KeyEvent.ACTION_DOWN && setupView == null && webAppReady) {
             switch (event.getKeyCode()) {
                 case KeyEvent.KEYCODE_DPAD_UP: sendRemoteKey("ArrowUp"); return true;
                 case KeyEvent.KEYCODE_DPAD_DOWN: sendRemoteKey("ArrowDown"); return true;
@@ -310,7 +360,6 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
                 case KeyEvent.KEYCODE_NUMPAD_ENTER: sendRemoteKey("Enter"); return true;
-                case KeyEvent.KEYCODE_BACK: sendRemoteKey("Back"); return true;
                 default: break;
             }
         }
@@ -319,10 +368,7 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (setupView != null) {
-            String saved = normalizedBaseUrl(getPreferences().getString(KEY_BASE_URL, ""));
-            if (saved != null) loadPortal(saved); else finish();
-        } else sendRemoteKey("Back");
+        handleBackPress();
     }
 
     @Override
@@ -343,6 +389,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mainHandler.removeCallbacks(webAppTimeout);
         if (webView != null) {
             webView.removeJavascriptInterface("BlofyAndroid");
             webView.destroy();

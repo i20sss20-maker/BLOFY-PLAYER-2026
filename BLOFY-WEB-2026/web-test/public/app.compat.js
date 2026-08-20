@@ -1,0 +1,1125 @@
+"use strict";
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
+    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
+        if (ar || !(i in from)) {
+            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
+            ar[i] = from[i];
+        }
+    }
+    return to.concat(ar || Array.prototype.slice.call(from));
+};
+// Runtime polyfills for older Android TV/receiver WebViews.
+if (!String.prototype.padStart) {
+    String.prototype.padStart = function padStart(length, fill) {
+        if (fill === void 0) { fill = " "; }
+        var value = String(this);
+        var padding = "";
+        var token = String(fill || " ");
+        while (value.length + padding.length < length)
+            padding += token;
+        return padding.slice(0, Math.max(0, length - value.length)) + value;
+    };
+}
+if (!Array.from)
+    Array.from = function (value) { return Array.prototype.slice.call(value); };
+if (!Array.prototype.find) {
+    Array.prototype.find = function find(predicate) {
+        for (var index = 0; index < this.length; index += 1)
+            if (predicate(this[index], index, this))
+                return this[index];
+        return undefined;
+    };
+}
+if (!Array.prototype.findIndex) {
+    Array.prototype.findIndex = function findIndex(predicate) {
+        for (var index = 0; index < this.length; index += 1)
+            if (predicate(this[index], index, this))
+                return index;
+        return -1;
+    };
+}
+if (!Array.prototype.includes) {
+    Array.prototype.includes = function includes(value) { return this.indexOf(value) !== -1; };
+}
+var app = document.getElementById("app");
+var toast = document.getElementById("toast");
+var playerModal = document.getElementById("playerModal");
+var video = document.getElementById("videoPlayer");
+var playerStatus = document.getElementById("playerStatus");
+var qualitySelect = document.getElementById("qualitySelect");
+var audioSelect = document.getElementById("audioSelect");
+var subtitleSelect = document.getElementById("subtitleSelect");
+var seek = document.getElementById("playerSeek");
+var storage = {
+    get: function (key, fallback) { try {
+        var value = JSON.parse(localStorage.getItem(key));
+        return value !== null && value !== void 0 ? value : fallback;
+    }
+    catch (_a) {
+        return fallback;
+    } },
+    set: function (key, value) { try {
+        localStorage.setItem(key, JSON.stringify(value));
+    }
+    catch (_a) { } },
+};
+var state = {
+    sourceTab: "xtream",
+    session: null,
+    license: null,
+    deviceId: getDeviceId(),
+    route: "home",
+    navStack: [],
+    type: "live",
+    categories: [],
+    category: "",
+    items: [],
+    total: 0,
+    page: 1,
+    search: "",
+    loading: false,
+    selected: null,
+    epg: [],
+    detail: null,
+    season: "",
+    favorites: storage.get("blofy_favorites", []),
+    history: storage.get("blofy_history", []),
+    settings: __assign({ autoplayNext: true, rememberPosition: true, bufferMode: "balanced", subtitles: "auto" }, storage.get("blofy_settings", {})),
+};
+var hls = null;
+var searchTimer = null;
+var toastTimer = null;
+var playerItem = null;
+var playerFailures = 0;
+var playerTimeout = null;
+var playerCompatibility = false;
+function getDeviceId() {
+    var _a, _b;
+    try {
+        var nativeId = (_b = (_a = window.BlofyAndroid) === null || _a === void 0 ? void 0 : _a.getDeviceId) === null || _b === void 0 ? void 0 : _b.call(_a);
+        if (/^BLOFY-[A-Z0-9-]{8,32}$/.test(nativeId || ""))
+            return nativeId;
+    }
+    catch (_c) { }
+    var id = storage.get("blofy_device_id", "");
+    if (/^BLOFY-[A-Z0-9-]{8,32}$/.test(id))
+        return id;
+    var bytes = new Uint8Array(8);
+    if (window.crypto && typeof window.crypto.getRandomValues === "function")
+        window.crypto.getRandomValues(bytes);
+    else
+        for (var index = 0; index < bytes.length; index += 1)
+            bytes[index] = Math.floor(Math.random() * 256);
+    var value = __spreadArray([], bytes, true).map(function (byte) { return byte.toString(16).padStart(2, "0"); }).join("").toUpperCase();
+    id = "BLOFY-".concat(value.slice(0, 4), "-").concat(value.slice(4, 8), "-").concat(value.slice(8, 12), "-").concat(value.slice(12, 16));
+    storage.set("blofy_device_id", id);
+    return id;
+}
+function escapeHtml(value) {
+    if (value === void 0) { value = ""; }
+    return String(value).replace(/[&<>'"]/g, function (char) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]; });
+}
+function formatDate(value) {
+    if (!value)
+        return "غير محدد";
+    try {
+        return new Intl.DateTimeFormat("ar-SA", { year: "numeric", month: "short", day: "numeric" }).format(new Date(value));
+    }
+    catch (_a) {
+        return "غير محدد";
+    }
+}
+function formatTime(value) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number))
+        return "00:00";
+    var hours = Math.floor(number / 3600);
+    var minutes = Math.floor((number % 3600) / 60);
+    var seconds = Math.floor(number % 60);
+    return hours ? "".concat(hours, ":").concat(String(minutes).padStart(2, "0"), ":").concat(String(seconds).padStart(2, "0")) : "".concat(minutes, ":").concat(String(seconds).padStart(2, "0"));
+}
+function fetchWithTimeout(path, options, timeoutMs) {
+    if (timeoutMs === void 0) { timeoutMs = 10000; }
+    return new Promise(function (resolve, reject) {
+        var settled = false;
+        var timer = setTimeout(function () {
+            if (settled)
+                return;
+            settled = true;
+            reject(new Error("انتهت مهلة الاتصال بالخادم."));
+        }, timeoutMs);
+        fetch(path, options).then(function (response) {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(response);
+        }, function (error) {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+}
+function api(path_1) {
+    return __awaiter(this, arguments, void 0, function (path, options) {
+        var response, data, _a, error;
+        if (options === void 0) { options = {}; }
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0: return [4 /*yield*/, fetchWithTimeout(path, __assign(__assign({}, options), { headers: __assign({ "content-type": "application/json", "x-blofy-device-id": state.deviceId }, (options.headers || {})) }), 10000)];
+                case 1:
+                    response = _b.sent();
+                    data = {};
+                    _b.label = 2;
+                case 2:
+                    _b.trys.push([2, 4, , 5]);
+                    return [4 /*yield*/, response.json()];
+                case 3:
+                    data = _b.sent();
+                    return [3 /*break*/, 5];
+                case 4:
+                    _a = _b.sent();
+                    return [3 /*break*/, 5];
+                case 5:
+                    if (!response.ok) {
+                        error = new Error(data.error || "\u062A\u0639\u0630\u0631 \u0625\u0643\u0645\u0627\u0644 \u0627\u0644\u0637\u0644\u0628 (".concat(response.status, ")."));
+                        error.status = response.status;
+                        throw error;
+                    }
+                    return [2 /*return*/, data];
+            }
+        });
+    });
+}
+function notify(message, kind) {
+    if (kind === void 0) { kind = ""; }
+    clearTimeout(toastTimer);
+    toast.textContent = message;
+    toast.className = "toast ".concat(kind).trim();
+    toast.hidden = false;
+    toastTimer = setTimeout(function () { toast.hidden = true; }, 3500);
+}
+function brand() {
+    return "<div class=\"wordmark\" aria-label=\"BLOFY PLAYER\"><span class=\"brand-mark\"></span><span class=\"brand-name\"><b>BLOFY</b><span>PLAYER</span></span></div>";
+}
+function image(url, alt, className) {
+    if (className === void 0) { className = ""; }
+    return url ? "<img class=\"".concat(className, "\" src=\"").concat(escapeHtml(url), "\" alt=\"").concat(escapeHtml(alt), "\" loading=\"lazy\">") : "<span class=\"poster-placeholder ".concat(className, "\">\u25B6</span>");
+}
+function favoriteKey(item) { return "".concat(item.type, ":").concat(item.id); }
+function isFavorite(item) { return state.favorites.some(function (entry) { return favoriteKey(entry) === favoriteKey(item); }); }
+function init() {
+    return __awaiter(this, void 0, void 0, function () {
+        var _a, sessionData, license, error_1;
+        var _b, _c, _d;
+        return __generator(this, function (_e) {
+            switch (_e.label) {
+                case 0:
+                    if (window.BlofyAndroid)
+                        document.documentElement.classList.add("native-android");
+                    if ("serviceWorker" in navigator)
+                        navigator.serviceWorker.register("/sw.js").catch(function () { });
+                    _e.label = 1;
+                case 1:
+                    _e.trys.push([1, 3, , 4]);
+                    return [4 /*yield*/, Promise.all([
+                            api("/api/session"),
+                            api("/api/license?device_id=".concat(encodeURIComponent(state.deviceId))),
+                        ])];
+                case 2:
+                    _a = _e.sent(), sessionData = _a[0], license = _a[1];
+                    state.session = sessionData.session;
+                    state.license = license;
+                    return [3 /*break*/, 4];
+                case 3:
+                    error_1 = _e.sent();
+                    notify(error_1.message, "error");
+                    return [3 /*break*/, 4];
+                case 4:
+                    if (state.session && ((_b = state.license) === null || _b === void 0 ? void 0 : _b.plan) !== "expired")
+                        renderMain();
+                    else
+                        renderLogin();
+                    clearTimeout(window.__blofyBootTimer);
+                    try {
+                        (_d = (_c = window.BlofyAndroid) === null || _c === void 0 ? void 0 : _c.ready) === null || _d === void 0 ? void 0 : _d.call(_c);
+                    }
+                    catch (_f) { }
+                    return [2 /*return*/];
+            }
+        });
+    });
+}
+function renderLogin(error) {
+    var _a;
+    if (error === void 0) { error = ""; }
+    var license = state.license || {};
+    var expired = license.plan === "expired";
+    var xtream = state.sourceTab === "xtream";
+    app.innerHTML = "\n    <main class=\"login-screen\">\n      <section class=\"login-card\">\n        <div class=\"login-main\">\n          ".concat(brand(), "\n          <div class=\"login-copy\">\n            <span class=\"eyebrow\">\u0645\u0631\u062D\u0628\u064B\u0627 \u0628\u0643 \u0641\u064A BLOFY</span>\n            <h1>\u0643\u0644 \u0645\u062D\u062A\u0648\u0627\u0643 \u0641\u064A \u0645\u0643\u0627\u0646 \u0648\u0627\u062D\u062F\u060C \u0628\u0633\u0631\u0639\u0629 \u0648\u0648\u0636\u0648\u062D.</h1>\n            <p>\u0623\u0636\u0641 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u062A\u0634\u063A\u064A\u0644 \u0627\u0644\u062E\u0627\u0635\u0629 \u0628\u0643 \u0644\u0644\u0648\u0635\u0648\u0644 \u0625\u0644\u0649 \u0627\u0644\u0628\u062B \u0627\u0644\u0645\u0628\u0627\u0634\u0631 \u0648\u0627\u0644\u0623\u0641\u0644\u0627\u0645 \u0648\u0627\u0644\u0645\u0633\u0644\u0633\u0644\u0627\u062A \u0648\u0627\u0644\u062D\u0644\u0642\u0627\u062A.</p>\n          </div>\n          <div class=\"source-tabs\" role=\"tablist\">\n            <button class=\"source-tab ").concat(xtream ? "active" : "", "\" data-action=\"source-tab\" data-value=\"xtream\" data-focusable>Xtream Codes</button>\n            <button class=\"source-tab ").concat(!xtream ? "active" : "", "\" data-action=\"source-tab\" data-value=\"m3u\" data-focusable>M3U / M3U8</button>\n          </div>\n          <form id=\"sourceForm\" class=\"source-form\">\n            <div class=\"field full\"><label>\u0627\u0633\u0645 \u0627\u0644\u0642\u0627\u0626\u0645\u0629</label><input name=\"name\" value=\"\u0642\u0627\u0626\u0645\u062A\u064A\" maxlength=\"50\" autocomplete=\"off\" data-focusable /></div>\n            ").concat(xtream ? "\n              <div class=\"field full\"><label>\u0631\u0627\u0628\u0637 \u0627\u0644\u062E\u0627\u062F\u0645</label><input name=\"serverUrl\" type=\"url\" dir=\"ltr\" placeholder=\"http://server.example:8080\" autocomplete=\"url\" required data-focusable /></div>\n              <div class=\"field\"><label>\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645</label><input name=\"username\" dir=\"ltr\" autocomplete=\"username\" required data-focusable /></div>\n              <div class=\"field\"><label>\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631</label><input name=\"password\" type=\"password\" dir=\"ltr\" autocomplete=\"current-password\" required data-focusable /></div>\n            " : "\n              <div class=\"field full\"><label>\u0631\u0627\u0628\u0637 M3U \u0623\u0648 M3U8</label><input name=\"url\" type=\"url\" dir=\"ltr\" placeholder=\"https://example.com/playlist.m3u\" autocomplete=\"url\" required data-focusable /></div>\n            ", "\n            <div class=\"form-actions\">\n              <button class=\"primary-button\" type=\"submit\" data-focusable>\u0625\u0636\u0627\u0641\u0629 \u0642\u0627\u0626\u0645\u0629 \u062A\u0634\u063A\u064A\u0644\u3000\uFF0B</button>\n              <span id=\"formError\" class=\"form-error\">").concat(escapeHtml(error), "</span>\n            </div>\n          </form>\n          <p class=\"privacy-note\">\u0628\u064A\u0627\u0646\u0627\u062A \u0642\u0627\u0626\u0645\u062A\u0643 \u0645\u0634\u0641\u0651\u0631\u0629 \u062F\u0627\u062E\u0644 \u062C\u0644\u0633\u0629 \u0622\u0645\u0646\u0629 \u0648\u0644\u0627 \u062A\u0638\u0647\u0631 \u0641\u064A \u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062A\u0634\u063A\u064A\u0644. BLOFY PLAYER \u0644\u0627 \u064A\u0648\u0641\u0651\u0631 \u0623\u064A \u0645\u062D\u062A\u0648\u0649.</p>\n        </div>\n        <aside class=\"device-panel\">\n          <div class=\"device-card\">\n            <div class=\"device-head\"><h2>\u062D\u0627\u0644\u0629 \u0627\u0644\u062C\u0647\u0627\u0632</h2><p>\u0641\u0639\u0651\u0644 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0623\u0648 \u0627\u0633\u062A\u062E\u062F\u0645 \u0627\u0644\u0641\u062A\u0631\u0629 \u0627\u0644\u062A\u062C\u0631\u064A\u0628\u064A\u0629</p></div>\n            <div class=\"device-row\"><label>\u0631\u0642\u0645 \u0627\u0644\u062C\u0647\u0627\u0632</label><div class=\"device-code\"><b>").concat(escapeHtml(state.deviceId), "</b><button class=\"copy-button\" data-action=\"copy-device\" data-focusable aria-label=\"\u0646\u0633\u062E \u0631\u0642\u0645 \u0627\u0644\u062C\u0647\u0627\u0632\">\u25A3</button></div></div>\n            <div class=\"device-row\"><label>\u062D\u0627\u0644\u0629 \u0627\u0644\u0627\u0634\u062A\u0631\u0627\u0643</label><div class=\"license-line\"><b>").concat(escapeHtml(license.status || "جاري التحقق"), "</b><span class=\"status-badge ").concat(expired ? "expired" : "", "\">").concat(expired ? "منتهي" : "".concat(escapeHtml((_a = license.remainingDays) !== null && _a !== void 0 ? _a : "—"), " \u0623\u064A\u0627\u0645 \u0645\u062A\u0628\u0642\u064A\u0629"), "</span></div><div class=\"small muted\" style=\"margin-top:9px\">\u0627\u0644\u0627\u0646\u062A\u0647\u0627\u0621: ").concat(formatDate(license.expiresAt), "</div></div>\n            <div class=\"qr-block\"><b>\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u062C\u0647\u0627\u0632</b><p class=\"small muted\">\u0627\u0645\u0633\u062D \u0627\u0644\u0631\u0645\u0632 \u062B\u0645 \u0623\u062F\u062E\u0644 \u0631\u0642\u0645 \u0627\u0644\u062C\u0647\u0627\u0632</p><div class=\"qr-wrap\"><img src=\"/api/qr?text=").concat(encodeURIComponent("".concat(license.activationUrl || "https://blofy.tv/activate", "?device_id=").concat(state.deviceId)), "\" alt=\"\u0631\u0645\u0632 \u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u062C\u0647\u0627\u0632\" /></div><div class=\"activation-link\">").concat(escapeHtml(license.activationUrl || "https://blofy.tv/activate"), "</div></div>\n          </div>\n        </aside>\n      </section>\n    </main>");
+    focusFirst();
+}
+function navButton(route, label) {
+    return "<button class=\"nav-button ".concat(state.route === route ? "active" : "", "\" data-action=\"navigate\" data-route=\"").concat(route, "\" data-focusable>").concat(label, "</button>");
+}
+function renderMain() {
+    var _a;
+    app.innerHTML = "\n    <div class=\"app-shell\">\n      <header class=\"topbar\">\n        ".concat(brand(), "\n        <nav class=\"topnav\" aria-label=\"\u0627\u0644\u062A\u0646\u0642\u0644 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\">\n          ").concat(navButton("home", "الرئيسية")).concat(navButton("live", "بث مباشر")).concat(navButton("movies", "أفلام")).concat(navButton("series", "مسلسلات"), "\n        </nav>\n        <div class=\"top-actions\">\n          <button class=\"search-button\" data-action=\"global-search\" data-focusable aria-label=\"\u0628\u062D\u062B\">\u2315\u3000\u0628\u062D\u062B</button>\n          <button class=\"account-button\" data-action=\"navigate\" data-route=\"settings\" data-focusable><span class=\"avatar\">B</span><span>").concat(escapeHtml(((_a = state.session) === null || _a === void 0 ? void 0 : _a.name) || "الحساب"), "</span></button>\n        </div>\n      </header>\n      <main id=\"mainContent\" class=\"main-content\">").concat(renderRoute(), "</main>\n      <nav class=\"bottom-nav\" aria-label=\"\u0627\u0644\u062A\u0646\u0642\u0644 \u0644\u0644\u062C\u0648\u0627\u0644\">\n        ").concat(bottomButton("home", "⌂", "الرئيسية")).concat(bottomButton("live", "◉", "مباشر")).concat(bottomButton("movies", "▤", "أفلام")).concat(bottomButton("series", "▦", "مسلسلات")).concat(bottomButton("settings", "⚙", "الإعدادات"), "\n      </nav>\n    </div>");
+    focusFirst(false);
+}
+function bottomButton(route, icon, label) {
+    return "<button class=\"bottom-button ".concat(state.route === route ? "active" : "", "\" data-action=\"navigate\" data-route=\"").concat(route, "\" data-focusable><span>").concat(icon, "</span>").concat(label, "</button>");
+}
+function renderRoute() {
+    if (state.route === "home")
+        return renderHome();
+    if (["live", "movies", "series"].includes(state.route))
+        return renderCatalog();
+    if (state.route === "movie-detail" || state.route === "series-detail")
+        return renderDetail();
+    if (state.route === "favorites")
+        return renderCollection("المفضلة", "قنواتك وأفلامك ومسلسلاتك المحفوظة", state.favorites, "♡");
+    if (state.route === "history")
+        return renderCollection("سجل المشاهدة", "تابع ما شاهدته من حيث توقفت", state.history, "◷");
+    if (state.route === "settings")
+        return renderSettings();
+    return renderHome();
+}
+function renderHome() {
+    var _a;
+    var recent = state.history.slice(0, 6);
+    return "\n    <section class=\"page-heading\"><div><h1>\u0645\u0633\u0627\u0621 \u0627\u0644\u062E\u064A\u0631 \uD83D\uDC4B</h1><p>".concat(escapeHtml(((_a = state.session) === null || _a === void 0 ? void 0 : _a.name) || "قائمتي"), " \u2022 \u062C\u0627\u0647\u0632 \u0644\u0644\u0645\u0634\u0627\u0647\u062F\u0629</p></div><span class=\"status-badge\">\u25CF \u0645\u062A\u0635\u0644</span></section>\n    <section class=\"home-grid\">\n      <button class=\"feature-card featured\" data-action=\"navigate\" data-route=\"live\" data-focusable><span class=\"feature-icon\">\u2652</span><h2>\u0628\u062B \u0645\u0628\u0627\u0634\u0631</h2><p>\u0645\u0634\u0627\u0647\u062F\u0629 \u0627\u0644\u0642\u0646\u0648\u0627\u062A \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629</p></button>\n      <button class=\"feature-card\" data-action=\"navigate\" data-route=\"movies\" data-focusable><span class=\"feature-icon\">\u25A4</span><h2>\u0623\u0641\u0644\u0627\u0645</h2><p>\u0623\u062D\u062F\u062B \u0627\u0644\u0623\u0641\u0644\u0627\u0645 \u0627\u0644\u0639\u0627\u0644\u0645\u064A\u0629</p></button>\n      <button class=\"feature-card\" data-action=\"navigate\" data-route=\"series\" data-focusable><span class=\"feature-icon\">\u25A6</span><h2>\u0645\u0633\u0644\u0633\u0644\u0627\u062A</h2><p>\u0627\u0644\u0645\u0648\u0627\u0633\u0645 \u0648\u0627\u0644\u062D\u0644\u0642\u0627\u062A</p></button>\n      <button class=\"feature-card small-card\" data-action=\"navigate\" data-route=\"favorites\" data-focusable><span class=\"feature-icon\">\u2665</span><span><h2>\u0627\u0644\u0645\u0641\u0636\u0644\u0629</h2><p>\u0642\u0646\u0648\u0627\u062A\u0643 \u0648\u0642\u0648\u0627\u0626\u0645\u0643 \u0627\u0644\u0645\u0641\u0636\u0644\u0629</p></span></button>\n      <button class=\"feature-card small-card\" data-action=\"navigate\" data-route=\"history\" data-focusable><span class=\"feature-icon\">\u25F7</span><span><h2>\u0633\u062C\u0644 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629</h2><p>\u062A\u0627\u0628\u0639 \u0645\u0627 \u0634\u0627\u0647\u062F\u062A\u0647</p></span></button>\n      <button class=\"feature-card small-card\" data-action=\"navigate\" data-route=\"settings\" data-focusable><span class=\"feature-icon\">\u2699</span><span><h2>\u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A</h2><p>\u062A\u062E\u0635\u064A\u0635 \u0627\u0644\u062A\u0637\u0628\u064A\u0642</p></span></button>\n    </section>\n    <section class=\"home-wide\">\n      <div class=\"section-title\"><h2>\u0622\u062E\u0631 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0627\u062A</h2><span>").concat(recent.length ? "أكمل من حيث توقفت" : "ستظهر هنا تلقائيًا", "</span></div>\n      ").concat(recent.length ? "<div class=\"recent-strip\">".concat(recent.map(recentCard).join(""), "</div>") : emptyState("◷", "لا يوجد سجل مشاهدة", "ابدأ تشغيل قناة أو فيلم وستجده هنا."), "\n    </section>");
+}
+function recentCard(item) {
+    return "<button class=\"recent-card\" data-action=\"open-item\" data-key=\"".concat(escapeHtml(favoriteKey(item)), "\" data-collection=\"history\" data-focusable>").concat(item.image ? "<img src=\"".concat(escapeHtml(item.image), "\" alt=\"\" />") : "", "<strong>").concat(escapeHtml(item.name), "</strong></button>");
+}
+function pageTitle() {
+    if (state.route === "live")
+        return ["البث المباشر", "قنواتك مع دليل البرامج EPG"];
+    if (state.route === "movies")
+        return ["الأفلام", "تصفّح أحدث مكتبة أفلامك"];
+    return ["المسلسلات", "المواسم والحلقات مرتبة وواضحة"];
+}
+function renderCatalog() {
+    var _a = pageTitle(), title = _a[0], subtitle = _a[1];
+    var allLabel = state.route === "live" ? "جميع القنوات" : state.route === "movies" ? "جميع الأفلام" : "جميع المسلسلات";
+    return "\n    <section class=\"page-heading\"><div><h1>".concat(title, "</h1><p>").concat(subtitle, "</p></div></section>\n    <section class=\"content-layout\">\n      <aside class=\"category-sidebar\">\n        <div class=\"category-title\">\u0627\u0644\u0641\u0626\u0627\u062A</div>\n        <div class=\"category-list\">\n          <button class=\"category-button ").concat(!state.category ? "active" : "", "\" data-action=\"category\" data-value=\"\" data-focusable>\u2606\u3000").concat(allLabel, "</button>\n          ").concat(state.categories.map(function (category) { return "<button class=\"category-button ".concat(state.category === category.id ? "active" : "", "\" data-action=\"category\" data-value=\"").concat(escapeHtml(category.id), "\" data-focusable>\u25C7\u3000").concat(escapeHtml(category.name), "</button>"); }).join(""), "\n        </div>\n      </aside>\n      <div class=\"catalog-panel\">\n        <div class=\"catalog-toolbar\"><div class=\"search-wrap\"><input id=\"catalogSearch\" class=\"search-input\" value=\"").concat(escapeHtml(state.search), "\" placeholder=\"\u0627\u0628\u062D\u062B \u0628\u0627\u0644\u0627\u0633\u0645\u2026\" data-focusable /></div><span class=\"count-label\">").concat(state.loading ? "جاري التحميل…" : "".concat(state.total, " \u0646\u062A\u064A\u062C\u0629"), "</span></div>\n        ").concat(state.loading ? renderSkeletons() : state.route === "live" ? renderLive() : renderPosters(state.items), "\n        ").concat(!state.loading && state.items.length < state.total ? "<button class=\"secondary-button load-more\" data-action=\"load-more\" data-focusable>\u0639\u0631\u0636 \u0627\u0644\u0645\u0632\u064A\u062F</button>" : "", "\n      </div>\n    </section>");
+}
+function renderSkeletons() {
+    if (state.route === "live")
+        return "<div class=\"live-grid\"><div class=\"channel-list\">".concat(Array.from({ length: 7 }, function () { return "<div class=\"channel-row\"><span class=\"skeleton\" style=\"width:28px;height:12px\"></span><span class=\"skeleton\" style=\"width:34px;height:34px;border-radius:8px\"></span><span class=\"skeleton\" style=\"height:13px;border-radius:7px\"></span></div>"; }).join(""), "</div><div class=\"channel-preview skeleton\"></div></div>");
+    return "<div class=\"poster-grid\">".concat(Array.from({ length: 12 }, function () { return "<div><div class=\"poster skeleton\"></div><div class=\"skeleton\" style=\"height:12px;margin:9px 3px;border-radius:5px\"></div></div>"; }).join(""), "</div>");
+}
+function renderPosters(items) {
+    if (!items.length)
+        return emptyState("▤", "لا يوجد محتوى", "جرّب فئة أخرى أو امسح عبارة البحث.");
+    return "<div class=\"poster-grid\">".concat(items.map(mediaCard).join(""), "</div>");
+}
+function mediaCard(item) {
+    return "<button class=\"media-card\" data-action=\"select-media\" data-id=\"".concat(escapeHtml(item.id), "\" data-focusable>\n    <span class=\"poster\">").concat(image(item.image, item.name), "<span class=\"card-action\">\u25B6</span></span>\n    <span class=\"media-info\"><strong>").concat(escapeHtml(item.name), "</strong><span class=\"media-meta\"><span>").concat(escapeHtml(item.year || item.extension || ""), "</span>").concat(item.rating ? "<span>\u2605 ".concat(escapeHtml(item.rating), "</span>") : "", "</span></span>\n  </button>");
+}
+function renderLive() {
+    if (!state.items.length)
+        return emptyState("♒", "لا توجد قنوات", "جرّب فئة أخرى أو امسح عبارة البحث.");
+    var selected = state.selected || state.items[0];
+    return "<div class=\"live-grid\">\n    <div class=\"channel-list\">".concat(state.items.map(function (item, index) { return "<button class=\"channel-row ".concat((selected === null || selected === void 0 ? void 0 : selected.id) === item.id ? "active" : "", "\" data-action=\"select-channel\" data-id=\"").concat(escapeHtml(item.id), "\" data-focusable><span class=\"channel-number\">").concat(index + 1, "</span>").concat(item.image ? "<img src=\"".concat(escapeHtml(item.image), "\" alt=\"\" loading=\"lazy\" />") : "<span class=\"avatar\">\u25B6</span>", "<span class=\"channel-name\">").concat(escapeHtml(item.name), "</span><span class=\"favorite-mini\">").concat(isFavorite(item) ? "♥" : "♡", "</span></button>"); }).join(""), "</div>\n    <article class=\"channel-preview\">\n      <div class=\"preview-art\">").concat((selected === null || selected === void 0 ? void 0 : selected.image) ? "<img src=\"".concat(escapeHtml(selected.image), "\" alt=\"").concat(escapeHtml(selected.name), "\" />") : "<span>♒</span>", "</div>\n      <div class=\"preview-body\"><span class=\"live-pill\">LIVE</span><h2>").concat(escapeHtml((selected === null || selected === void 0 ? void 0 : selected.name) || "اختر قناة"), "</h2>\n        <div class=\"epg-list\">").concat(state.epg.length ? state.epg.map(epgRow).join("") : "<div class=\"muted small\">\u062F\u0644\u064A\u0644 \u0627\u0644\u0628\u0631\u0627\u0645\u062C \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 \u0644\u0647\u0630\u0647 \u0627\u0644\u0642\u0646\u0627\u0629.</div>", "</div>\n        <div class=\"button-row\"><button class=\"primary-button\" data-action=\"play-selected\" data-focusable>\u062A\u0634\u063A\u064A\u0644\u3000\u25B6</button><button class=\"secondary-button\" data-action=\"toggle-favorite\" data-id=\"").concat(escapeHtml((selected === null || selected === void 0 ? void 0 : selected.id) || ""), "\" data-focusable>").concat(selected && isFavorite(selected) ? "إزالة من المفضلة ♥" : "إضافة للمفضلة ♡", "</button></div>\n      </div>\n    </article>\n  </div>");
+}
+function epgRow(entry) {
+    var now = Date.now();
+    var current = entry.start <= now && entry.end >= now;
+    return "<div class=\"epg-row ".concat(current ? "current" : "", "\"><span>").concat(new Date(entry.start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }), " - ").concat(new Date(entry.end).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }), "</span><b>").concat(escapeHtml(entry.title), "</b></div>");
+}
+function renderDetail() {
+    if (state.loading || !state.detail)
+        return "<div class=\"detail-hero skeleton\"></div>";
+    var item = state.detail;
+    var series = state.route === "series-detail";
+    return "\n    <article class=\"detail-hero\">\n      ".concat(item.backdrop ? "<img class=\"detail-backdrop\" src=\"".concat(escapeHtml(item.backdrop), "\" alt=\"\" />") : "", "\n      <div class=\"detail-content\">\n        ").concat(item.image ? "<img class=\"detail-poster\" src=\"".concat(escapeHtml(item.image), "\" alt=\"").concat(escapeHtml(item.name), "\" />") : "<div class=\"detail-poster poster-placeholder\">\u25B6</div>", "\n        <div class=\"detail-copy\"><span class=\"eyebrow\">").concat(series ? "مسلسل" : "فيلم", "</span><h1>").concat(escapeHtml(item.name), "</h1><div class=\"chips\">").concat(item.year ? "<span class=\"chip\">".concat(escapeHtml(item.year), "</span>") : "").concat(item.rating ? "<span class=\"chip\">\u2605 ".concat(escapeHtml(item.rating), "</span>") : "").concat(item.duration ? "<span class=\"chip\">".concat(escapeHtml(item.duration), "</span>") : "").concat(item.genre ? "<span class=\"chip\">".concat(escapeHtml(item.genre), "</span>") : "", "</div><p>").concat(escapeHtml(item.description || "لا توجد نبذة متاحة لهذا المحتوى."), "</p><div class=\"button-row\">").concat(!series ? "<button class=\"primary-button\" data-action=\"play-detail\" data-focusable>\u062A\u0634\u063A\u064A\u0644 \u0627\u0644\u0622\u0646\u3000\u25B6</button>" : "", "<button class=\"secondary-button\" data-action=\"toggle-detail-favorite\" data-focusable>").concat(isFavorite(item) ? "إزالة من المفضلة ♥" : "إضافة للمفضلة ♡", "</button><button class=\"secondary-button\" data-action=\"back\" data-focusable>\u0631\u062C\u0648\u0639</button></div></div>\n      </div>\n    </article>\n    ").concat(series ? renderSeasons(item) : "");
+}
+function renderSeasons(item) {
+    var _a;
+    if (!((_a = item.seasons) === null || _a === void 0 ? void 0 : _a.length))
+        return "<div class=\"section-title\"><h2>\u0627\u0644\u062D\u0644\u0642\u0627\u062A</h2></div>".concat(emptyState("▦", "لا توجد حلقات", "لم يرسل الخادم بيانات المواسم والحلقات."));
+    var season = item.seasons.find(function (entry) { return entry.season === state.season; }) || item.seasons[0];
+    return "<div class=\"section-title\"><h2>\u0627\u0644\u0645\u0648\u0627\u0633\u0645 \u0648\u0627\u0644\u062D\u0644\u0642\u0627\u062A</h2><span>".concat(season.episodes.length, " \u062D\u0644\u0642\u0629</span></div><div class=\"season-tabs\">").concat(item.seasons.map(function (entry) { return "<button class=\"season-button ".concat(entry.season === season.season ? "active" : "", "\" data-action=\"season\" data-value=\"").concat(escapeHtml(entry.season), "\" data-focusable>\u0627\u0644\u0645\u0648\u0633\u0645 ").concat(escapeHtml(entry.season), "</button>"); }).join(""), "</div><div class=\"episode-list\">").concat(season.episodes.map(function (episode) { return "<button class=\"episode-row\" data-action=\"play-episode\" data-id=\"".concat(escapeHtml(episode.id), "\" data-focusable><span class=\"episode-number\">").concat(episode.number, "</span><span><b>").concat(escapeHtml(episode.title), "</b><small class=\"muted\">").concat(escapeHtml(episode.duration || "\u0627\u0644\u0645\u0648\u0633\u0645 ".concat(season.season)), "</small></span><span>\u062A\u0634\u063A\u064A\u0644\u3000\u25B6</span></button>"); }).join(""), "</div>");
+}
+function renderCollection(title, subtitle, entries, icon) {
+    var collection = title === "سجل المشاهدة" ? "history" : "favorites";
+    return "<section class=\"page-heading\"><div><h1>".concat(title, "</h1><p>").concat(subtitle, "</p></div><span class=\"count-label\">").concat(entries.length, " \u0639\u0646\u0635\u0631</span></section>").concat(entries.length ? "<div class=\"poster-grid\">".concat(entries.map(function (item) { return collectionCard(item, collection); }).join(""), "</div>") : emptyState(icon, "\u0644\u0627 \u062A\u0648\u062C\u062F \u0639\u0646\u0627\u0635\u0631 \u0641\u064A ".concat(title), title === "المفضلة" ? "أضف أي قناة أو فيلم أو مسلسل بالضغط على القلب." : "سيظهر المحتوى هنا عند بدء المشاهدة."));
+}
+function collectionCard(item, collection) {
+    return "<button class=\"media-card\" data-action=\"open-item\" data-key=\"".concat(escapeHtml(favoriteKey(item)), "\" data-collection=\"").concat(collection, "\" data-focusable><span class=\"poster\">").concat(image(item.image, item.name), "<span class=\"card-action\">\u25B6</span></span><span class=\"media-info\"><strong>").concat(escapeHtml(item.name), "</strong><span class=\"media-meta\"><span>").concat(escapeHtml(item.year || item.extension || ""), "</span></span></span></button>");
+}
+function renderSettings() {
+    var _a, _b, _c;
+    var license = state.license || {};
+    return "\n    <section class=\"page-heading\"><div><h1>\u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A</h1><p>\u062A\u062D\u0643\u0645 \u0641\u064A \u062A\u062C\u0631\u0628\u0629 \u0627\u0644\u062A\u0634\u063A\u064A\u0644 \u0648\u0627\u0644\u062C\u0647\u0627\u0632</p></div></section>\n    <div class=\"settings-grid\">\n      <section class=\"settings-card\"><h2>\u0627\u0644\u062A\u0634\u063A\u064A\u0644</h2>".concat(settingToggle("autoplayNext", "تشغيل الحلقة التالية تلقائيًا", "عند نهاية الحلقة الحالية")).concat(settingToggle("rememberPosition", "حفظ موضع المشاهدة", "لإكمال الفيلم أو الحلقة لاحقًا"), "<div class=\"setting-row\"><span><b>\u0648\u0636\u0639 \u0627\u0644\u062A\u062E\u0632\u064A\u0646 \u0627\u0644\u0645\u0624\u0642\u062A</b><small>\u0627\u0644\u0645\u062A\u0648\u0627\u0632\u0646 \u0645\u0646\u0627\u0633\u0628 \u0644\u0645\u0639\u0638\u0645 \u0627\u0644\u0627\u062A\u0635\u0627\u0644\u0627\u062A</small></span><select class=\"setting-select\" data-setting=\"bufferMode\" data-focusable><option value=\"fast\" ").concat(state.settings.bufferMode === "fast" ? "selected" : "", ">\u0633\u0631\u064A\u0639</option><option value=\"balanced\" ").concat(state.settings.bufferMode === "balanced" ? "selected" : "", ">\u0645\u062A\u0648\u0627\u0632\u0646</option><option value=\"stable\" ").concat(state.settings.bufferMode === "stable" ? "selected" : "", ">\u062B\u0627\u0628\u062A</option></select></div></section>\n      <section class=\"settings-card\"><h2>\u0627\u0644\u062C\u0647\u0627\u0632 \u0648\u0627\u0644\u0627\u0634\u062A\u0631\u0627\u0643</h2><div class=\"account-summary\"><div class=\"stat\"><label>\u0631\u0642\u0645 \u0627\u0644\u062C\u0647\u0627\u0632</label><b>").concat(escapeHtml(state.deviceId), "</b></div><div class=\"stat\"><label>\u0627\u0644\u062E\u0637\u0629</label><b>").concat(escapeHtml(license.status || "—"), "</b></div><div class=\"stat\"><label>\u0627\u0644\u0627\u0646\u062A\u0647\u0627\u0621</label><b>").concat(formatDate(license.expiresAt), "</b></div></div><div class=\"button-row\" style=\"margin-top:18px\"><button class=\"secondary-button\" data-action=\"refresh-license\" data-focusable>\u062A\u062D\u062F\u064A\u062B \u0627\u0644\u062A\u0641\u0639\u064A\u0644</button><button class=\"secondary-button\" data-action=\"copy-device\" data-focusable>\u0646\u0633\u062E \u0631\u0642\u0645 \u0627\u0644\u062C\u0647\u0627\u0632</button>").concat(window.BlofyAndroid ? "<button class=\"secondary-button\" data-action=\"server-settings\" data-focusable>\u0625\u0639\u062F\u0627\u062F \u0631\u0627\u0628\u0637 \u0627\u0644\u062E\u0627\u062F\u0645</button>" : "", "</div></section>\n      <section class=\"settings-card\"><h2>\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u062A\u0634\u063A\u064A\u0644</h2><div class=\"setting-row\"><span><b>").concat(escapeHtml(((_a = state.session) === null || _a === void 0 ? void 0 : _a.name) || "قائمتي"), "</b><small>").concat(escapeHtml(((_b = state.session) === null || _b === void 0 ? void 0 : _b.kind) === "xtream" ? "Xtream Codes" : "M3U / M3U8"), " \u2022 ").concat(escapeHtml(((_c = state.session) === null || _c === void 0 ? void 0 : _c.serverName) || ""), "</small></span><span class=\"status-badge\">\u0645\u062A\u0635\u0644</span></div><button class=\"danger-button\" data-action=\"logout\" data-focusable>\u062D\u0630\u0641 \u0627\u0644\u0642\u0627\u0626\u0645\u0629 \u0648\u0627\u0644\u0639\u0648\u062F\u0629 \u0644\u0644\u062F\u062E\u0648\u0644</button></section>\n      <section class=\"settings-card\"><h2>\u062D\u0648\u0644 \u0627\u0644\u062A\u0637\u0628\u064A\u0642</h2><div class=\"setting-row\"><span><b>BLOFY PLAYER WEB</b><small>\u0646\u0633\u062E\u0629 2026.08 \u2022 \u0645\u0634\u063A\u0644 \u0641\u0642\u0637 \u062F\u0648\u0646 \u0645\u062D\u062A\u0648\u0649</small></span>").concat(brand(), "</div><p class=\"small muted\">\u064A\u062F\u0639\u0645 Xtream Codes \u0648M3U/M3U8 \u0648HLS\u060C \u0648\u0645\u0635\u0645\u0645 \u0644\u0644\u062C\u0648\u0627\u0644 \u0648\u0627\u0644\u062A\u0627\u0628\u0644\u062A \u0648\u0627\u0644\u062A\u0644\u0641\u0632\u064A\u0648\u0646 \u0645\u0639 \u062A\u0646\u0642\u0651\u0644 \u0643\u0627\u0645\u0644 \u0628\u0627\u0644\u0631\u064A\u0645\u0648\u062A.</p></section>\n    </div>");
+}
+function settingToggle(key, title, subtitle) {
+    return "<div class=\"setting-row\"><span><b>".concat(title, "</b><small>").concat(subtitle, "</small></span><button class=\"toggle ").concat(state.settings[key] ? "on" : "", "\" data-action=\"setting-toggle\" data-setting=\"").concat(key, "\" data-focusable aria-label=\"").concat(title, "\"></button></div>");
+}
+function emptyState(icon, title, subtitle) {
+    return "<div class=\"empty-state\"><span class=\"empty-icon\">".concat(icon, "</span><b>").concat(title, "</b><span>").concat(subtitle, "</span></div>");
+}
+function queryString(values) {
+    return Object.keys(values).map(function (key) { return "".concat(encodeURIComponent(key), "=").concat(encodeURIComponent(values[key] || "")); }).join("&");
+}
+function formValues(form) {
+    var values = {};
+    for (var index = 0; index < form.elements.length; index += 1) {
+        var field = form.elements[index];
+        if (field.name && !field.disabled)
+            values[field.name] = field.value;
+    }
+    return values;
+}
+function navigate(route_1) {
+    return __awaiter(this, arguments, void 0, function (route, push) {
+        if (push === void 0) { push = true; }
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    if (push && state.route !== route)
+                        state.navStack.push(state.route);
+                    state.route = route;
+                    state.detail = null;
+                    state.selected = null;
+                    state.epg = [];
+                    if (!["live", "movies", "series"].includes(route)) return [3 /*break*/, 2];
+                    state.type = route;
+                    state.category = "";
+                    state.search = "";
+                    state.page = 1;
+                    return [4 /*yield*/, loadCatalog(true)];
+                case 1:
+                    _a.sent();
+                    return [3 /*break*/, 3];
+                case 2:
+                    renderMain();
+                    _a.label = 3;
+                case 3: return [2 /*return*/];
+            }
+        });
+    });
+}
+function loadCatalog() {
+    return __awaiter(this, arguments, void 0, function (reset) {
+        var params, data, _a, categoryData, catalogData, error_2;
+        if (reset === void 0) { reset = false; }
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0:
+                    if (reset) {
+                        state.items = [];
+                        state.categories = [];
+                        state.total = 0;
+                        state.page = 1;
+                    }
+                    state.loading = true;
+                    renderMain();
+                    _b.label = 1;
+                case 1:
+                    _b.trys.push([1, 6, 7, 8]);
+                    params = queryString({ type: state.type, page: String(state.page), category: state.category, search: state.search });
+                    data = void 0;
+                    if (!!state.categories.length) return [3 /*break*/, 3];
+                    return [4 /*yield*/, Promise.all([
+                            api("/api/categories?type=".concat(encodeURIComponent(state.type))),
+                            api("/api/catalog?".concat(params)),
+                        ])];
+                case 2:
+                    _a = _b.sent(), categoryData = _a[0], catalogData = _a[1];
+                    state.categories = categoryData.categories || [];
+                    data = catalogData;
+                    return [3 /*break*/, 5];
+                case 3: return [4 /*yield*/, api("/api/catalog?".concat(params))];
+                case 4:
+                    data = _b.sent();
+                    _b.label = 5;
+                case 5:
+                    state.items = state.page === 1 ? data.items : __spreadArray(__spreadArray([], state.items, true), data.items, true);
+                    state.total = data.total || 0;
+                    if (state.route === "live" && !state.selected)
+                        state.selected = state.items[0] || null;
+                    return [3 /*break*/, 8];
+                case 6:
+                    error_2 = _b.sent();
+                    if (error_2.status === 401) {
+                        state.session = null;
+                        return [2 /*return*/, renderLogin(error_2.message)];
+                    }
+                    notify(error_2.message, "error");
+                    return [3 /*break*/, 8];
+                case 7:
+                    state.loading = false;
+                    renderMain();
+                    if (state.route === "live" && state.selected)
+                        loadEpg(state.selected.id);
+                    return [7 /*endfinally*/];
+                case 8: return [2 /*return*/];
+            }
+        });
+    });
+}
+function loadEpg(id) {
+    return __awaiter(this, void 0, void 0, function () {
+        var data, _a;
+        var _b;
+        return __generator(this, function (_c) {
+            switch (_c.label) {
+                case 0:
+                    _c.trys.push([0, 2, , 3]);
+                    return [4 /*yield*/, api("/api/epg/".concat(encodeURIComponent(id)))];
+                case 1:
+                    data = _c.sent();
+                    if (((_b = state.selected) === null || _b === void 0 ? void 0 : _b.id) === id) {
+                        state.epg = data.entries || [];
+                        renderMain();
+                    }
+                    return [3 /*break*/, 3];
+                case 2:
+                    _a = _c.sent();
+                    state.epg = [];
+                    return [3 /*break*/, 3];
+                case 3: return [2 /*return*/];
+            }
+        });
+    });
+}
+function openDetail(item) {
+    return __awaiter(this, void 0, void 0, function () {
+        var _a, error_3;
+        var _b, _c;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
+                case 0:
+                    state.navStack.push(state.route);
+                    state.route = item.type === "series" ? "series-detail" : "movie-detail";
+                    state.loading = true;
+                    state.detail = null;
+                    renderMain();
+                    _d.label = 1;
+                case 1:
+                    _d.trys.push([1, 3, 4, 5]);
+                    _a = state;
+                    return [4 /*yield*/, api("/api/".concat(item.type === "series" ? "series" : "movie", "/").concat(encodeURIComponent(item.id)))];
+                case 2:
+                    _a.detail = _d.sent();
+                    state.season = ((_c = (_b = state.detail.seasons) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.season) || "";
+                    return [3 /*break*/, 5];
+                case 3:
+                    error_3 = _d.sent();
+                    notify(error_3.message, "error");
+                    state.route = state.navStack.pop() || "home";
+                    return [3 /*break*/, 5];
+                case 4:
+                    state.loading = false;
+                    renderMain();
+                    return [7 /*endfinally*/];
+                case 5: return [2 /*return*/];
+            }
+        });
+    });
+}
+function goBack() {
+    if (!playerModal.hidden) {
+        closePlayer();
+        return true;
+    }
+    if (state.navStack.length) {
+        navigate(state.navStack.pop(), false);
+        return true;
+    }
+    if (state.route !== "home") {
+        navigate("home", false);
+        return true;
+    }
+    return false;
+}
+function toggleFavorite(item) {
+    if (!item)
+        return;
+    var key = favoriteKey(item);
+    var index = state.favorites.findIndex(function (entry) { return favoriteKey(entry) === key; });
+    if (index >= 0) {
+        state.favorites.splice(index, 1);
+        notify("تمت الإزالة من المفضلة");
+    }
+    else {
+        state.favorites.unshift(__assign({}, item));
+        notify("تمت الإضافة للمفضلة");
+    }
+    storage.set("blofy_favorites", state.favorites);
+    renderMain();
+}
+function addHistory(item) {
+    var copy = __assign(__assign({}, item), { watchedAt: Date.now() });
+    state.history = __spreadArray([copy], state.history.filter(function (entry) { return favoriteKey(entry) !== favoriteKey(item); }), true).slice(0, 50);
+    storage.set("blofy_history", state.history);
+}
+function clearPlayerTimeout() {
+    if (playerTimeout)
+        clearTimeout(playerTimeout);
+    playerTimeout = null;
+}
+function armPlayerTimeout() {
+    clearPlayerTimeout();
+    playerTimeout = setTimeout(function () {
+        if (!playerModal.hidden && video.readyState < 2) {
+            showPlayerError(playerCompatibility
+                ? "لم يستجب المصدر حتى بوضع التوافق. تحقق من المصدر أو جرّب قناة أخرى."
+                : "تأخر المصدر في الاستجابة. جرّب وضع التوافق لتحويل البث إلى H.264/AAC.");
+        }
+    }, playerCompatibility ? 32000 : 22000);
+}
+function openPlayer(item_1) {
+    return __awaiter(this, arguments, void 0, function (item, compatibility) {
+        var type, extension, url, native, nativeUrl, error_4, useHls;
+        var _a, _b;
+        if (compatibility === void 0) { compatibility = false; }
+        return __generator(this, function (_c) {
+            switch (_c.label) {
+                case 0:
+                    if (!(item === null || item === void 0 ? void 0 : item.id))
+                        return [2 /*return*/];
+                    playerItem = item;
+                    playerFailures = 0;
+                    playerCompatibility = compatibility;
+                    clearPlayerTimeout();
+                    addHistory(item);
+                    type = item.type === "series" ? "episode" : item.type;
+                    extension = item.extension || (type === "live" ? "ts" : "mp4");
+                    url = "/api/play/".concat(type, "/").concat(encodeURIComponent(item.id), "?ext=").concat(encodeURIComponent(extension)).concat(compatibility ? "&compat=2" : "");
+                    if (!((_a = window.BlofyAndroid) === null || _a === void 0 ? void 0 : _a.play)) return [3 /*break*/, 4];
+                    _c.label = 1;
+                case 1:
+                    _c.trys.push([1, 3, , 4]);
+                    return [4 /*yield*/, api("/api/native-link/".concat(type, "/").concat(encodeURIComponent(item.id), "?ext=").concat(encodeURIComponent(extension)))];
+                case 2:
+                    native = _c.sent();
+                    if (native.mode !== "direct")
+                        throw new Error("الخادم لا يستخدم وضع Media3 المباشر");
+                    nativeUrl = new URL(native.url, location.origin);
+                    window.BlofyAndroid.play(nativeUrl.toString(), item.name || "BLOFY PLAYER", type, native.extension || extension);
+                    return [2 /*return*/];
+                case 3:
+                    error_4 = _c.sent();
+                    notify("\u062A\u0639\u0630\u0631 \u0641\u062A\u062D Media3: ".concat(error_4.message || "خطأ غير معروف"), "error");
+                    return [2 /*return*/];
+                case 4:
+                    document.getElementById("playerTitle").textContent = item.name || "BLOFY PLAYER";
+                    document.getElementById("playerSubtitle").textContent = item.type === "live" ? "بث مباشر" : item.type === "episode" ? "حلقة" : "فيلم";
+                    document.getElementById("livePill").hidden = item.type !== "live";
+                    playerStatus.hidden = false;
+                    playerStatus.innerHTML = "<span class=\"spinner\"></span><b>".concat(compatibility ? "جاري تشغيل وضع التوافق…" : "جاري تجهيز البث…", "</b><small>").concat(compatibility ? "تحويل آمن إلى H.264/AAC" : "نختار أسرع طريقة تشغيل متوافقة", "</small>");
+                    playerModal.hidden = false;
+                    document.body.style.overflow = "hidden";
+                    destroyHls();
+                    video.removeAttribute("src");
+                    video.load();
+                    useHls = type === "live" || !/^(mp4|m4v|webm|mov)$/i.test(item.extension || "mp4");
+                    if (useHls && ((_b = window.Hls) === null || _b === void 0 ? void 0 : _b.isSupported()))
+                        attachHls(url);
+                    else {
+                        video.src = url;
+                        video.addEventListener("error", onNativeError, { once: true });
+                        video.play().catch(function () { });
+                    }
+                    armPlayerTimeout();
+                    setTimeout(function () { var _a; return (_a = document.querySelector('[data-player-action="play"]')) === null || _a === void 0 ? void 0 : _a.focus(); }, 60);
+                    return [2 /*return*/];
+            }
+        });
+    });
+}
+function hlsConfig() {
+    var mode = state.settings.bufferMode;
+    return {
+        enableWorker: true,
+        lowLatencyMode: mode === "fast",
+        backBufferLength: mode === "stable" ? 60 : 30,
+        maxBufferLength: mode === "stable" ? 45 : mode === "fast" ? 12 : 25,
+        manifestLoadingTimeOut: 9000,
+        levelLoadingTimeOut: 9000,
+        fragLoadingTimeOut: 12000,
+        manifestLoadingMaxRetry: 2,
+        levelLoadingMaxRetry: 3,
+        fragLoadingMaxRetry: 4,
+        startLevel: -1,
+    };
+}
+function attachHls(url) {
+    hls = new window.Hls(hlsConfig());
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+        populateTracks();
+        video.play().catch(function () { });
+    });
+    hls.on(window.Hls.Events.LEVEL_SWITCHED, populateTracks);
+    hls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, populateTracks);
+    hls.on(window.Hls.Events.SUBTITLE_TRACKS_UPDATED, populateTracks);
+    hls.on(window.Hls.Events.ERROR, function (_, data) {
+        if (!data.fatal)
+            return;
+        playerFailures += 1;
+        if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR && playerFailures <= 2) {
+            playerStatus.hidden = false;
+            hls.startLoad();
+        }
+        else if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR && playerFailures <= 2)
+            hls.recoverMediaError();
+        else
+            showPlayerError("تعذر تشغيل هذا المصدر. جرّب قناة أخرى أو غيّر وضع التخزين المؤقت.");
+    });
+}
+function onNativeError() { showPlayerError("صيغة هذا المحتوى غير مدعومة على الجهاز أو أن الرابط لا يستجيب."); }
+function onPlayerReady() { clearPlayerTimeout(); playerStatus.hidden = true; populateTracks(); }
+function showPlayerError(message) {
+    clearPlayerTimeout();
+    hls === null || hls === void 0 ? void 0 : hls.stopLoad();
+    playerStatus.hidden = false;
+    playerStatus.innerHTML = "<b>\u062A\u0639\u0630\u0631 \u0627\u0644\u062A\u0634\u063A\u064A\u0644</b><small>".concat(escapeHtml(message), "</small><div class=\"button-row\">").concat(playerCompatibility ? "<button class=\"secondary-button\" data-player-action=\"retry\" data-focusable>\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629</button>" : "<button class=\"primary-button\" data-player-action=\"compat\" data-focusable>\u062A\u0634\u063A\u064A\u0644 \u0628\u0648\u0636\u0639 \u0627\u0644\u062A\u0648\u0627\u0641\u0642</button>", "<button class=\"secondary-button\" data-player-action=\"close\" data-focusable>\u0625\u063A\u0644\u0627\u0642</button></div>");
+    setTimeout(function () { var _a; return (_a = playerStatus.querySelector("[data-focusable]")) === null || _a === void 0 ? void 0 : _a.focus(); }, 30);
+}
+function populateTracks() {
+    var _a, _b, _c;
+    qualitySelect.innerHTML = "<option value=\"auto\">\u062A\u0644\u0642\u0627\u0626\u064A</option>".concat(((_a = hls === null || hls === void 0 ? void 0 : hls.levels) === null || _a === void 0 ? void 0 : _a.map(function (level, index) { return "<option value=\"".concat(index, "\" ").concat(hls.currentLevel === index ? "selected" : "", ">").concat(level.height ? "".concat(level.height, "p") : "\u062C\u0648\u062F\u0629 ".concat(index + 1), "</option>"); }).join("")) || "");
+    audioSelect.innerHTML = "<option value=\"auto\">\u0627\u0644\u0635\u0648\u062A</option>".concat(((_b = hls === null || hls === void 0 ? void 0 : hls.audioTracks) === null || _b === void 0 ? void 0 : _b.map(function (track, index) { return "<option value=\"".concat(index, "\">").concat(escapeHtml(track.name || track.lang || "\u0645\u0633\u0627\u0631 ".concat(index + 1)), "</option>"); }).join("")) || "");
+    subtitleSelect.innerHTML = "<option value=\"off\">\u0628\u062F\u0648\u0646 \u062A\u0631\u062C\u0645\u0629</option>".concat(((_c = hls === null || hls === void 0 ? void 0 : hls.subtitleTracks) === null || _c === void 0 ? void 0 : _c.map(function (track, index) { return "<option value=\"".concat(index, "\">").concat(escapeHtml(track.name || track.lang || "\u062A\u0631\u062C\u0645\u0629 ".concat(index + 1)), "</option>"); }).join("")) || "");
+}
+function destroyHls() { if (hls) {
+    hls.destroy();
+    hls = null;
+} }
+function closePlayer() {
+    clearPlayerTimeout();
+    destroyHls();
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    playerModal.hidden = true;
+    playerItem = null;
+    playerCompatibility = false;
+    document.body.style.overflow = "";
+    if (document.fullscreenElement === playerModal)
+        document.exitFullscreen().catch(function () { });
+    renderMain();
+}
+app.addEventListener("submit", function (event) { return __awaiter(void 0, void 0, void 0, function () {
+    var button, formError, values, data, error_5;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                if (event.target.id !== "sourceForm")
+                    return [2 /*return*/];
+                event.preventDefault();
+                button = event.target.querySelector('button[type="submit"]');
+                formError = document.getElementById("formError");
+                button.disabled = true;
+                button.textContent = "جاري التحقق…";
+                formError.textContent = "";
+                values = formValues(event.target);
+                _a.label = 1;
+            case 1:
+                _a.trys.push([1, 3, , 4]);
+                return [4 /*yield*/, api("/api/session", { method: "POST", body: JSON.stringify(__assign({ kind: state.sourceTab }, values)) })];
+            case 2:
+                data = _a.sent();
+                state.session = data.session;
+                notify("تمت إضافة القائمة بنجاح");
+                state.route = "home";
+                renderMain();
+                return [3 /*break*/, 4];
+            case 3:
+                error_5 = _a.sent();
+                formError.textContent = error_5.message;
+                button.disabled = false;
+                button.textContent = "إضافة قائمة تشغيل　＋";
+                return [3 /*break*/, 4];
+            case 4: return [2 /*return*/];
+        }
+    });
+}); });
+app.addEventListener("input", function (event) {
+    if (event.target.id !== "catalogSearch")
+        return;
+    clearTimeout(searchTimer);
+    state.search = event.target.value;
+    searchTimer = setTimeout(function () { state.page = 1; loadCatalog(false); }, 420);
+});
+app.addEventListener("error", function (event) {
+    var target = event.target;
+    if (!(target instanceof HTMLImageElement) || target.dataset.failed)
+        return;
+    target.dataset.failed = "1";
+    var replacement = document.createElement("span");
+    replacement.className = "poster-placeholder";
+    replacement.textContent = "▶";
+    if (target.parentNode)
+        target.parentNode.replaceChild(replacement, target);
+}, true);
+app.addEventListener("change", function (event) {
+    var setting = event.target.dataset.setting;
+    if (setting) {
+        state.settings[setting] = event.target.value;
+        storage.set("blofy_settings", state.settings);
+        notify("تم حفظ الإعداد");
+    }
+});
+app.addEventListener("click", function (event) { return __awaiter(void 0, void 0, void 0, function () {
+    var target, action, item, season, episode, collection, item, key, _a, error_6;
+    var _b, _c, _d, _e;
+    return __generator(this, function (_f) {
+        switch (_f.label) {
+            case 0:
+                target = event.target.closest("[data-action]");
+                if (!target)
+                    return [2 /*return*/];
+                action = target.dataset.action;
+                if (action === "source-tab") {
+                    state.sourceTab = target.dataset.value;
+                    renderLogin();
+                }
+                if (!(action === "navigate")) return [3 /*break*/, 2];
+                return [4 /*yield*/, navigate(target.dataset.route)];
+            case 1:
+                _f.sent();
+                _f.label = 2;
+            case 2:
+                if (action === "back")
+                    goBack();
+                if (!(action === "copy-device")) return [3 /*break*/, 4];
+                return [4 /*yield*/, ((_b = navigator.clipboard) === null || _b === void 0 ? void 0 : _b.writeText(state.deviceId).catch(function () { }))];
+            case 3:
+                _f.sent();
+                notify("تم نسخ رقم الجهاز");
+                _f.label = 4;
+            case 4:
+                if (!(action === "category")) return [3 /*break*/, 6];
+                state.category = target.dataset.value;
+                state.page = 1;
+                return [4 /*yield*/, loadCatalog(false)];
+            case 5:
+                _f.sent();
+                _f.label = 6;
+            case 6:
+                if (!(action === "load-more")) return [3 /*break*/, 8];
+                state.page += 1;
+                return [4 /*yield*/, loadCatalog(false)];
+            case 7:
+                _f.sent();
+                _f.label = 8;
+            case 8:
+                if (!(action === "select-channel")) return [3 /*break*/, 10];
+                state.selected = state.items.find(function (item) { return item.id === target.dataset.id; }) || null;
+                state.epg = [];
+                renderMain();
+                if (!state.selected) return [3 /*break*/, 10];
+                return [4 /*yield*/, loadEpg(state.selected.id)];
+            case 9:
+                _f.sent();
+                _f.label = 10;
+            case 10:
+                if (!(action === "play-selected")) return [3 /*break*/, 12];
+                return [4 /*yield*/, openPlayer(state.selected)];
+            case 11:
+                _f.sent();
+                _f.label = 12;
+            case 12:
+                if (action === "toggle-favorite")
+                    toggleFavorite(state.items.find(function (item) { return item.id === target.dataset.id; }) || state.selected);
+                if (!(action === "select-media")) return [3 /*break*/, 16];
+                item = state.items.find(function (entry) { return entry.id === target.dataset.id; });
+                if (!item)
+                    return [2 /*return*/];
+                if (!(state.session.kind === "xtream")) return [3 /*break*/, 14];
+                return [4 /*yield*/, openDetail(item)];
+            case 13:
+                _f.sent();
+                return [3 /*break*/, 16];
+            case 14: return [4 /*yield*/, openPlayer(item)];
+            case 15:
+                _f.sent();
+                _f.label = 16;
+            case 16:
+                if (action === "toggle-detail-favorite")
+                    toggleFavorite(state.detail);
+                if (!(action === "play-detail")) return [3 /*break*/, 18];
+                return [4 /*yield*/, openPlayer(state.detail)];
+            case 17:
+                _f.sent();
+                _f.label = 18;
+            case 18:
+                if (action === "season") {
+                    state.season = target.dataset.value;
+                    renderMain();
+                }
+                if (!(action === "play-episode")) return [3 /*break*/, 20];
+                season = state.detail.seasons.find(function (entry) { return entry.season === state.season; }) || state.detail.seasons[0];
+                episode = season.episodes.find(function (entry) { return entry.id === target.dataset.id; });
+                if (!episode) return [3 /*break*/, 20];
+                return [4 /*yield*/, openPlayer(__assign(__assign({}, episode), { type: "episode", name: "".concat(state.detail.name, " \u2022 ").concat(episode.title), parentId: state.detail.id }))];
+            case 19:
+                _f.sent();
+                _f.label = 20;
+            case 20:
+                if (action === "open-item") {
+                    collection = target.dataset.collection === "history" ? state.history : state.favorites;
+                    item = collection.find(function (entry) { return favoriteKey(entry) === target.dataset.key; });
+                    if (item)
+                        item.type === "series" ? openDetail(item) : openPlayer(item);
+                }
+                if (action === "setting-toggle") {
+                    key = target.dataset.setting;
+                    state.settings[key] = !state.settings[key];
+                    storage.set("blofy_settings", state.settings);
+                    renderMain();
+                }
+                if (!(action === "refresh-license")) return [3 /*break*/, 24];
+                _f.label = 21;
+            case 21:
+                _f.trys.push([21, 23, , 24]);
+                _a = state;
+                return [4 /*yield*/, api("/api/license?device_id=".concat(encodeURIComponent(state.deviceId)))];
+            case 22:
+                _a.license = _f.sent();
+                notify("تم تحديث حالة التفعيل");
+                renderMain();
+                return [3 /*break*/, 24];
+            case 23:
+                error_6 = _f.sent();
+                notify(error_6.message, "error");
+                return [3 /*break*/, 24];
+            case 24:
+                if (action === "server-settings")
+                    (_d = (_c = window.BlofyAndroid) === null || _c === void 0 ? void 0 : _c.openServerSettings) === null || _d === void 0 ? void 0 : _d.call(_c);
+                if (!(action === "logout")) return [3 /*break*/, 26];
+                return [4 /*yield*/, api("/api/session", { method: "DELETE" }).catch(function () { })];
+            case 25:
+                _f.sent();
+                state.session = null;
+                state.items = [];
+                state.categories = [];
+                renderLogin();
+                _f.label = 26;
+            case 26:
+                if (!(action === "global-search")) return [3 /*break*/, 29];
+                if (!["live", "movies", "series"].includes(state.route)) return [3 /*break*/, 27];
+                (_e = document.getElementById("catalogSearch")) === null || _e === void 0 ? void 0 : _e.focus();
+                return [3 /*break*/, 29];
+            case 27: return [4 /*yield*/, navigate("movies")];
+            case 28:
+                _f.sent();
+                _f.label = 29;
+            case 29: return [2 /*return*/];
+        }
+    });
+}); });
+playerModal.addEventListener("click", function (event) {
+    var _a;
+    var target = event.target.closest("[data-player-action]");
+    if (!target)
+        return;
+    var action = target.dataset.playerAction;
+    if (action === "close")
+        closePlayer();
+    if (action === "play")
+        video.paused ? video.play().catch(function () { }) : video.pause();
+    if (action === "mute")
+        video.muted = !video.muted;
+    if (action === "fullscreen")
+        document.fullscreenElement ? document.exitFullscreen() : (_a = playerModal.requestFullscreen) === null || _a === void 0 ? void 0 : _a.call(playerModal);
+    if (action === "compat" && playerItem)
+        openPlayer(playerItem, true);
+    if (action === "retry" && playerItem)
+        openPlayer(playerItem, playerCompatibility);
+});
+qualitySelect.addEventListener("change", function () { if (hls)
+    hls.currentLevel = qualitySelect.value === "auto" ? -1 : Number(qualitySelect.value); });
+audioSelect.addEventListener("change", function () { if (hls && audioSelect.value !== "auto")
+    hls.audioTrack = Number(audioSelect.value); });
+subtitleSelect.addEventListener("change", function () { if (hls)
+    hls.subtitleTrack = subtitleSelect.value === "off" ? -1 : Number(subtitleSelect.value); });
+seek.addEventListener("input", function () { if (Number.isFinite(video.duration) && video.duration > 0)
+    video.currentTime = (Number(seek.value) / 1000) * video.duration; });
+video.addEventListener("timeupdate", function () {
+    var duration = Number.isFinite(video.duration) ? video.duration : 0;
+    seek.value = duration ? String(Math.round((video.currentTime / duration) * 1000)) : "0";
+    document.getElementById("playerTime").textContent = duration ? "".concat(formatTime(video.currentTime), " / ").concat(formatTime(duration)) : formatTime(video.currentTime);
+});
+video.addEventListener("waiting", function () { if (!video.paused)
+    playerStatus.hidden = false; });
+video.addEventListener("playing", onPlayerReady);
+function focusables() {
+    return __spreadArray([], document.querySelectorAll("[data-focusable]"), true).filter(function (element) { return !element.disabled && !element.hidden && element.offsetParent !== null; });
+}
+function focusFirst(force) {
+    if (force === void 0) { force = true; }
+    if (!force && document.activeElement && document.activeElement !== document.body)
+        return;
+    setTimeout(function () { var _a; return (_a = focusables()[0]) === null || _a === void 0 ? void 0 : _a.focus(); }, 30);
+}
+function spatialMove(direction) {
+    var items = focusables();
+    if (!items.length)
+        return;
+    var current = items.includes(document.activeElement) ? document.activeElement : items[0];
+    if (current !== document.activeElement)
+        return current.focus();
+    var source = current.getBoundingClientRect();
+    var sx = source.left + source.width / 2;
+    var sy = source.top + source.height / 2;
+    var best = null;
+    var bestScore = Infinity;
+    for (var _i = 0, items_1 = items; _i < items_1.length; _i++) {
+        var candidate = items_1[_i];
+        if (candidate === current)
+            continue;
+        var rect = candidate.getBoundingClientRect();
+        var cx = rect.left + rect.width / 2;
+        var cy = rect.top + rect.height / 2;
+        var dx = cx - sx;
+        var dy = cy - sy;
+        if ((direction === "left" && dx >= -4) || (direction === "right" && dx <= 4) || (direction === "up" && dy >= -4) || (direction === "down" && dy <= 4))
+            continue;
+        var primary = direction === "left" || direction === "right" ? Math.abs(dx) : Math.abs(dy);
+        var secondary = direction === "left" || direction === "right" ? Math.abs(dy) : Math.abs(dx);
+        var score = primary + secondary * 2.2;
+        if (score < bestScore) {
+            bestScore = score;
+            best = candidate;
+        }
+    }
+    if (best) {
+        best.focus();
+        best.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    }
+}
+window.BlofyRemote = {
+    key: function (key) {
+        var _a;
+        var active = document.activeElement;
+        var activeTag = active === null || active === void 0 ? void 0 : active.tagName;
+        var typing = activeTag === "INPUT" && (active === null || active === void 0 ? void 0 : active.type) !== "range";
+        if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key) && !typing) {
+            spatialMove(key.replace("Arrow", "").toLowerCase());
+            return true;
+        }
+        if (["Enter", "Center"].includes(key)) {
+            if (!active || active === document.body)
+                focusFirst();
+            else if (activeTag === "INPUT")
+                active.focus();
+            else
+                (_a = active.click) === null || _a === void 0 ? void 0 : _a.call(active);
+            return true;
+        }
+        if (["Escape", "Back", "BrowserBack"].includes(key)) {
+            if (typing)
+                return false;
+            return goBack();
+        }
+        return false;
+    },
+};
+var lastResumeRefresh = 0;
+window.addEventListener("blofyresume", function () { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, _b;
+    var _c;
+    return __generator(this, function (_d) {
+        switch (_d.label) {
+            case 0:
+                if (Date.now() - lastResumeRefresh < 2000)
+                    return [2 /*return*/];
+                lastResumeRefresh = Date.now();
+                _d.label = 1;
+            case 1:
+                _d.trys.push([1, 3, , 4]);
+                _a = state;
+                return [4 /*yield*/, api("/api/license?device_id=".concat(encodeURIComponent(state.deviceId)))];
+            case 2:
+                _a.license = _d.sent();
+                if (state.session && ((_c = state.license) === null || _c === void 0 ? void 0 : _c.plan) !== "expired")
+                    renderMain();
+                else
+                    renderLogin();
+                return [3 /*break*/, 4];
+            case 3:
+                _b = _d.sent();
+                return [3 /*break*/, 4];
+            case 4: return [2 /*return*/];
+        }
+    });
+}); });
+document.addEventListener("keydown", function (event) {
+    var _a, _b;
+    var key = event.key;
+    var activeTag = (_a = document.activeElement) === null || _a === void 0 ? void 0 : _a.tagName;
+    var typing = activeTag === "INPUT" && ((_b = document.activeElement) === null || _b === void 0 ? void 0 : _b.type) !== "range";
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key) && !typing) {
+        event.preventDefault();
+        spatialMove(key.replace("Arrow", "").toLowerCase());
+    }
+    if ((key === "Enter" || event.keyCode === 13) && document.activeElement && !["BUTTON", "INPUT", "SELECT"].includes(activeTag)) {
+        event.preventDefault();
+        document.activeElement.click();
+    }
+    if (["Escape", "Backspace", "BrowserBack"].includes(key) || [10009, 461].includes(event.keyCode)) {
+        if (typing && key === "Backspace")
+            return;
+        event.preventDefault();
+        goBack();
+    }
+});
+init();

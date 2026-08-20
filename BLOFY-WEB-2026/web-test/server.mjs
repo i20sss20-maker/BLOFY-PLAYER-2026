@@ -635,7 +635,7 @@ async function serveStatic(req, res, pathname) {
     ...securityHeaders(),
     "content-type": mime[path.extname(target).toLowerCase()] || "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": /(?:app\.js|styles\.css|index\.html)$/.test(target) ? "no-cache" : "public, max-age=86400",
+    "cache-control": /(?:app(?:\.compat)?\.js|styles\.css|index\.html)$/.test(target) ? "no-cache" : "public, max-age=86400",
   });
   createReadStream(target).pipe(res);
   return true;

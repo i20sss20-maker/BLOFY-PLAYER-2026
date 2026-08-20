@@ -1,6 +1,6 @@
 # BLOFY PLAYER Android 2026
 
-الإصدار: `2026.08.20.3`
+الإصدار: `2026.08.20.4`
 
 تطبيق Android للهاتف والتابلت وAndroid TV والريسيفر. واجهة الحساب والفئات تأتي من Railway داخل WebView، لكن الفيديو لا يعمل داخل WebView ولا يمر عبر Railway: عند اختيار المحتوى يحصل التطبيق على رابط قصير مشفّر وموقّع، ثم يعيد Railway توجيه **Media3 على الجهاز مباشرة إلى مصدر المستخدم**.
 
@@ -41,7 +41,7 @@ export BLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app"
 
 ## اختبار القبول
 
-- تأكد أن `/api/health` يعيد `version: 2026.08.20.3` و`nativePlayback: direct`.
+- تأكد أن `/api/health` يعيد `version: 2026.08.20.4` و`nativePlayback: direct`.
 - ابنِ APK جديدًا؛ تحديث موقع Railway وحده لا يغيّر كود Media3 المثبت سابقًا.
 - اختبر قناة TS وقناة M3U8 وفيلمًا، ثم استخدم زر الرجوع للخروج من المشغل.
 - في Deploy Logs يجب أن يظهر `native-open ... mode=direct`، ويجب ألا يظهر `ffmpeg-start` عند التشغيل من APK.

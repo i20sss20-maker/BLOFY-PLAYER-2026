@@ -1,5 +1,32 @@
 "use strict";
 
+// Runtime polyfills for older Android TV/receiver WebViews.
+if (!String.prototype.padStart) {
+  String.prototype.padStart = function padStart(length, fill = " ") {
+    let value = String(this);
+    let padding = "";
+    const token = String(fill || " ");
+    while (value.length + padding.length < length) padding += token;
+    return padding.slice(0, Math.max(0, length - value.length)) + value;
+  };
+}
+if (!Array.from) Array.from = (value) => Array.prototype.slice.call(value);
+if (!Array.prototype.find) {
+  Array.prototype.find = function find(predicate) {
+    for (let index = 0; index < this.length; index += 1) if (predicate(this[index], index, this)) return this[index];
+    return undefined;
+  };
+}
+if (!Array.prototype.findIndex) {
+  Array.prototype.findIndex = function findIndex(predicate) {
+    for (let index = 0; index < this.length; index += 1) if (predicate(this[index], index, this)) return index;
+    return -1;
+  };
+}
+if (!Array.prototype.includes) {
+  Array.prototype.includes = function includes(value) { return this.indexOf(value) !== -1; };
+}
+
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
 const playerModal = document.getElementById("playerModal");
@@ -55,7 +82,8 @@ function getDeviceId() {
   let id = storage.get("blofy_device_id", "");
   if (/^BLOFY-[A-Z0-9-]{8,32}$/.test(id)) return id;
   const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
+  if (window.crypto && typeof window.crypto.getRandomValues === "function") window.crypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
   const value = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
   id = `BLOFY-${value.slice(0, 4)}-${value.slice(4, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}`;
   storage.set("blofy_device_id", id);
@@ -80,11 +108,33 @@ function formatTime(value) {
   return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+function fetchWithTimeout(path, options, timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("انتهت مهلة الاتصال بالخادم."));
+    }, timeoutMs);
+    fetch(path, options).then((response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(response);
+    }, (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetchWithTimeout(path, {
     ...options,
     headers: { "content-type": "application/json", "x-blofy-device-id": state.deviceId, ...(options.headers || {}) },
-  });
+  }, 10_000);
   let data = {};
   try { data = await response.json(); } catch {}
   if (!response.ok) {
@@ -128,6 +178,8 @@ async function init() {
     notify(error.message, "error");
   }
   if (state.session && state.license?.plan !== "expired") renderMain(); else renderLogin();
+  clearTimeout(window.__blofyBootTimer);
+  try { window.BlofyAndroid?.ready?.(); } catch {}
 }
 
 function renderLogin(error = "") {
@@ -353,6 +405,19 @@ function emptyState(icon, title, subtitle) {
   return `<div class="empty-state"><span class="empty-icon">${icon}</span><b>${title}</b><span>${subtitle}</span></div>`;
 }
 
+function queryString(values) {
+  return Object.keys(values).map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(values[key] || "")}`).join("&");
+}
+
+function formValues(form) {
+  const values = {};
+  for (let index = 0; index < form.elements.length; index += 1) {
+    const field = form.elements[index];
+    if (field.name && !field.disabled) values[field.name] = field.value;
+  }
+  return values;
+}
+
 async function navigate(route, push = true) {
   if (push && state.route !== route) state.navStack.push(state.route);
   state.route = route;
@@ -373,7 +438,7 @@ async function loadCatalog(reset = false) {
   state.loading = true;
   renderMain();
   try {
-    const params = new URLSearchParams({ type: state.type, page: String(state.page), category: state.category, search: state.search });
+    const params = queryString({ type: state.type, page: String(state.page), category: state.category, search: state.search });
     let data;
     if (!state.categories.length) {
       const [categoryData, catalogData] = await Promise.all([
@@ -419,9 +484,19 @@ async function openDetail(item) {
 }
 
 function goBack() {
-  if (!playerModal.hidden) return closePlayer();
-  const route = state.navStack.pop() || "home";
-  navigate(route, false);
+  if (!playerModal.hidden) {
+    closePlayer();
+    return true;
+  }
+  if (state.navStack.length) {
+    navigate(state.navStack.pop(), false);
+    return true;
+  }
+  if (state.route !== "home") {
+    navigate("home", false);
+    return true;
+  }
+  return false;
 }
 
 function toggleFavorite(item) {
@@ -577,7 +652,7 @@ app.addEventListener("submit", async (event) => {
   button.disabled = true;
   button.textContent = "جاري التحقق…";
   formError.textContent = "";
-  const values = Object.fromEntries(new FormData(event.target));
+  const values = formValues(event.target);
   try {
     const data = await api("/api/session", { method: "POST", body: JSON.stringify({ kind: state.sourceTab, ...values }) });
     state.session = data.session;
@@ -605,7 +680,7 @@ app.addEventListener("error", (event) => {
   const replacement = document.createElement("span");
   replacement.className = "poster-placeholder";
   replacement.textContent = "▶";
-  target.replaceWith(replacement);
+  if (target.parentNode) target.parentNode.replaceChild(replacement, target);
 }, true);
 
 app.addEventListener("change", (event) => {
@@ -743,8 +818,7 @@ window.BlofyRemote = {
     }
     if (["Escape", "Back", "BrowserBack"].includes(key)) {
       if (typing) return false;
-      goBack();
-      return true;
+      return goBack();
     }
     return false;
   },

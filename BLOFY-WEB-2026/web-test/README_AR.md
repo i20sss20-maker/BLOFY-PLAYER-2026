@@ -1,6 +1,6 @@
 # BLOFY PLAYER WEB / Railway 2026
 
-الإصدار: `2026.08.20.3`
+الإصدار: `2026.08.20.4`
 
 هذا المجلد هو Root Directory الصحيح في Railway:
 
@@ -35,7 +35,7 @@ TRANSCODE_VIDEO=false
 5. بعد النشر افتح `/api/health`. الإصدار الصحيح يعيد:
 
 ```json
-{"ok":true,"version":"2026.08.20.3","nativePlayback":"direct"}
+{"ok":true,"version":"2026.08.20.4","nativePlayback":"direct"}
 ```
 
 ## مهم: المتصفح مقابل APK

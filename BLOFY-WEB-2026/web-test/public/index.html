@@ -46,7 +46,18 @@
     </div>
 
     <div id="toast" class="toast" role="status" hidden></div>
-    <script src="/vendor/hls.min.js"></script>
-    <script src="/app.js"></script>
+    <script>
+      (function () {
+        window.__blofyBootTimer = setTimeout(function () {
+          var root = document.getElementById("app");
+          if (!root || !root.querySelector(".boot-screen")) return;
+          root.innerHTML = '<section class="boot-screen"><img src="/assets/blofy-logo-512.png" alt="BLOFY PLAYER"><h2>تعذر بدء واجهة التطبيق</h2><p class="muted">أعد المحاولة، وإذا تكرر الخطأ حدّث Android System WebView.</p><div class="button-row"><button class="primary-button" onclick="location.reload()">إعادة المحاولة</button><button class="secondary-button" onclick="if(window.BlofyAndroid&&window.BlofyAndroid.exitApp){window.BlofyAndroid.exitApp()}else{history.back()}">إغلاق التطبيق</button></div></section>';
+          var firstButton = root.querySelector("button");
+          if (firstButton) firstButton.focus();
+        }, 12000);
+      })();
+    </script>
+    <script async src="/vendor/hls.min.js"></script>
+    <script src="/app.compat.js?v=202608204"></script>
   </body>
 </html>
