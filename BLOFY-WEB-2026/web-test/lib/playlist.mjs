@@ -18,10 +18,13 @@ function kindFor(group, url) {
 
 function extensionFor(url, type) {
   try {
-    const match = new URL(url).pathname.match(/\.([a-zA-Z0-9]{2,6})$/);
-    return match?.[1]?.toLowerCase() || (type === "live" ? "m3u8" : "mp4");
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\.([a-zA-Z0-9]{2,6})$/);
+    if (match?.[1]) return match[1].toLowerCase();
+    if (type === "live" && /(?:m3u8|hls)/i.test(`${parsed.pathname} ${parsed.search}`)) return "m3u8";
+    return type === "live" ? "ts" : "mp4";
   } catch {
-    return type === "live" ? "m3u8" : "mp4";
+    return type === "live" ? "ts" : "mp4";
   }
 }
 

@@ -168,7 +168,7 @@ function renderLogin(error = "") {
           <div class="device-card">
             <div class="device-head"><h2>حالة الجهاز</h2><p>فعّل التطبيق أو استخدم الفترة التجريبية</p></div>
             <div class="device-row"><label>رقم الجهاز</label><div class="device-code"><b>${escapeHtml(state.deviceId)}</b><button class="copy-button" data-action="copy-device" data-focusable aria-label="نسخ رقم الجهاز">▣</button></div></div>
-            <div class="device-row"><label>حالة الاشتراك</label><div class="license-line"><b>${escapeHtml(license.status || "جاري التحقق")}</b><span class="status-badge ${expired ? "expired" : ""}">${expired ? "منتهي" : `${license.remainingDays ?? "—"} أيام متبقية`}</span></div><div class="small muted" style="margin-top:9px">الانتهاء: ${formatDate(license.expiresAt)}</div></div>
+            <div class="device-row"><label>حالة الاشتراك</label><div class="license-line"><b>${escapeHtml(license.status || "جاري التحقق")}</b><span class="status-badge ${expired ? "expired" : ""}">${expired ? "منتهي" : `${escapeHtml(license.remainingDays ?? "—")} أيام متبقية`}</span></div><div class="small muted" style="margin-top:9px">الانتهاء: ${formatDate(license.expiresAt)}</div></div>
             <div class="qr-block"><b>تفعيل الجهاز</b><p class="small muted">امسح الرمز ثم أدخل رقم الجهاز</p><div class="qr-wrap"><img src="/api/qr?text=${encodeURIComponent(`${license.activationUrl || "https://blofy.tv/activate"}?device_id=${state.deviceId}`)}" alt="رمز تفعيل الجهاز" /></div><div class="activation-link">${escapeHtml(license.activationUrl || "https://blofy.tv/activate")}</div></div>
           </div>
         </aside>
@@ -469,8 +469,8 @@ async function openPlayer(item, compatibility = false) {
   if (window.BlofyAndroid?.play) {
     try {
       const native = await api(`/api/native-link/${type}/${encodeURIComponent(item.id)}?ext=${encodeURIComponent(extension)}`);
+      if (native.mode !== "direct") throw new Error("الخادم لا يستخدم وضع Media3 المباشر");
       const nativeUrl = new URL(native.url, location.origin);
-      if (compatibility) nativeUrl.searchParams.set("compat", "2");
       window.BlofyAndroid.play(nativeUrl.toString(), item.name || "BLOFY PLAYER", type, native.extension || extension);
       return;
     } catch (error) {

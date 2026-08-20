@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import QRCode from "qrcode";
 import { LicenseStore } from "./lib/license-store.mjs";
 import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs";
+import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackTarget } from "./lib/runtime.mjs";
 import { XtreamClient } from "./lib/xtream.mjs";
 import { pageItems, parseM3u } from "./lib/playlist.mjs";
 import {
@@ -411,7 +412,13 @@ async function handleApi(req, res, url) {
   if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
 
   if (req.method === "GET" && url.pathname === "/api/health") {
-    return json(res, 200, { ok: true, service: "BLOFY PLAYER", time: new Date().toISOString() }, securityHeaders());
+    return json(res, 200, {
+      ok: true,
+      service: "BLOFY PLAYER",
+      version: APP_VERSION,
+      nativePlayback: NATIVE_PLAYBACK_MODE,
+      time: new Date().toISOString(),
+    }, securityHeaders());
   }
 
   if (req.method === "GET" && url.pathname === "/api/license") {
@@ -515,9 +522,8 @@ async function handleApi(req, res, url) {
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
     if (!raw) return json(res, 403, { error: "انتهى رابط Media3، أعد فتح المحتوى." }, securityHeaders());
     await assertSafeUrl(raw);
-    const compatibility = url.searchParams.get("compat") === "2";
-    const location = compatibility ? transcodePath(raw, true) : raw;
-    console.log(`[media] native-open host=${sourceHost(raw)} mode=${compatibility ? "compat" : "direct"}`);
+    const location = nativePlaybackTarget(raw);
+    console.log(`[media] native-open host=${sourceHost(raw)} mode=${NATIVE_PLAYBACK_MODE}`);
     res.writeHead(302, { ...securityHeaders(), location, "cache-control": "no-store" });
     res.end();
     return;
@@ -540,7 +546,11 @@ async function handleApi(req, res, url) {
     const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
     const source = await sourceFor(session, type, id, extension);
     console.log(`[media] native-link type=${type} id=${id} ext=${extension} host=${sourceHost(source)}`);
-    return json(res, 200, { url: signedPath(source, "/api/native-play", 7200), extension }, securityHeaders());
+    return json(res, 200, {
+      url: signedPath(source, "/api/native-play", 7200),
+      extension,
+      mode: NATIVE_PLAYBACK_MODE,
+    }, securityHeaders());
   }
 
   if (req.method === "GET" && url.pathname === "/api/categories") {
@@ -617,7 +627,7 @@ async function serveStatic(req, res, pathname) {
   else {
     const relative = pathname === "/" ? "index.html" : pathname === "/activate" || pathname === "/activate/" ? "activate.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
     target = path.resolve(publicDir, relative);
-    if (!target.startsWith(publicDir)) return false;
+    if (target !== publicDir && !target.startsWith(`${publicDir}${path.sep}`)) return false;
   }
   if (!existsSync(target) || !statSync(target).isFile()) return false;
   const stat = statSync(target);

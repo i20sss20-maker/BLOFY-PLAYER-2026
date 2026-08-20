@@ -24,3 +24,10 @@ test("paginates and filters Xtream category ids", () => {
   assert.equal(result.total, 1);
   assert.equal(result.items[0].id, "1");
 });
+
+test("extensionless live M3U sources default to raw transport stream", () => {
+  const [item] = parseM3u(`#EXTM3U
+#EXTINF:-1 group-title="Live",Channel
+https://media.example/live/channel?id=42`);
+  assert.equal(item.extension, "ts");
+});

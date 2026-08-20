@@ -65,13 +65,34 @@ public final class MainActivity extends Activity {
     private static String normalizedBaseUrl(String value) {
         try {
             String clean = String.valueOf(value).trim();
-            while (clean.endsWith("/")) clean = clean.substring(0, clean.length() - 1);
             Uri uri = Uri.parse(clean);
-            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) return null;
-            return clean;
+            if (!"https".equalsIgnoreCase(uri.getScheme())
+                    || uri.getHost() == null
+                    || uri.getUserInfo() != null
+                    || uri.getEncodedAuthority() == null) return null;
+            String host = uri.getHost().toLowerCase(Locale.US);
+            if (!host.matches("^[a-z0-9.-]+$") || host.startsWith(".") || host.endsWith(".")) return null;
+            int port = uri.getPort();
+            if (port == 0 || port > 65_535) return null;
+            if (port == 443) port = -1;
+            return "https://" + host + (port > 0 ? ":" + port : "");
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private static boolean sameOrigin(Uri target, Uri allowed) {
+        return target != null
+                && allowed != null
+                && "https".equalsIgnoreCase(target.getScheme())
+                && target.getUserInfo() == null
+                && allowed.getHost() != null
+                && allowed.getHost().equalsIgnoreCase(target.getHost())
+                && effectiveHttpsPort(allowed) == effectiveHttpsPort(target);
+    }
+
+    private static int effectiveHttpsPort(Uri uri) {
+        return uri.getPort() < 0 ? 443 : uri.getPort();
     }
 
     private int dp(int value) {
@@ -199,7 +220,7 @@ public final class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri target = request.getUrl();
                 Uri allowed = Uri.parse(activeBaseUrl);
-                if ("https".equalsIgnoreCase(target.getScheme()) && allowed.getHost() != null && allowed.getHost().equalsIgnoreCase(target.getHost())) return false;
+                if (sameOrigin(target, allowed)) return false;
                 try { startActivity(new Intent(Intent.ACTION_VIEW, target)); } catch (Exception ignored) {}
                 return true;
             }
@@ -252,18 +273,14 @@ public final class MainActivity extends Activity {
                     Uri target = Uri.parse(url);
                     Uri allowed = Uri.parse(activeBaseUrl);
                     boolean signedNative = "/api/native-play".equals(target.getPath());
-                    boolean legacyPlay = target.getPath() != null && target.getPath().startsWith("/api/play/");
-                    if (!"https".equalsIgnoreCase(target.getScheme()) || allowed.getHost() == null || !allowed.getHost().equalsIgnoreCase(target.getHost()) || (!signedNative && !legacyPlay)) {
+                    if (!sameOrigin(target, allowed) || !signedNative) {
                         throw new IllegalArgumentException("رابط تشغيل غير مسموح");
                     }
-                    String cookie = signedNative ? "" : CookieManager.getInstance().getCookie(url);
                     Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
                     intent.putExtra(PlayerActivity.EXTRA_URL, url);
                     intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
                     intent.putExtra(PlayerActivity.EXTRA_KIND, kind);
                     intent.putExtra(PlayerActivity.EXTRA_EXTENSION, extension);
-                    intent.putExtra(PlayerActivity.EXTRA_COOKIE, cookie == null ? "" : cookie);
-                    intent.putExtra(PlayerActivity.EXTRA_DEVICE_ID, signedNative ? "" : deviceId());
                     startActivity(intent);
                 } catch (Exception error) {
                     Toast.makeText(MainActivity.this, error.getMessage(), Toast.LENGTH_LONG).show();

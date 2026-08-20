@@ -30,11 +30,15 @@ import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory;
+import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.extractor.DefaultExtractorsFactory;
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import androidx.media3.ui.PlayerView;
 
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 
 @UnstableApi
@@ -43,9 +47,6 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     public static final String EXTRA_TITLE = "title";
     public static final String EXTRA_KIND = "kind";
     public static final String EXTRA_EXTENSION = "extension";
-    public static final String EXTRA_COOKIE = "cookie";
-    public static final String EXTRA_DEVICE_ID = "device_id";
-
     private PlayerView playerView;
     private ProgressBar progress;
     private LinearLayout errorPanel;
@@ -57,20 +58,16 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private String title;
     private String kind;
     private String extension;
-    private String cookie;
-    private String deviceId;
     private long resumePosition;
-    private boolean forceVideoCompatibility;
+    private int connectionAttempt;
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
     private final Runnable playbackTimeout = () -> {
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
         player.stop();
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        errorText.setText(forceVideoCompatibility
-                ? "لم يستجب المصدر حتى بوضع التوافق. تحقق من المصدر أو جرّب قناة أخرى."
-                : "تأخر المصدر في الاستجابة. اضغط وضع التوافق لتحويل البث إلى H.264/AAC.");
-        retryButton.setText(forceVideoCompatibility ? "إعادة المحاولة" : "تشغيل بوضع التوافق");
+        errorText.setText("لم تصل بيانات فيديو قابلة للتشغيل خلال المهلة. أعد الاتصال مباشرة بالمصدر أو جرّب قناة أخرى. لا يمر الفيديو عبر Railway.");
+        retryButton.setText("إعادة الاتصال مباشرة");
         retryButton.requestFocus();
     };
 
@@ -80,9 +77,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         url = getIntent().getStringExtra(EXTRA_URL);
         title = valueOr(getIntent().getStringExtra(EXTRA_TITLE), "BLOFY PLAYER");
         kind = valueOr(getIntent().getStringExtra(EXTRA_KIND), "movies");
-        extension = valueOr(getIntent().getStringExtra(EXTRA_EXTENSION), "mp4").toLowerCase(Locale.US);
-        cookie = valueOr(getIntent().getStringExtra(EXTRA_COOKIE), "");
-        deviceId = valueOr(getIntent().getStringExtra(EXTRA_DEVICE_ID), "");
+        extension = PlaybackPolicy.normalizeExtension(
+                getIntent().getStringExtra(EXTRA_EXTENSION),
+                "live".equals(kind) ? "ts" : "mp4");
         if (!validUrl(url)) {
             finish();
             return;
@@ -162,7 +159,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         errorPanel.addView(errorText, new LinearLayout.LayoutParams(dp(520), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         retryButton = new Button(this);
-        retryButton.setText("تشغيل بوضع التوافق");
+        retryButton.setText("إعادة الاتصال مباشرة");
         retryButton.setTextColor(Color.WHITE);
         retryButton.setTextSize(15);
         retryButton.setAllCaps(false);
@@ -188,52 +185,33 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 .build();
     }
 
-    private String mimeType() {
-        if (forceVideoCompatibility || "m3u8".equals(extension)) return "application/x-mpegURL";
-        switch (extension) {
-            case "mpd": return "application/dash+xml";
-            case "mp4":
-            case "m4v":
-            case "mov": return "video/mp4";
-            case "mkv": return "video/x-matroska";
-            case "webm": return "video/webm";
-            case "ts":
-            case "mts":
-            case "m2ts": return "video/mp2t";
-            case "mp3": return "audio/mpeg";
-            case "aac": return "audio/mp4a-latm";
-            default: return "application/x-mpegURL";
-        }
-    }
-
-    private boolean directContainer() {
-        return extension.matches("mp4|m4v|mov|mkv|webm|ts|mts|m2ts|mp3|aac|m3u8|mpd");
-    }
-
     private void schedulePlaybackTimeout() {
         playbackHandler.removeCallbacks(playbackTimeout);
-        playbackHandler.postDelayed(playbackTimeout, forceVideoCompatibility ? 35_000 : 20_000);
+        playbackHandler.postDelayed(playbackTimeout, PlaybackPolicy.startupTimeoutMs(connectionAttempt));
     }
 
     private void initializePlayer() {
         if (player != null) return;
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", "BLOFY-PLAYER-ANDROID/2026 Media3/1.11");
+        headers.put("User-Agent", "VLC/3.0.20 LibVLC/3.0.20 BLOFY-Media3/1.11");
         headers.put("Accept", "*/*");
-        if (!cookie.isEmpty()) headers.put("Cookie", cookie);
-        if (!deviceId.isEmpty()) headers.put("X-Blofy-Device-Id", deviceId);
 
         DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
-                .setConnectTimeoutMs(7_000)
-                .setReadTimeoutMs(12_000)
+                .setConnectTimeoutMs(15_000)
+                .setReadTimeoutMs(30_000)
                 .setAllowCrossProtocolRedirects(true)
                 .setDefaultRequestProperties(headers);
         DefaultDataSource.Factory dataSourceFactory = new DefaultDataSource.Factory(this, httpFactory);
+        int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+                | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
+        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory()
+                .setTsExtractorFlags(tsFlags);
+        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory);
         DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
                 .setEnableDecoderFallback(true);
 
         player = new ExoPlayer.Builder(this, renderers)
-                .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSourceFactory))
+                .setMediaSourceFactory(mediaSourceFactory)
                 .setLoadControl(createLoadControl())
                 .build();
         player.addListener(this);
@@ -245,15 +223,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         player.setWakeMode(C.WAKE_MODE_NETWORK);
         playerView.setPlayer(player);
 
-        String playbackUrl = url;
-        if (forceVideoCompatibility) playbackUrl += url.contains("?") ? "&compat=2" : "?compat=2";
-        else if (!directContainer() && !url.contains("compat=1")) playbackUrl += url.contains("?") ? "&compat=1" : "?compat=1";
-        MediaItem item = new MediaItem.Builder()
-                .setUri(playbackUrl)
-                .setMediaId(title)
-                .setMimeType(mimeType())
-                .build();
-        player.setMediaItem(item, Math.max(0, resumePosition));
+        MediaItem.Builder itemBuilder = new MediaItem.Builder()
+                .setUri(PlaybackPolicy.directPlaybackUrl(url))
+                .setMediaId(title);
+        String mimeType = PlaybackPolicy.mimeType(extension);
+        if (mimeType != null) itemBuilder.setMimeType(mimeType);
+        MediaItem item = itemBuilder.build();
+        MediaSource mediaSource = PlaybackPolicy.isHls(extension)
+                ? new HlsMediaSource.Factory(dataSourceFactory)
+                    .setExtractorFactory(new DefaultHlsExtractorFactory(tsFlags, true))
+                    .createMediaSource(item)
+                : mediaSourceFactory.createMediaSource(item);
+        player.setMediaSource(mediaSource, Math.max(0, resumePosition));
         player.prepare();
         player.play();
         progress.setVisibility(View.VISIBLE);
@@ -263,19 +244,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private void retryPlayback() {
-        if (!forceVideoCompatibility) {
-            forceVideoCompatibility = true;
-            releasePlayer();
-            titleView.setVisibility(View.VISIBLE);
-            initializePlayer();
-        } else if (player == null) initializePlayer();
-        else {
-            errorPanel.setVisibility(View.GONE);
-            progress.setVisibility(View.VISIBLE);
-            player.prepare();
-            player.play();
-            schedulePlaybackTimeout();
-        }
+        connectionAttempt += 1;
+        releasePlayer();
+        titleView.setVisibility(View.VISIBLE);
+        initializePlayer();
     }
 
     @Override
@@ -284,6 +256,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         else if (playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) progress.setVisibility(View.GONE);
         if (playbackState == Player.STATE_READY) {
             playbackHandler.removeCallbacks(playbackTimeout);
+            connectionAttempt = 0;
             titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
         }
     }
@@ -293,10 +266,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playbackHandler.removeCallbacks(playbackTimeout);
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        errorText.setText(forceVideoCompatibility
-                ? "لم يستجب المصدر حتى بعد تحويله إلى H.264/AAC. تحقق من الرابط أو جرّب محتوى آخر.\n" + error.getErrorCodeName()
-                : "لم يستجب الرابط أو أن ترميز الفيديو غير مدعوم على الجهاز. اضغط وضع التوافق ليحوّل الخادم الفيديو، مع بقاء Media3 هو المشغل الوحيد.\n" + error.getErrorCodeName());
-        retryButton.setText(forceVideoCompatibility ? "إعادة المحاولة" : "تشغيل بوضع التوافق");
+        errorText.setText("تعذر الاتصال المباشر بالمصدر أو أن ترميز القناة غير مدعوم على هذا الجهاز. أعد الاتصال أو جرّب قناة أخرى.\n" + error.getErrorCodeName());
+        retryButton.setText("إعادة الاتصال مباشرة");
         retryButton.requestFocus();
     }
 

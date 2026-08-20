@@ -1,6 +1,6 @@
 {
   "name": "blofy-player-web",
-  "version": "2026.8.20",
+  "version": "2026.8.20-3",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "NODE_ENV=development node --watch server.mjs",
-    "check": "node --check server.mjs && node --check lib/security.mjs && node --check lib/playlist.mjs && node --check lib/xtream.mjs && node --check lib/license-store.mjs && node --check lib/media-response.mjs && node --check public/app.js && node --check public/activate.js",
+    "check": "node --check server.mjs && node --check lib/security.mjs && node --check lib/playlist.mjs && node --check lib/xtream.mjs && node --check lib/license-store.mjs && node --check lib/media-response.mjs && node --check lib/runtime.mjs && node --check public/app.js && node --check public/activate.js",
     "test": "node --test"
   },
   "dependencies": {
