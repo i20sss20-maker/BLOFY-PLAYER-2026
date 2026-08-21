@@ -1,9 +1,12 @@
 package tv.blofy.commercial.provider;
 
+import android.util.JsonReader;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.io.Reader;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.HttpUrl;
@@ -13,8 +16,9 @@ import okhttp3.Response;
 
 /** Direct Xtream Codes client. Requests go from the Android device to the IPTV provider. */
 public final class XtreamClient {
-    private static final String USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
+    public interface CatalogConsumer { void accept(JSONObject item) throws Exception; }
 
+    private static final String USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
     private final ProviderProfile profile;
     private final OkHttpClient http;
 
@@ -25,7 +29,7 @@ public final class XtreamClient {
         this.profile = profile;
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(35, TimeUnit.SECONDS)
+                .readTimeout(45, TimeUnit.SECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true)
@@ -33,7 +37,7 @@ public final class XtreamClient {
     }
 
     public JSONObject validate() throws Exception {
-        JSONObject root = object(apiUrl(null, null));
+        JSONObject root = object(apiUrl());
         JSONObject user = root.optJSONObject("user_info");
         if (user == null) throw new Exception("المزوّد لم يرجع بيانات حساب Xtream.");
         String auth = user.optString("auth", "");
@@ -45,8 +49,7 @@ public final class XtreamClient {
     }
 
     public JSONArray categories(String type) throws Exception {
-        String action = action(type, true);
-        JSONArray raw = array(apiUrl("action", action));
+        JSONArray raw = array(apiUrl("action", action(type, true)));
         JSONArray out = new JSONArray();
         for (int i = 0; i < raw.length(); i++) {
             JSONObject row = raw.optJSONObject(i);
@@ -59,16 +62,28 @@ public final class XtreamClient {
         return out;
     }
 
-    public JSONArray catalog(String type) throws Exception {
-        JSONArray raw = array(apiUrl("action", action(type, false)));
-        JSONArray out = new JSONArray();
-        for (int i = 0; i < raw.length(); i++) {
-            JSONObject row = raw.optJSONObject(i);
-            if (row == null) continue;
-            JSONObject item = normalize(row, type);
-            if (!item.optString("id").isEmpty()) out.put(item);
+    /** Streaming parser for very large Xtream libraries. Only one item is materialized at a time. */
+    public int streamCatalog(String type, CatalogConsumer consumer) throws Exception {
+        Request request = request(apiUrl("action", action(type, false)));
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful()) throw new Exception("المزوّد رفض المكتبة (HTTP " + response.code() + ").");
+            if (response.body() == null) throw new Exception("مكتبة المزوّد فارغة.");
+            try (Reader body = response.body().charStream(); JsonReader reader = new JsonReader(body)) {
+                int count = 0;
+                reader.beginArray();
+                while (reader.hasNext()) {
+                    JSONObject item = readCatalogItem(reader, type);
+                    if (!item.optString("id").isEmpty()) {
+                        consumer.accept(item);
+                        count++;
+                    }
+                }
+                reader.endArray();
+                return count;
+            }
+        } catch (IOException error) {
+            throw new Exception("تعذر قراءة مكتبة IPTV مباشرة: " + error.getMessage());
         }
-        return out;
     }
 
     public JSONObject movieInfo(String id) throws Exception {
@@ -85,10 +100,8 @@ public final class XtreamClient {
     }
 
     public String playbackUrl(String type, String id, String extension) {
-        String folder;
-        if ("live".equals(type)) folder = "live";
-        else if ("episode".equals(type) || "series".equals(type)) folder = "series";
-        else folder = "movie";
+        String folder = "live".equals(type) ? "live"
+                : ("episode".equals(type) || "series".equals(type)) ? "series" : "movie";
         String ext = cleanExtension(extension, "live".equals(type) ? "ts" : "mp4");
         return profile.serverUrl + "/" + folder + "/" + encodePath(profile.username) + "/"
                 + encodePath(profile.password) + "/" + encodePath(id) + "." + ext;
@@ -96,31 +109,68 @@ public final class XtreamClient {
 
     public String serverName() { return profile.name.isEmpty() ? profile.serverUrl : profile.name; }
 
-    private JSONObject normalize(JSONObject row, String type) throws Exception {
-        JSONObject item = new JSONObject();
-        boolean series = "series".equals(type);
-        String id = series ? row.optString("series_id") : row.optString("stream_id");
-        String image = series ? row.optString("cover") : row.optString("stream_icon");
-        String backdrop = "";
-        JSONArray backdrops = row.optJSONArray("backdrop_path");
-        if (backdrops != null && backdrops.length() > 0) backdrop = backdrops.optString(0, "");
-        if (backdrop.isEmpty()) backdrop = row.optString("backdrop_path", "");
-        String year = row.optString("year", "");
-        if (year.isEmpty()) {
-            String released = row.optString("releaseDate", row.optString("release_date", ""));
-            if (released.length() >= 4) year = released.substring(0, 4);
+    private JSONObject readCatalogItem(JsonReader reader, String type) throws Exception {
+        String id = "", name = "", image = "", backdrop = "", category = "", rating = "", year = "", ext = "";
+        reader.beginObject();
+        while (reader.hasNext()) {
+            String key = reader.nextName();
+            switch (key) {
+                case "stream_id": if (!"series".equals(type)) id = nextString(reader); else reader.skipValue(); break;
+                case "series_id": if ("series".equals(type)) id = nextString(reader); else reader.skipValue(); break;
+                case "name": name = nextString(reader); break;
+                case "stream_icon": if (!"series".equals(type)) image = nextString(reader); else reader.skipValue(); break;
+                case "cover": if ("series".equals(type)) image = nextString(reader); else reader.skipValue(); break;
+                case "category_id": category = nextString(reader); break;
+                case "rating": rating = nextString(reader); break;
+                case "year": year = nextString(reader); break;
+                case "releaseDate":
+                case "release_date": {
+                    String release = nextString(reader);
+                    if (year.isEmpty() && release.length() >= 4) year = release.substring(0, 4);
+                    break;
+                }
+                case "container_extension": ext = nextString(reader); break;
+                case "backdrop_path": backdrop = readBackdrop(reader); break;
+                default: reader.skipValue();
+            }
         }
+        reader.endObject();
+        JSONObject item = new JSONObject();
         item.put("type", type);
         item.put("id", id);
-        item.put("name", row.optString("name"));
+        item.put("name", name);
         item.put("image", image);
         item.put("backdrop", backdrop);
-        item.put("categoryId", row.optString("category_id"));
-        item.put("rating", row.optString("rating"));
+        item.put("categoryId", category);
+        item.put("rating", rating);
         item.put("year", year);
-        item.put("extension", series ? "" : cleanExtension(
-                row.optString("container_extension"), "live".equals(type) ? "ts" : "mp4"));
+        item.put("extension", "series".equals(type) ? "" : cleanExtension(ext, "live".equals(type) ? "ts" : "mp4"));
         return item;
+    }
+
+    private static String readBackdrop(JsonReader reader) throws IOException {
+        switch (reader.peek()) {
+            case BEGIN_ARRAY:
+                String first = "";
+                reader.beginArray();
+                if (reader.hasNext()) first = nextString(reader);
+                while (reader.hasNext()) reader.skipValue();
+                reader.endArray();
+                return first;
+            case STRING: return reader.nextString();
+            case NULL: reader.nextNull(); return "";
+            default: reader.skipValue(); return "";
+        }
+    }
+
+    private static String nextString(JsonReader reader) throws IOException {
+        switch (reader.peek()) {
+            case STRING: return reader.nextString();
+            case NUMBER: return reader.nextString();
+            case BOOLEAN: return String.valueOf(reader.nextBoolean());
+            case NULL: reader.nextNull(); return "";
+            default: reader.skipValue(); return "";
+        }
     }
 
     private String apiUrl(String... pairs) {
@@ -129,34 +179,34 @@ public final class XtreamClient {
         HttpUrl.Builder builder = base.newBuilder()
                 .addQueryParameter("username", profile.username)
                 .addQueryParameter("password", profile.password);
-        if (pairs != null) {
-            for (int i = 0; i + 1 < pairs.length; i += 2) {
-                if (pairs[i] != null && pairs[i + 1] != null) builder.addQueryParameter(pairs[i], pairs[i + 1]);
-            }
+        if (pairs != null) for (int i = 0; i + 1 < pairs.length; i += 2) {
+            if (pairs[i] != null && pairs[i + 1] != null) builder.addQueryParameter(pairs[i], pairs[i + 1]);
         }
         return builder.build().toString();
     }
 
+    private Request request(String url) {
+        return new Request.Builder().url(url)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json,*/*")
+                .build();
+    }
+
     private JSONObject object(String url) throws Exception {
-        String text = request(url);
+        String text = requestText(url);
         try { return new JSONObject(text); }
         catch (Exception error) { throw new Exception("المزوّد رجع استجابة Xtream غير صالحة."); }
     }
 
     private JSONArray array(String url) throws Exception {
-        String text = request(url);
+        String text = requestText(url);
         try { return new JSONArray(text); }
         catch (Exception error) { throw new Exception("المزوّد رجع قائمة Xtream غير صالحة."); }
     }
 
-    private String request(String url) throws Exception {
-        Request request = new Request.Builder().url(url)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "application/json,*/*")
-                .build();
-        try (Response response = http.newCall(request).execute()) {
-            int code = response.code();
-            if (!response.isSuccessful()) throw new Exception("المزوّد رفض الطلب (HTTP " + code + ").");
+    private String requestText(String url) throws Exception {
+        try (Response response = http.newCall(request(url)).execute()) {
+            if (!response.isSuccessful()) throw new Exception("المزوّد رفض الطلب (HTTP " + response.code() + ").");
             if (response.body() == null) throw new Exception("استجابة المزوّد فارغة.");
             return response.body().string();
         } catch (IOException error) {
