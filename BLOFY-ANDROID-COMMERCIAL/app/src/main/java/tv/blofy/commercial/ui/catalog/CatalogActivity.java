@@ -92,7 +92,8 @@ public final class CatalogActivity extends LicensedActivity {
                 this::open,
                 this::toggleFavorite,
                 (position, item) -> focusedPosition = position,
-                this::moveFromGridToCategories);
+                this::moveFromGridToCategories,
+                this::moveFromGridToSearch);
         binding.list.setAdapter(mediaAdapter);
 
         categoryAdapter = new CategoryAdapter(this::selectCategory, this::moveFromCategoriesToGrid);
@@ -110,9 +111,9 @@ public final class CatalogActivity extends LicensedActivity {
         });
         binding.search.addTextChangedListener(new SimpleTextWatcher(text -> scheduleSearch(safe(text))));
         binding.search.setOnKeyListener((view, keyCode, event) -> {
-            if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                return focusCurrentMedia();
-            }
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return focusCurrentMedia();
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return categoryAdapter.focusSelected(binding.categories);
             return false;
         });
 
@@ -270,6 +271,13 @@ public final class CatalogActivity extends LicensedActivity {
 
     private boolean moveFromCategoriesToGrid() { return focusCurrentMedia(); }
 
+    /** Every card in the first row returns to the single search target. */
+    private boolean moveFromGridToSearch(int position) {
+        if (position >= gridLayout.getSpanCount()) return false;
+        binding.search.requestFocus();
+        return true;
+    }
+
     private void scheduleSearch(String next) {
         if (pendingSearch != null) binding.search.removeCallbacks(pendingSearch);
         pendingSearch = () -> applySearch(next);
@@ -354,6 +362,16 @@ public final class CatalogActivity extends LicensedActivity {
     }
 
     private static String safe(String value) { return value == null ? "" : value.trim(); }
+
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
+                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            getOnBackPressedDispatcher().onBackPressed();
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
 
     @Override protected void onResume() {
         super.onResume();

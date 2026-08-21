@@ -30,12 +30,18 @@ export function publicCatalogItem(value, signer) {
  */
 export function publicSeriesItem(value, signer) {
   const item = structuredClone(value || {});
+  delete item.sourceUrl;
+  delete item.direct_source;
   item.image = signedImage(item.image, signer);
   item.backdrop = signedImage(item.backdrop, signer);
   item.seasons = Array.isArray(item.seasons) ? item.seasons : [];
   for (const season of item.seasons) {
     season.episodes = Array.isArray(season.episodes) ? season.episodes : [];
-    for (const episode of season.episodes) episode.image = signedImage(episode.image, signer);
+    for (const episode of season.episodes) {
+      delete episode.sourceUrl;
+      delete episode.direct_source;
+      episode.image = signedImage(episode.image, signer);
+    }
   }
   return item;
 }

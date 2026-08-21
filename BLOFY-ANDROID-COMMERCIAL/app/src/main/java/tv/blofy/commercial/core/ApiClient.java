@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import tv.blofy.commercial.BuildConfig;
 
@@ -22,16 +23,19 @@ public final class ApiClient {
     private static final int CONNECT_TIMEOUT = 8_000;
     private static final int READ_TIMEOUT = 20_000;
     private static final int CATALOG_READ_TIMEOUT = 150_000;
+    private static final String COOKIE_PREFERENCES = "blofy_native_http";
+    private static final String COOKIE_KEY = "cookies";
+    private static final Object COOKIE_LOCK = new Object();
+    private static final AtomicLong COOKIE_REQUEST_IDS = new AtomicLong();
+    private static final Map<String, Long> COOKIE_VERSIONS = new LinkedHashMap<>();
     private final Context context;
     private final SharedPreferences preferences;
     private final String baseUrl = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "");
-    private final Map<String, String> cookies = new LinkedHashMap<>();
 
     public ApiClient(Context context) {
         this.context = context.getApplicationContext();
         // Reuse the native app cookie jar so an upgrade keeps its session.
-        this.preferences = this.context.getSharedPreferences("blofy_native_http", Context.MODE_PRIVATE);
-        loadCookies();
+        this.preferences = this.context.getSharedPreferences(COOKIE_PREFERENCES, Context.MODE_PRIVATE);
     }
 
     public String baseUrl() { return baseUrl; }
@@ -52,10 +56,20 @@ public final class ApiClient {
         return values;
     }
     public void clearSession() {
-        synchronized (this) {
+        long mutationId = COOKIE_REQUEST_IDS.incrementAndGet();
+        synchronized (COOKIE_LOCK) {
+            Map<String, String> cookies = readCookiesLocked();
             cookies.remove("blofy_session");
             cookies.remove("blofy_license");
-            preferences.edit().putString("cookies", cookieHeader()).apply();
+            COOKIE_VERSIONS.put("blofy_session", mutationId);
+            COOKIE_VERSIONS.put("blofy_license", mutationId);
+            persistCookiesLocked(cookies);
+        }
+    }
+    public boolean hasSessionCookie() {
+        synchronized (COOKIE_LOCK) {
+            String value = readCookiesLocked().get("blofy_session");
+            return value != null && !value.trim().isEmpty();
         }
     }
     public JSONObject get(String path) throws Exception { return request("GET", path, null, READ_TIMEOUT); }
@@ -68,11 +82,12 @@ public final class ApiClient {
      * device key or session cookie to the external IPTV provider.
      */
     public String resolveMediaRedirect(String path) throws Exception {
+        long cookieRequestId = COOKIE_REQUEST_IDS.incrementAndGet();
         HttpURLConnection connection = open(path, "GET", READ_TIMEOUT);
         connection.setInstanceFollowRedirects(false);
         try {
             int status = connection.getResponseCode();
-            captureCookies(connection);
+            captureCookies(connection, cookieRequestId);
             if (status >= 300 && status < 400) {
                 String location = connection.getHeaderField("Location");
                 if (location == null || location.trim().isEmpty()) {
@@ -102,6 +117,7 @@ public final class ApiClient {
     }
 
     private JSONObject request(String method, String path, JSONObject body, int readTimeout) throws Exception {
+        long cookieRequestId = COOKIE_REQUEST_IDS.incrementAndGet();
         HttpURLConnection connection = open(path, method, readTimeout);
         try {
             if (body != null) {
@@ -111,7 +127,7 @@ public final class ApiClient {
                 try (OutputStream output = connection.getOutputStream()) { output.write(bytes); }
             }
             int status = connection.getResponseCode();
-            captureCookies(connection);
+            captureCookies(connection, cookieRequestId);
             InputStream stream = status >= 200 && status < 400 ? connection.getInputStream() : connection.getErrorStream();
             String text = stream == null ? "" : read(stream);
             JSONObject json;
@@ -156,37 +172,88 @@ public final class ApiClient {
         }
     }
 
-    private synchronized void loadCookies() {
-        String saved = preferences.getString("cookies", "");
-        if (saved == null) return;
-        for (String part : saved.split(";")) {
-            int at = part.indexOf('=');
-            if (at > 0) cookies.put(part.substring(0, at).trim(), part.substring(at + 1).trim());
+    private String cookieHeader() {
+        synchronized (COOKIE_LOCK) {
+            return formatCookieHeader(readCookiesLocked());
         }
     }
 
-    private synchronized String cookieHeader() {
+    private Map<String, String> readCookiesLocked() {
+        return parseCookieHeader(preferences.getString(COOKIE_KEY, ""));
+    }
+
+    private void persistCookiesLocked(Map<String, String> cookies) {
+        // apply() updates SharedPreferences' in-memory value before returning.
+        // COOKIE_LOCK therefore makes it an atomic process-wide cookie store
+        // without blocking the UI thread on a disk fsync.
+        preferences.edit().putString(COOKIE_KEY, formatCookieHeader(cookies)).apply();
+    }
+
+    private void captureCookies(HttpURLConnection connection, long requestId) {
+        synchronized (COOKIE_LOCK) {
+            Map<String, String> cookies = readCookiesLocked();
+            boolean changed = false;
+            boolean receivedCookie = false;
+            for (Map.Entry<String, List<String>> header : connection.getHeaderFields().entrySet()) {
+                if (header.getKey() == null
+                        || !"set-cookie".equals(header.getKey().toLowerCase(Locale.US))) continue;
+                if (header.getValue() == null) continue;
+                for (String value : header.getValue()) {
+                    receivedCookie = true;
+                    changed |= mergeSetCookie(cookies, COOKIE_VERSIONS, requestId, value);
+                }
+            }
+            // A response without Set-Cookie must never rewrite the jar. This is
+            // what previously allowed an old ApiClient instance to erase a new
+            // session or license cookie.
+            if (receivedCookie && changed) persistCookiesLocked(cookies);
+        }
+    }
+
+    static Map<String, String> parseCookieHeader(String saved) {
+        Map<String, String> cookies = new LinkedHashMap<>();
+        if (saved == null || saved.trim().isEmpty()) return cookies;
+        for (String part : saved.split(";")) {
+            int at = part.indexOf('=');
+            if (at <= 0) continue;
+            String key = part.substring(0, at).trim();
+            String value = part.substring(at + 1).trim();
+            if (!key.isEmpty() && !value.isEmpty()) cookies.put(key, value);
+        }
+        return cookies;
+    }
+
+    static String formatCookieHeader(Map<String, String> cookies) {
         StringBuilder result = new StringBuilder();
         for (Map.Entry<String, String> item : cookies.entrySet()) {
+            if (item.getKey() == null || item.getKey().trim().isEmpty()
+                    || item.getValue() == null || item.getValue().trim().isEmpty()) continue;
             if (result.length() > 0) result.append("; ");
             result.append(item.getKey()).append('=').append(item.getValue());
         }
         return result.toString();
     }
 
-    private synchronized void captureCookies(HttpURLConnection connection) {
-        for (Map.Entry<String, List<String>> header : connection.getHeaderFields().entrySet()) {
-            if (header.getKey() == null || !"set-cookie".equals(header.getKey().toLowerCase(Locale.US))) continue;
-            for (String value : header.getValue()) {
-                String pair = value.split(";", 2)[0];
-                int at = pair.indexOf('=');
-                if (at <= 0) continue;
-                String key = pair.substring(0, at).trim();
-                String content = pair.substring(at + 1).trim();
-                if (content.isEmpty()) cookies.remove(key); else cookies.put(key, content);
-            }
-        }
-        preferences.edit().putString("cookies", cookieHeader()).apply();
+    static boolean mergeSetCookie(Map<String, String> cookies, Map<String, Long> versions,
+                                  long requestId, String setCookie) {
+        if (setCookie == null) return false;
+        String pair = setCookie.split(";", 2)[0];
+        int at = pair.indexOf('=');
+        if (at <= 0) return false;
+        String key = pair.substring(0, at).trim();
+        String content = pair.substring(at + 1).trim();
+        if (key.isEmpty()) return false;
+
+        long currentVersion = versions.containsKey(key) ? versions.get(key) : Long.MIN_VALUE;
+        if (requestId < currentVersion) return false;
+        versions.put(key, requestId);
+
+        String lower = setCookie.toLowerCase(Locale.US);
+        boolean delete = content.isEmpty()
+                || lower.matches("(?s).*;\\s*max-age\\s*=\\s*0(?:\\s*;.*|\\s*)$");
+        if (delete) return cookies.remove(key) != null;
+        String previous = cookies.put(key, content);
+        return !content.equals(previous);
     }
 
     public static String encode(String value) {

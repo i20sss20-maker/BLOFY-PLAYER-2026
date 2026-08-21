@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Provider HTTP streams are relayed through BLOFY HTTPS; the app itself
-         never opens cleartext traffic. -->
+    <!-- Provider HTTP streams are copied through BLOFY's authenticated HTTPS
+         relay. The Android app never opens cleartext traffic itself. -->
     <base-config cleartextTrafficPermitted="false" />
 </network-security-config>

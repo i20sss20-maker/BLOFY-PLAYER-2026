@@ -9,10 +9,12 @@ import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
 import QRCode from "qrcode";
 import { LicenseStore } from "./lib/license-store.mjs";
-import { DeviceProfileStore } from "./lib/device-profile-store.mjs";
+import { DeviceProfileStore, persistDeviceSessionFromHeaders } from "./lib/device-profile-store.mjs";
 import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs";
-import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackTarget } from "./lib/runtime.mjs";
-import { XtreamClient } from "./lib/xtream.mjs";
+import { bindRelayCancellation, providerRequestHeaders, providerResponseStatus } from "./lib/media-relay.mjs";
+import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackPath, nativePlaybackTarget } from "./lib/runtime.mjs";
+import { providerSessionCacheKey, providerSessionResponseStatus, refreshProviderSession } from "./lib/session-refresh.mjs";
+import { extensionFromUrl, XtreamClient } from "./lib/xtream.mjs";
 import { pageItems, parseM3u } from "./lib/playlist.mjs";
 import { publicCatalogItem, publicSeriesItem } from "./lib/catalog-response.mjs";
 import {
@@ -47,6 +49,7 @@ const maxTranscodes = Math.max(1, Number(process.env.MAX_TRANSCODE_SESSIONS || 4
 const licenseDbPath = process.env.LICENSE_DB_PATH || path.join(here, "data", "licenses.json");
 const deviceProfileDbPath = process.env.DEVICE_PROFILE_DB_PATH || path.join(path.dirname(licenseDbPath), "device-profiles.json");
 const memoryCache = new Map();
+const directSourceCache = new Map();
 const rateBuckets = new Map();
 const transcodes = new Map();
 const licenses = new LicenseStore(licenseDbPath, { trialDays });
@@ -113,6 +116,23 @@ function limited(req, limit = 100, windowMs = 60_000, namespace = "api") {
 
 function cacheKey(session, suffix) {
   return crypto.createHash("sha256").update(JSON.stringify(session)).update(suffix).digest("hex");
+}
+
+function rememberDirectSource(session, type, id, source) {
+  if (!source) return;
+  const key = cacheKey(session, `direct-source:${type}:${id}`);
+  directSourceCache.set(key, { source, expiresAt: Date.now() + catalogCacheTtl });
+  while (directSourceCache.size > 5_000) directSourceCache.delete(directSourceCache.keys().next().value);
+}
+
+function recalledDirectSource(session, type, id) {
+  const key = cacheKey(session, `direct-source:${type}:${id}`);
+  const current = directSourceCache.get(key);
+  if (!current || current.expiresAt <= Date.now()) {
+    directSourceCache.delete(key);
+    return "";
+  }
+  return current.source;
 }
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -260,10 +280,13 @@ async function catalogFor(session, type, query) {
   });
   return {
     ...result,
-    // Store stable authenticated image routes in the Android catalogue. A
-    // short-lived signed proxy would expire while the local DB is still valid.
-    items: result.items.map((item) => publicCatalogItem(item, (_raw, kind, row) =>
-      `/api/image/${encodeURIComponent(type)}/${encodeURIComponent(String(row.id))}/${kind}`)),
+    // Native clients can load provider artwork directly. Sending every poster
+    // through Railway is slow for large libraries and fails when a CDN blocks
+    // data-centre IPs. Browser clients keep the protected BLOFY image route.
+    items: result.items.map((item) => publicCatalogItem(item,
+      query.get("native") === "1"
+        ? (raw) => String(raw || "")
+        : (_raw, kind, row) => `/api/image/${encodeURIComponent(type)}/${encodeURIComponent(String(row.id))}/${kind}`)),
   };
 }
 
@@ -286,6 +309,27 @@ async function imageFor(session, type, id, kind) {
 async function sourceFor(session, type, id, extension = "") {
   if (session.kind === "xtream") {
     const client = new XtreamClient(session);
+    if (type === "episode") {
+      const remembered = recalledDirectSource(session, type, id);
+      if (remembered) return remembered;
+    } else {
+      try {
+        const rows = await cached(cacheKey(session, `catalog:${type}:`), () => client.catalog(type), catalogCacheTtl);
+        const direct = rows.find((item) => String(item.id) === String(id))?.sourceUrl || "";
+        if (direct) return direct;
+      } catch {
+        // direct_source is optional. Preserve the canonical Xtream fallback if
+        // the provider refuses the extra catalogue lookup.
+      }
+      if (type === "movies") {
+        try {
+          const movie = await cached(cacheKey(session, `movie:${id}`), () => client.movieInfo(id));
+          if (movie.sourceUrl) return movie.sourceUrl;
+        } catch {
+          // Fall through to /movie/user/pass/id.ext below.
+        }
+      }
+    }
     return client.streamUrl(type, id, extension || (type === "live" ? "ts" : "mp4"));
   }
   const item = (await loadM3u(session)).find((entry) => entry.id === id);
@@ -311,10 +355,38 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
     res.end();
     return;
   }
-  const headers = {};
-  if (req.headers.range) headers.range = req.headers.range;
-  const response = await fetchSafe(rawUrl, { headers });
-  if (!response.ok && response.status !== 206) throw new Error(`مصدر التشغيل أعاد الخطأ ${response.status}.`);
+  const relayController = new AbortController();
+  let cancelUpstream = () => relayController.abort();
+  const lifecycle = bindRelayCancellation(req, res, () => cancelUpstream());
+  let response;
+  try {
+    response = await fetchSafe(rawUrl, {
+      headers: providerRequestHeaders(req.headers),
+      signal: relayController.signal,
+    });
+  } catch (error) {
+    if (lifecycle.cancelled || relayController.signal.aborted) return;
+    lifecycle.complete();
+    throw error;
+  }
+  cancelUpstream = () => {
+    relayController.abort();
+    return response.body?.cancel().catch(() => {});
+  };
+  if (lifecycle.cancelled) {
+    await cancelUpstream();
+    return;
+  }
+  if (!response.ok && response.status !== 206) {
+    await cancelUpstream();
+    lifecycle.complete();
+    const status = providerResponseStatus(response.status);
+    console.error(`[media] provider-http-error status=${response.status} host=${sourceHost(rawUrl)}`);
+    return json(res, status, {
+      error: `مصدر التشغيل أعاد الخطأ ${response.status}.`,
+      providerStatus: response.status,
+    }, securityHeaders());
+  }
   const type = (response.headers.get("content-type") || "").toLowerCase();
   const looksPlaylist = /mpegurl|m3u8/.test(type) || /\.m3u8(?:$|\?)/i.test(rawUrl);
   let inspected = null;
@@ -329,6 +401,7 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
         "content-length": Buffer.byteLength(body),
       });
       res.end(body);
+      lifecycle.complete();
       return;
     }
   }
@@ -337,6 +410,7 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
     if (!inspected && response.body) await response.body.cancel().catch(() => {});
     res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
     res.end();
+    lifecycle.complete();
     return;
   }
   const passthrough = {
@@ -350,9 +424,25 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
     if (value) passthrough[name] = value;
   }
   res.writeHead(response.status, passthrough);
-  if (inspected) return pipeInspectedBody(res, inspected.reader, inspected.prefix);
-  if (!response.body) return res.end();
-  Readable.fromWeb(response.body).on("error", () => res.destroy()).pipe(res);
+  res.once("finish", lifecycle.complete);
+  if (inspected) {
+    cancelUpstream = () => {
+      relayController.abort();
+      return inspected.reader?.cancel().catch(() => {});
+    };
+    return pipeInspectedBody(res, inspected.reader, inspected.prefix);
+  }
+  if (!response.body) {
+    res.end();
+    lifecycle.complete();
+    return;
+  }
+  const sourceStream = Readable.fromWeb(response.body);
+  cancelUpstream = () => {
+    relayController.abort();
+    sourceStream.destroy();
+  };
+  sourceStream.on("error", () => res.destroy()).pipe(res);
 }
 
 function transcodeKey(url, transcodeVideo) {
@@ -635,7 +725,34 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/session" && req.method === "GET") {
-    return json(res, 200, { session: publicSession(getSession(req)) }, securityHeaders());
+    const session = getSession(req);
+    if (url.searchParams.get("refresh") !== "1" || !session || session.kind !== "xtream") {
+      return json(res, 200, { session: publicSession(session) }, securityHeaders());
+    }
+    if (!requireActiveLicense(req, res)) return;
+    let refreshed;
+    try {
+      refreshed = await cached(providerSessionCacheKey(session), () => refreshProviderSession(session), 60_000);
+    } catch (error) {
+      console.warn(`[session] provider-refresh-failed host=${session.serverName || "unknown"} message=${mediaErrorSummary(error?.message)}`);
+      return json(res, 503, { error: "تعذر تحديث حالة الباقة حاليًا. احتفظنا بالجلسة السابقة." }, securityHeaders());
+    }
+    const sealedSession = seal(refreshed);
+    await persistDeviceSessionFromHeaders(deviceProfiles, req.headers, sealedSession);
+    if (providerSessionResponseStatus(refreshed) === 402) {
+      return json(res, 402, {
+        error: "انتهى اشتراك مزود الباقة أو أصبحت بياناته غير صالحة. جدّد الاشتراك ثم أعد تسجيل الدخول.",
+        session: publicSession(refreshed),
+        refreshed: true,
+      }, {
+        ...securityHeaders(),
+        "set-cookie": sessionCookie(sealedSession),
+      });
+    }
+    return json(res, 200, { session: publicSession(refreshed), refreshed: true }, {
+      ...securityHeaders(),
+      "set-cookie": sessionCookie(sealedSession),
+    });
   }
   if (url.pathname === "/api/session" && req.method === "DELETE") {
     return json(res, 200, { ok: true }, { ...securityHeaders(), "set-cookie": clearSessionCookie() });
@@ -644,9 +761,11 @@ async function handleApi(req, res, url) {
     if (!requireActiveLicense(req, res)) return;
     const body = await readJson(req);
     const session = await sessionFromInput(body);
+    const sealedSession = seal(session);
+    await persistDeviceSessionFromHeaders(deviceProfiles, req.headers, sealedSession);
     return json(res, 200, { ok: true, session: publicSession(session) }, {
       ...securityHeaders(),
-      "set-cookie": sessionCookie(seal(session)),
+      "set-cookie": sessionCookie(sealedSession),
     });
   }
 
@@ -694,10 +813,20 @@ async function handleApi(req, res, url) {
     const [, type, id] = nativeLinkMatch;
     const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
     const source = await sourceFor(session, type, id, extension);
-    console.log(`[media] native-link type=${type} id=${id} ext=${extension} host=${sourceHost(source)}`);
+    const resolvedExtension = extensionFromUrl(source) || extension;
+    console.log(`[media] native-link type=${type} id=${id} ext=${resolvedExtension} host=${sourceHost(source)}`);
     return json(res, 200, {
-      url: signedPath(source, "/api/native-play", 7200),
-      extension,
+      // HTTPS sources are opened directly by Media3. Legacy HTTP sources are
+      // copied through BLOFY HTTPS without FFmpeg/transcoding, so Android never
+      // needs a global cleartext exception.
+      url: signedPath(source, nativePlaybackPath(source), 7200),
+      // Some providers reject direct Android/TV requests even though the same
+      // source is valid from Railway. Keep a second raw-byte route available
+      // for Media3. This is a relay only (Range requests are preserved); it
+      // does not invoke FFmpeg and therefore starts much faster than the
+      // compatibility/transcode pipeline.
+      relayUrl: signedPath(source, "/api/proxy", 7200),
+      extension: resolvedExtension,
       mode: NATIVE_PLAYBACK_MODE,
     }, securityHeaders());
   }
@@ -717,7 +846,13 @@ async function handleApi(req, res, url) {
     if (session.kind !== "xtream") return json(res, 400, { error: "تفاصيل الفيلم غير متوفرة لهذا النوع من القوائم." }, securityHeaders());
     const client = new XtreamClient(session);
     const item = await cached(cacheKey(session, `movie:${movieMatch[1]}`), () => client.movieInfo(movieMatch[1]));
-    return json(res, 200, { ...item, image: safeImage(item.image), backdrop: safeImage(item.backdrop) }, securityHeaders());
+    const directArtwork = url.searchParams.get("native") === "1";
+    const { sourceUrl: _privateSource, ...publicItem } = item;
+    return json(res, 200, {
+      ...publicItem,
+      image: directArtwork ? item.image : safeImage(item.image),
+      backdrop: directArtwork ? item.backdrop : safeImage(item.backdrop),
+    }, securityHeaders());
   }
 
   const seriesMatch = url.pathname.match(/^\/api\/series\/([^/]+)$/);
@@ -726,7 +861,13 @@ async function handleApi(req, res, url) {
     const client = new XtreamClient(session);
     const item = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
     if (!item.seasons.length) return json(res, 404, { error: "لم يرسل مزود القائمة مواسم أو حلقات لهذا المسلسل." }, securityHeaders());
-    return json(res, 200, publicSeriesItem(item, safeImage), securityHeaders());
+    for (const season of item.seasons) {
+      for (const episode of season.episodes) rememberDirectSource(session, "episode", episode.id, episode.sourceUrl);
+    }
+    const artwork = url.searchParams.get("native") === "1"
+      ? (raw) => String(raw || "")
+      : safeImage;
+    return json(res, 200, publicSeriesItem(item, artwork), securityHeaders());
   }
 
   const epgMatch = url.pathname.match(/^\/api\/epg\/([^/]+)$/);

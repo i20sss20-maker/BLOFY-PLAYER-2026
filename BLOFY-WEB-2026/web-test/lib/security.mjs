@@ -3,7 +3,11 @@ import dns from "node:dns/promises";
 import net from "node:net";
 
 const production = process.env.NODE_ENV === "production";
-const configuredSecret = process.env.SESSION_SECRET || "blofy-local-development-secret-change-me";
+const explicitSecret = String(process.env.SESSION_SECRET || "");
+if (production && !explicitSecret) {
+  throw new Error("SESSION_SECRET must be explicitly configured in production.");
+}
+const configuredSecret = explicitSecret || "blofy-local-development-secret-change-me";
 if (production && configuredSecret.length < 32) {
   throw new Error("SESSION_SECRET must contain at least 32 characters in production.");
 }
@@ -147,12 +151,15 @@ export async function assertSafeUrl(raw) {
 
 export async function fetchSafe(rawUrl, options = {}, redirects = 0) {
   const url = await assertSafeUrl(rawUrl);
-  const { requestTimeoutMs, ...fetchOptions } = options;
+  const { requestTimeoutMs, signal: externalSignal, ...fetchOptions } = options;
   const configuredTimeout = Number(requestTimeoutMs ?? process.env.REQUEST_TIMEOUT_MS ?? 9000);
   const timeout = Number.isFinite(configuredTimeout)
     ? Math.min(120_000, Math.max(2_500, Math.trunc(configuredTimeout)))
     : 9_000;
   const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, {
@@ -169,11 +176,16 @@ export async function fetchSafe(rawUrl, options = {}, redirects = 0) {
       if (redirects >= 3) throw new Error("الخادم أعاد توجيهات كثيرة.");
       const next = response.headers.get("location");
       if (!next) throw new Error("إعادة توجيه غير مكتملة.");
-      return fetchSafe(new URL(next, url).toString(), { ...fetchOptions, requestTimeoutMs: timeout }, redirects + 1);
+      return fetchSafe(new URL(next, url).toString(), {
+        ...fetchOptions,
+        signal: externalSignal,
+        requestTimeoutMs: timeout,
+      }, redirects + 1);
     }
     return response;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
   }
 }
 

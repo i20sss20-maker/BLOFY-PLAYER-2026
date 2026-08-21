@@ -31,6 +31,21 @@ test("public catalog strips the private M3U source while preserving a signed ima
   assert.equal(raw.sourceUrl.includes("password"), true);
 });
 
+test("native catalog can preserve provider artwork without exposing media credentials", () => {
+  const raw = {
+    id: "movie-7",
+    name: "Movie",
+    sourceUrl: "http://provider.example/movie/user/private/7.mp4",
+    image: "http://cdn.example/posters/7.jpg",
+    backdrop: "http://cdn.example/backdrops/7.jpg",
+  };
+  const result = publicCatalogItem(raw, (value) => value);
+  assert.equal(result.image, raw.image);
+  assert.equal(result.backdrop, raw.backdrop);
+  assert.equal(Object.hasOwn(result, "sourceUrl"), false);
+  assert.equal(JSON.stringify(result).includes("/user/private/"), false);
+});
+
 test("repeated series serialization never mutates or re-signs the cached graph", () => {
   const cached = {
     id: "series-1",
@@ -39,7 +54,11 @@ test("repeated series serialization never mutates or re-signs the cached graph",
     metadata: { cast: ["One", "Two"] },
     seasons: [{
       season: "1",
-      episodes: [{ id: "episode-1", image: "https://provider.example/episodes/1.jpg" }],
+      episodes: [{
+        id: "episode-1",
+        image: "https://provider.example/episodes/1.jpg",
+        sourceUrl: "https://provider.example/series/private-user/private-password/1.mp4",
+      }],
     }],
   };
 
@@ -57,4 +76,7 @@ test("repeated series serialization never mutates or re-signs the cached graph",
   assert.equal(originalUrl(second.image), cached.image);
   assert.equal(originalUrl(first.seasons[0].episodes[0].image), cached.seasons[0].episodes[0].image);
   assert.equal(originalUrl(second.seasons[0].episodes[0].image), cached.seasons[0].episodes[0].image);
+  assert.equal(Object.hasOwn(first.seasons[0].episodes[0], "sourceUrl"), false);
+  assert.equal(JSON.stringify(first).includes("private-password"), false);
+  assert.equal(cached.seasons[0].episodes[0].sourceUrl.includes("private-password"), true);
 });
