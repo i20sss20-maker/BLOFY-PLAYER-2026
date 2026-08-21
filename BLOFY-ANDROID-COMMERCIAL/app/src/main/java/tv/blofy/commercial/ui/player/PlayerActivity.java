@@ -56,7 +56,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private ApiClient api;
     private CatalogStore store;
     private ExoPlayer player;
-    private String id, name, type, extension, playbackUrl, playbackExtension;
+    private String id, name, type, extension, originalExtension, playbackUrl, playbackExtension;
     private int fallbackStage;
     private boolean historyRecorded;
     private boolean initialized;
@@ -88,6 +88,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         id = extra("id", "");
         name = extra("name", "BLOFY PLAYER");
         extension = normalize(extra("extension", isLive() ? "ts" : "mp4"));
+        originalExtension = extension;
         binding.title.setText(name);
         binding.close.setOnClickListener(v -> finish());
         binding.retry.setOnClickListener(v -> retryFromStart());
@@ -122,15 +123,17 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 JSONObject data = api.get("/api/native-link/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
                         + "?ext=" + ApiClient.encode(requestedExtension));
                 String path = data.optString("url");
-                if (!path.startsWith("/api/native-play")) throw new Exception("تعذر إصدار رابط Media3 آمن.");
-                String resolvedUrl = api.resolveMediaRedirect(path);
-                final String mediaExtension = normalize(data.optString("extension", requestedExtension));
-                // Android never opens cleartext provider traffic. HTTPS
-                // providers stay direct; legacy HTTP providers use BLOFY's
-                // lightweight byte relay (no ffmpeg/transcode delay).
-                if (resolvedUrl.startsWith("http://")) {
-                    resolvedUrl = secureRelayUrl(requestedType, requestedId, requestedExtension);
+                final String resolvedUrl;
+                if (path.startsWith("/api/native-play")) {
+                    resolvedUrl = api.resolveMediaRedirect(path);
+                } else if (path.startsWith("/api/proxy")) {
+                    resolvedUrl = api.absoluteUrl(path);
+                } else {
+                    throw new Exception("تعذر إصدار رابط Media3 آمن.");
                 }
+                final String mediaExtension = normalize(data.optString("extension", requestedExtension));
+                // HTTPS media stays direct. Legacy HTTP media uses BLOFY's raw
+                // byte relay (no FFmpeg) so the app never permits cleartext.
                 final String mediaUrl = resolvedUrl;
                 if (!isCurrent(generation, requestedId)) return;
                 playbackUrl = mediaUrl;
@@ -144,6 +147,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 if (!isCurrent(generation, requestedId)) return;
                 resolving = false;
                 runOnUiThread(() -> {
+                    if (!isCurrent(generation, requestedId)) return;
                     if (LicenseGate.isAuthorizationError(error)) {
                         LicenseGate.openActivation(this, "انتهى الاشتراك. جدّد التفعيل أو بيانات الباقة ثم سجّل الدخول.");
                     } else if (!advanceFallback()) {
@@ -167,13 +171,6 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         preparePlayer(url, "m3u8");
     }
 
-    private String secureRelayUrl(String requestedType, String requestedId, String requestedExtension) {
-        String apiType = "series".equals(requestedType) || "episode".equals(requestedType)
-                ? "episode" : requestedType;
-        return api.absoluteUrl("/api/play/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
-                + "?ext=" + ApiClient.encode(requestedExtension) + "&raw=1");
-    }
-
     private void preparePlayer(String url, String mediaExtension) {
         if (isFinishing() || isDestroyed() || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
         releasePlayer();
@@ -181,7 +178,10 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 .setConnectTimeoutMs(12_000)
                 .setReadTimeoutMs(isLive() ? 35_000 : 55_000)
                 .setAllowCrossProtocolRedirects(true)
-                .setUserAgent("BLOFY PLAYER Android TV");
+                // Widely accepted by Xtream/CDN sources that reject generic
+                // app user agents while still keeping BLOFY credentials away
+                // from third-party hosts.
+                .setUserAgent("VLC/3.0.20 LibVLC/3.0.20");
         // Compatibility streams remain on Railway and need the protected
         // session. Direct provider playback must never receive those secrets.
         if (url.startsWith(api.baseUrl() + "/")) http.setDefaultRequestProperties(api.authenticatedHeaders());
@@ -225,8 +225,14 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                     .setExtractorFactory(new DefaultHlsExtractorFactory(flags, true))
                     .createMediaSource(item.build())
                 : mediaFactory.createMediaSource(item.build());
-        long position = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
-        player.setMediaSource(media, Math.max(0, position));
+        if (isLive()) {
+            // Let Media3 select the live edge. Passing position zero starts at
+            // the beginning of a DVR window and can request expired segments.
+            player.setMediaSource(media);
+        } else {
+            long position = getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
+            player.setMediaSource(media, Math.max(0, position));
+        }
         player.prepare();
         if (getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getBoolean("autoplay", true)) player.play();
         binding.player.requestFocus();
@@ -245,6 +251,10 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         int maximum = isLive() ? 3 : 2;
         if (fallbackStage >= maximum) return false;
         fallbackStage++;
+        // The alternate extension above is only a direct-play probe. Relay
+        // and transcoding must start from the provider's original extension;
+        // otherwise a valid TS source can accidentally be requested as m3u8.
+        extension = originalExtension;
         showLoading();
         prepareCompatibility(fallbackStage == maximum);
         return true;
@@ -259,6 +269,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
 
     private void retryFromStart() {
         fallbackStage = 0;
+        extension = originalExtension;
         playbackUrl = null;
         playbackExtension = null;
         resolveDirect();
@@ -292,15 +303,44 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         if (!isLive()) return;
         final int generation = resolveGeneration.incrementAndGet();
         final String currentId = id;
+        // Stop the previous channel before looking up the next one. Otherwise
+        // its timeout/error callback can start a fallback and invalidate the
+        // pending channel switch.
+        resolving = true;
+        releasePlayer();
+        playbackUrl = null;
+        playbackExtension = null;
         showLoading();
         worker.execute(() -> {
-            MediaRecord item = store.adjacentLive(currentId, direction);
-            if (item == null || generation != resolveGeneration.get()) return;
+            final MediaRecord item;
+            try {
+                item = store.adjacentLive(currentId, direction);
+            } catch (Exception error) {
+                if (generation != resolveGeneration.get()) return;
+                resolving = false;
+                runOnUiThread(() -> {
+                    if (generation != resolveGeneration.get() || isFinishing() || isDestroyed()) return;
+                    showError(error.getMessage() == null
+                            ? "تعذر قراءة القناة التالية من الكتالوج المحلي."
+                            : error.getMessage());
+                });
+                return;
+            }
+            if (generation != resolveGeneration.get()) return;
+            if (item == null) {
+                resolving = false;
+                runOnUiThread(() -> {
+                    if (generation != resolveGeneration.get() || isFinishing() || isDestroyed()) return;
+                    showError("لا توجد قناة أخرى في هذه القائمة.");
+                });
+                return;
+            }
             runOnUiThread(() -> {
                 if (generation != resolveGeneration.get() || isFinishing() || isDestroyed()) return;
                 id = item.id;
                 name = item.name;
                 extension = normalize(item.extension.isEmpty() ? "ts" : item.extension);
+                originalExtension = extension;
                 fallbackStage = 0;
                 historyRecorded = false;
                 playbackUrl = null;
@@ -409,6 +449,12 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         resolveGeneration.incrementAndGet();
         resolving = false;
         releasePlayer();
+        // Provider URLs can expire or be tied to one connection. Always ask
+        // BLOFY for a fresh link when this screen returns to the foreground.
+        playbackUrl = null;
+        playbackExtension = null;
+        extension = originalExtension;
+        fallbackStage = 0;
         super.onStop();
     }
 

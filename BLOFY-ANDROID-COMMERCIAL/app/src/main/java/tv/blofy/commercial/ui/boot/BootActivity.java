@@ -39,6 +39,7 @@ public final class BootActivity extends AppCompatActivity {
     private void boot() {
         worker.execute(() -> {
             ApiClient api = new ApiClient(this);
+            boolean hasCatalog = hasLocalCatalog();
             try {
                 stage(12, "فحص الاتصال الآمن…");
                 api.get("/api/health");
@@ -60,7 +61,7 @@ public final class BootActivity extends AppCompatActivity {
                 }
 
                 stage(68, "استعادة الجلسة والباقة…");
-                JSONObject session = api.get("/api/session").optJSONObject("session");
+                JSONObject session = api.get("/api/session?refresh=1").optJSONObject("session");
                 if (!licensed || !LicenseGate.isPackageUsable(session)) {
                     runOnUiThread(() -> {
                         Intent activation = new Intent(this, ActivationActivity.class);
@@ -72,14 +73,16 @@ public final class BootActivity extends AppCompatActivity {
                 }
 
                 stage(86, "فحص الكتالوج المحلي…");
-                boolean hasCatalog = getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                        .getBoolean("catalog_ready", false)
-                        && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                        .getInt("catalog_schema", 0) >= 3;
                 stage(100, "جاهز");
                 open(hasCatalog ? HomeActivity.class : SyncActivity.class);
             } catch (Exception error) {
+                if (!LicenseGate.isAuthorizationError(error) && hasCatalog && api.hasSessionCookie()) {
+                    stage(100, "تعذر الاتصال مؤقتًا — فتح الكتالوج المحلي");
+                    open(HomeActivity.class);
+                    return;
+                }
                 runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
                     Intent intent = new Intent(this, ActivationActivity.class);
                     intent.putExtra("boot_error", error.getMessage());
                     startActivity(intent);
@@ -89,8 +92,16 @@ public final class BootActivity extends AppCompatActivity {
         });
     }
 
+    private boolean hasLocalCatalog() {
+        return getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
+                .getBoolean("catalog_ready", false)
+                && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
+                .getInt("catalog_schema", 0) >= 3;
+    }
+
     private void open(Class<?> target) {
         runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
             startActivity(new Intent(this, target));
             finish();
         });

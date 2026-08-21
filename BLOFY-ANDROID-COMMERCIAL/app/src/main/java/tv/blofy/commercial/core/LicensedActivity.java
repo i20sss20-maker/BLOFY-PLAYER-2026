@@ -4,6 +4,7 @@ import android.os.Bundle;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.lifecycle.Lifecycle;
 
 import org.json.JSONObject;
 
@@ -41,7 +42,10 @@ public abstract class LicensedActivity extends AppCompatActivity {
                 if (!LicenseGate.isLicensed(license)) {
                     reason = "انتهى تفعيل الجهاز. جدّد التفعيل ثم سجّل الدخول من هذه الشاشة.";
                 } else {
-                    JSONObject session = api.get("/api/session").optJSONObject("session");
+                    // Revalidate the provider account (server-side cached for
+                    // one minute) so an expired package returns to the renewal
+                    // form instead of failing only after the user presses Play.
+                    JSONObject session = api.get("/api/session?refresh=1").optJSONObject("session");
                     if (!LicenseGate.isPackageUsable(session)) {
                         reason = "انتهى اشتراك الباقة أو توقف. أدخل بيانات الاشتراك المجددة ثم سجّل الدخول.";
                     }
@@ -55,10 +59,14 @@ public abstract class LicensedActivity extends AppCompatActivity {
             } finally {
                 checkingLicense.set(false);
             }
-            if (reason == null || isFinishing() || isDestroyed()) return;
-            leavingForActivation = true;
+            if (reason == null) return;
             String message = reason;
-            runOnUiThread(() -> LicenseGate.openActivation(this, message));
+            runOnUiThread(() -> {
+                if (leavingForActivation || isFinishing() || isDestroyed()
+                        || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
+                leavingForActivation = true;
+                LicenseGate.openActivation(this, message);
+            });
         });
     }
 

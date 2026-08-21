@@ -73,7 +73,8 @@ public final class DetailsActivity extends LicensedActivity {
         binding.progress.setVisibility(View.VISIBLE);
         worker.execute(() -> {
             try {
-                JSONObject data = api.get(("series".equals(type) ? "/api/series/" : "/api/movie/") + ApiClient.encode(id));
+                JSONObject data = api.get(("series".equals(type) ? "/api/series/" : "/api/movie/")
+                        + ApiClient.encode(id) + "?native=1");
                 runOnUiThread(() -> {
                     if (request != generation.get() || isFinishing() || isDestroyed()) return;
                     render(data);

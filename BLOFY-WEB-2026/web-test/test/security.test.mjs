@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { isPrivateIp, licensePayloadIsActive, parseCookies, signResource, verifyResource } from "../lib/security.mjs";
+import { fetchSafe, isPrivateIp, licensePayloadIsActive, parseCookies, signResource, verifyResource } from "../lib/security.mjs";
 
 test("signed media token encrypts credentials and verifies the original URL", () => {
   const source = "https://provider.example/live/private-user/private-password/123.m3u8";
@@ -32,6 +33,41 @@ test("native license cookie is bound to its declared device id", () => {
   assert.equal(licensePayloadIsActive(payload, now, "blofy-device-1234"), true);
   assert.equal(licensePayloadIsActive(payload, now, "BLOFY-OTHER-9999"), false);
   assert.equal(licensePayloadIsActive(payload, now), true);
+});
+
+test("production refuses to start without an explicit SESSION_SECRET", () => {
+  const moduleUrl = new URL("../lib/security.mjs", import.meta.url).href;
+  const missingEnvironment = { ...process.env, NODE_ENV: "production" };
+  delete missingEnvironment.SESSION_SECRET;
+  const missing = spawnSync(process.execPath, ["--input-type=module", "-e", "await import(process.argv[1])", moduleUrl], {
+    encoding: "utf8",
+    env: missingEnvironment,
+  });
+  assert.notEqual(missing.status, 0);
+  assert.match(`${missing.stderr}${missing.stdout}`, /SESSION_SECRET must be explicitly configured/);
+
+  const configured = spawnSync(process.execPath, ["--input-type=module", "-e", "await import(process.argv[1])", moduleUrl], {
+    encoding: "utf8",
+    env: { ...process.env, NODE_ENV: "production", SESSION_SECRET: "test-only-explicit-session-secret-123456789" },
+  });
+  assert.equal(configured.status, 0, configured.stderr);
+});
+
+test("safe fetch honors caller cancellation so a closed relay cannot keep its upstream request", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  try {
+    globalThis.fetch = (_url, options) => new Promise((_resolve, reject) => {
+      const rejectCancelled = () => reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+      if (options.signal.aborted) rejectCancelled();
+      else options.signal.addEventListener("abort", rejectCancelled, { once: true });
+    });
+    const pending = fetchSafe("http://8.8.8.8/media.ts", { signal: controller.signal, requestTimeoutMs: 10_000 });
+    controller.abort();
+    await assert.rejects(pending, (error) => error?.name === "AbortError");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("SSRF guard blocks local, metadata, mapped, and reserved network ranges", () => {

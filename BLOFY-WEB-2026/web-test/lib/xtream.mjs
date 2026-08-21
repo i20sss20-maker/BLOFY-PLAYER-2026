@@ -39,6 +39,18 @@ function cleanBase(value) {
   return url.toString().replace(/\/+$/, "");
 }
 
+export function normalizeDirectSource(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 export class XtreamClient {
   constructor({ serverUrl, username, password }) {
     this.base = cleanBase(serverUrl);
@@ -69,17 +81,25 @@ export class XtreamClient {
     return limits.catalog ? serializeLargeCatalog(load) : load();
   }
 
-  async validate() {
+  async accountStatus() {
     const data = await this.request();
-    if (!data?.user_info || String(data.user_info.auth) !== "1") throw new Error("بيانات Xtream غير صحيحة أو الاشتراك غير نشط.");
-    return {
+    if (!data?.user_info) throw new Error("الخادم لم يرسل حالة اشتراك Xtream صالحة.");
+    const authenticated = String(data.user_info.auth) === "1";
+    return { authenticated, account: {
+      authenticated,
       username: data.user_info.username || this.username,
-      status: data.user_info.status || "Active",
+      status: data.user_info.status || (authenticated ? "Active" : "Expired"),
       expiresAt: Number(data.user_info.exp_date || 0) * 1000 || null,
       maxConnections: Number(data.user_info.max_connections || 0),
       activeConnections: Number(data.user_info.active_cons || 0),
       serverName: new URL(this.base).host,
-    };
+    } };
+  }
+
+  async validate() {
+    const state = await this.accountStatus();
+    if (!state.authenticated) throw new Error("بيانات Xtream غير صحيحة أو الاشتراك غير نشط.");
+    return state.account;
   }
 
   async categories(type) {
@@ -100,8 +120,9 @@ export class XtreamClient {
       categoryId: String(row.category_id || ""),
       rating: row.rating_5based || row.rating || "",
       year: row.year || row.releaseDate || row.releasedate || "",
-      extension: String(row.container_extension || (type === "live" ? "ts" : "mp4")).toLowerCase(),
+      extension: String(row.container_extension || extensionFromUrl(row.direct_source) || (type === "live" ? "ts" : "mp4")).toLowerCase(),
       epgId: row.epg_channel_id || "",
+      sourceUrl: normalizeDirectSource(row.direct_source),
       type,
     }));
   }
@@ -121,6 +142,7 @@ export class XtreamClient {
       duration: info.duration || "",
       genre: info.genre || "",
       extension: movie.container_extension || extensionFromUrl(movie.direct_source) || "mp4",
+      sourceUrl: normalizeDirectSource(movie.direct_source || info.direct_source),
       type: "movies",
     };
   }
@@ -147,7 +169,7 @@ export class XtreamClient {
   }
 }
 
-function extensionFromUrl(value) {
+export function extensionFromUrl(value) {
   if (!value) return "";
   try {
     const match = new URL(String(value)).pathname.match(/\.([a-zA-Z0-9]{2,6})$/);
@@ -192,6 +214,7 @@ export function normalizeSeriesInfo(data, id) {
       extension: String(episode.container_extension || episode.info?.container_extension || extensionFromUrl(episode.direct_source) || "mp4").toLowerCase(),
       duration: episode.info?.duration || episode.duration || "",
       image: episode.info?.movie_image || episode.info?.cover_big || episode.movie_image || info.cover || "",
+      sourceUrl: normalizeDirectSource(episode.direct_source || episode.info?.direct_source),
     });
     bySeason.set(season, values);
   }

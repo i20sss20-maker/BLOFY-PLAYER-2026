@@ -77,6 +77,21 @@ export class DeviceProfileStore {
     });
   }
 
+  configureWithDeviceKey(deviceId, deviceKey, profileToken) {
+    return this.locked(async () => {
+      const id = cleanDeviceId(deviceId);
+      const record = this.data.devices[id];
+      const suppliedHash = keyHash(deviceKey);
+      if (!record || !safeEqual(record.keyHash, suppliedHash)) {
+        throw new Error("الجهاز غير مسجل أو تغيّر مفتاحه.");
+      }
+      record.profileToken = String(profileToken || "");
+      record.updatedAt = Date.now();
+      await this.persist();
+      return { deviceId: id, configured: Boolean(record.profileToken), updatedAt: record.updatedAt };
+    });
+  }
+
   profile(deviceId, deviceKey) {
     return this.locked(async () => {
       const id = cleanDeviceId(deviceId);
@@ -84,6 +99,20 @@ export class DeviceProfileStore {
       if (!record || !safeEqual(record.keyHash, keyHash(deviceKey))) throw new Error("الجهاز غير مسجل أو تغيّر مفتاحه.");
       return record.profileToken || "";
     });
+  }
+}
+
+export async function persistDeviceSessionFromHeaders(store, headers = {}, profileToken = "") {
+  const deviceId = String(headers["x-blofy-device-id"] || "").trim();
+  const deviceKey = String(headers["x-blofy-device-key"] || "").trim();
+  if (!deviceId || !deviceKey || !profileToken) return false;
+  try {
+    await store.configureWithDeviceKey(deviceId, deviceKey, profileToken);
+    return true;
+  } catch {
+    // Browser logins and a native client that has not registered yet still get
+    // their encrypted cookie. Only a proven device key may update /data.
+    return false;
   }
 }
 

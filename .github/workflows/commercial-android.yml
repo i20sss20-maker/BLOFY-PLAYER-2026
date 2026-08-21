@@ -35,7 +35,7 @@ jobs:
         working-directory: BLOFY-WEB-2026/web-test
         run: |
           node --check server.mjs
-          node --test test/*.test.mjs
+          node --test --test-concurrency=1 test/*.test.mjs
       - name: Verify commercial source
         run: |
           test -f BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player/PlayerActivity.java
