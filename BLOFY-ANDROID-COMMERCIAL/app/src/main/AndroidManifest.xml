@@ -19,6 +19,7 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Blofy">
 
+        <activity android:name=".ui.player.VlcFallbackActivity" android:exported="false" android:screenOrientation="sensorLandscape" android:theme="@style/Theme.Blofy.Player" />
         <activity android:name=".ui.player.PlayerActivity" android:exported="false" android:screenOrientation="sensorLandscape" android:theme="@style/Theme.Blofy.Player" />
         <activity android:name=".ui.details.DetailsActivity" android:exported="false" />
         <activity android:name=".ui.catalog.CatalogActivity" android:exported="false" />
