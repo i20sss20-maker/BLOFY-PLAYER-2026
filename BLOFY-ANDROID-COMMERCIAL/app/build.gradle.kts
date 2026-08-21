@@ -15,8 +15,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 2026082213
-        versionName = "2026.08.22.13-commercial"
+        versionCode = 2026082214
+        versionName = "2026.08.22.14-commercial"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(blofyUrl.get().trimEnd('/')))
         vectorDrawables.useSupportLibrary = true
     }
@@ -49,16 +49,29 @@ android {
 
 dependencies {
     val media3 = "1.11.0"
+    val room = "2.8.4"
+
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity:1.10.1")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.1")
+
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
     implementation("androidx.media3:media3-exoplayer-dash:$media3")
     implementation("androidx.media3:media3-ui:$media3")
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Media3 is always first. LibVLC is used only after a successful provider response
+    // when Media3 cannot decode or parse the stream/container.
+    implementation("org.videolan.android:libvlc-all:3.7.5")
+
+    // Local catalogue database. Screens keep bounded LIMIT/OFFSET paging so the app
+    // never loads a very large provider library into memory at once.
+    implementation("androidx.room:room-runtime:$room")
+    annotationProcessor("androidx.room:room-compiler:$room")
+
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.github.bumptech.glide:glide:4.16.0")
     implementation("com.google.zxing:core:3.5.4")
