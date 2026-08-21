@@ -41,6 +41,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -60,11 +63,13 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private CatalogStore store;
     private ExoPlayer player;
     private String id, name, type, extension, originalExtension, playbackUrl, playbackExtension;
-    private String relayUrl;
+    private String relayUrl, relayExtension;
+    private Map<String, String> providerHeaders = Collections.emptyMap();
     private int fallbackStage;
     private boolean relayAttempted;
     private boolean historyRecorded;
     private boolean initialized;
+    private boolean exiting;
     private volatile boolean resolving;
     private final ExecutorService worker = Executors.newFixedThreadPool(2);
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -78,7 +83,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private final Runnable timeout = () -> {
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
         releasePlayer();
-        if (!advanceAfterFailure()) {
+        if (!tryRelay() && !advanceFallback()) {
             showError("المصدر لم يرسل فيديو خلال المهلة. جرّب إعادة الاتصال أو محتوى آخر.");
         }
     };
@@ -95,11 +100,11 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         extension = normalize(extra("extension", isLive() ? "ts" : "mp4"));
         originalExtension = extension;
         binding.title.setText(name);
-        binding.close.setOnClickListener(v -> finish());
+        binding.close.setOnClickListener(v -> exitPlayer());
         binding.retry.setOnClickListener(v -> retryFromStart());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() {
-                finish();
+                exitPlayer();
             }
         });
         if (!isLive()) binding.epg.setVisibility(View.GONE);
@@ -127,35 +132,58 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 String apiType = "series".equals(requestedType) || "episode".equals(requestedType) ? "episode" : requestedType;
                 JSONObject data = api.get("/api/native-link/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
                         + "?ext=" + ApiClient.encode(requestedExtension));
-                String path = data.optString("url");
+                String path = data.optString("directUrl", data.optString("url")).trim();
                 String relayPath = data.optString("relayUrl");
                 final String signedRelay = PlaybackRoutePolicy.isSignedRelayPath(relayPath)
                         ? api.absoluteUrl(relayPath) : "";
-                final String resolvedUrl;
-                if (path.startsWith("/api/native-play")) {
-                    resolvedUrl = api.resolveMediaRedirect(path);
+                String candidateUrl = "";
+                boolean primaryIsRelay = false;
+                String directPath = PlaybackRoutePolicy.directRedirectPath(path);
+                if (!directPath.isEmpty()) {
+                    try {
+                        // A signed /api/proxy token can be resolved through the
+                        // same server's /api/native-play endpoint. This keeps
+                        // cleartext IPTV direct on the TV instead of forcing all
+                        // transport through Railway.
+                        candidateUrl = api.resolveMediaRedirect(directPath);
+                    } catch (Exception directError) {
+                        // Older deployments may not expose native-play. Preserve
+                        // service by using the signed relay exactly once.
+                        if (path.startsWith("/api/proxy")) {
+                            candidateUrl = api.absoluteUrl(path);
+                            primaryIsRelay = true;
+                        } else {
+                            throw directError;
+                        }
+                    }
+                } else if (PlaybackRoutePolicy.isHttpUrl(path)) {
+                    candidateUrl = path;
                 } else if (path.startsWith("/api/proxy")) {
-                    resolvedUrl = api.absoluteUrl(path);
+                    candidateUrl = api.absoluteUrl(path);
+                    primaryIsRelay = true;
                 } else {
                     throw new Exception("تعذر إصدار رابط Media3 آمن.");
                 }
+                final String resolvedUrl = candidateUrl;
                 final String mediaExtension = normalize(data.optString("extension", requestedExtension));
-                // Never hand a provider's cleartext URL to Media3. New servers
-                // always return a signed /api/proxy relayUrl; the legacy raw
-                // route keeps v10 deployments usable during a rolling update.
-                final boolean legacyCleartext = PlaybackRoutePolicy.isCleartextHttp(resolvedUrl);
                 final String effectiveRelay = !signedRelay.isEmpty()
                         ? signedRelay : secureRelayUrl(requestedType, requestedId, requestedExtension);
-                final String mediaUrl = legacyCleartext ? effectiveRelay : resolvedUrl;
+                final boolean openedOnRelay = primaryIsRelay
+                        || PlaybackRoutePolicy.isBlofyRelayUrl(api.baseUrl(), resolvedUrl);
+                final Map<String, String> resolvedHeaders = providerHeaders(data);
                 if (!isCurrent(generation, requestedId)) return;
                 relayUrl = effectiveRelay;
-                relayAttempted = legacyCleartext || path.startsWith("/api/proxy");
-                playbackUrl = mediaUrl;
+                relayExtension = mediaExtension;
+                relayAttempted = relayAttempted || openedOnRelay;
+                providerHeaders = resolvedHeaders;
+                playbackUrl = resolvedUrl;
                 playbackExtension = mediaExtension;
                 resolving = false;
                 runOnUiThread(() -> {
                     if (!isCurrent(generation, requestedId)) return;
-                    if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) preparePlayer(mediaUrl, mediaExtension);
+                    if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
+                        preparePlayer(resolvedUrl, mediaExtension);
+                    }
                 });
             } catch (Exception error) {
                 if (!isCurrent(generation, requestedId)) return;
@@ -164,6 +192,11 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                     if (!isCurrent(generation, requestedId)) return;
                     if (LicenseGate.isAuthorizationError(error)) {
                         LicenseGate.openActivation(this, "انتهى الاشتراك. جدّد التفعيل أو بيانات الباقة ثم سجّل الدخول.");
+                    } else if (PlaybackRoutePolicy.isHttpError(apiStatus(error))) {
+                        // native-link itself failed before a playable URL was
+                        // issued. Extension/decoder fallbacks cannot repair an
+                        // upstream HTTP rejection.
+                        showError(httpFailureMessage(apiStatus(error), -1, true));
                     } else if (!advanceFallback()) {
                         showError(error.getMessage());
                     }
@@ -179,6 +212,47 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 + "?ext=" + ApiClient.encode(requestedExtension) + "&raw=1");
     }
 
+    private Map<String, String> providerHeaders(JSONObject data) {
+        JSONObject source = data.optJSONObject("requestHeaders");
+        if (source == null) source = data.optJSONObject("headers");
+        if (source == null) return Collections.emptyMap();
+        Map<String, String> result = new LinkedHashMap<>();
+        Iterator<String> keys = source.keys();
+        while (keys.hasNext()) {
+            String rawName = keys.next();
+            String name = allowedProviderHeader(rawName);
+            String value = source.optString(rawName, "").replace('\r', ' ').replace('\n', ' ').trim();
+            if (name != null && !value.isEmpty() && value.length() <= 2_048) result.put(name, value);
+        }
+        return result;
+    }
+
+    private static String allowedProviderHeader(String rawName) {
+        String name = rawName == null ? "" : rawName.trim().toLowerCase(Locale.US);
+        if ("user-agent".equals(name)) return "User-Agent";
+        if ("accept".equals(name)) return "Accept";
+        if ("referer".equals(name)) return "Referer";
+        if ("origin".equals(name)) return "Origin";
+        if ("cookie".equals(name)) return "Cookie";
+        if ("authorization".equals(name)) return "Authorization";
+        if ("icy-metadata".equals(name)) return "Icy-MetaData";
+        return null;
+    }
+
+    private Map<String, String> mediaRequestHeaders(String url) {
+        Map<String, String> values = new LinkedHashMap<>();
+        if (PlaybackRoutePolicy.isBlofyUrl(api.baseUrl(), url)) {
+            // Only BLOFY/Railway receives the native session and device key.
+            values.putAll(api.authenticatedHeaders());
+        } else {
+            values.putAll(providerHeaders);
+        }
+        if (!values.containsKey("Accept")) {
+            values.put("Accept", "video/mp2t,application/vnd.apple.mpegurl,application/x-mpegURL,video/*,audio/*,*/*;q=0.8");
+        }
+        return values;
+    }
+
     private boolean isCurrent(int generation, String requestedId) {
         return generation == resolveGeneration.get() && requestedId.equals(id) && !isFinishing() && !isDestroyed();
     }
@@ -192,34 +266,33 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         preparePlayer(url, "m3u8");
     }
 
-    private boolean advanceAfterFailure() {
-        if (PlaybackRoutePolicy.canTryRelay(relayUrl, relayAttempted)) {
+    private boolean tryRelay() {
+        if (PlaybackRoutePolicy.canTryRelay(relayUrl, relayAttempted, playbackUrl)) {
             relayAttempted = true;
-            extension = originalExtension;
             playbackUrl = relayUrl;
-            playbackExtension = originalExtension;
+            playbackExtension = relayExtension == null || relayExtension.isEmpty()
+                    ? originalExtension : relayExtension;
             showLoading();
-            preparePlayer(relayUrl, originalExtension);
+            preparePlayer(relayUrl, playbackExtension);
             return true;
         }
-        return advanceFallback();
+        return false;
     }
 
     private void preparePlayer(String url, String mediaExtension) {
         if (isFinishing() || isDestroyed() || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
         releasePlayer();
+        Map<String, String> requestHeaders = mediaRequestHeaders(url);
+        String userAgent = requestHeaders.remove("User-Agent");
+        if (userAgent == null || userAgent.trim().isEmpty()) {
+            userAgent = "VLC/3.0.20 LibVLC/3.0.20 BLOFY-Media3/1.11";
+        }
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                 .setConnectTimeoutMs(12_000)
                 .setReadTimeoutMs(isLive() ? 35_000 : 55_000)
                 .setAllowCrossProtocolRedirects(true)
-                // Widely accepted by Xtream/CDN sources that reject generic
-                // app user agents while still keeping BLOFY credentials away
-                // from third-party hosts.
-                .setUserAgent("VLC/3.0.20 LibVLC/3.0.20");
-        // Compatibility streams remain on Railway and need the protected
-        // session. Direct provider playback must never receive those secrets.
-        if (url.startsWith(api.baseUrl() + "/")) http.setDefaultRequestProperties(api.authenticatedHeaders());
-        else http.setDefaultRequestProperties(Collections.emptyMap());
+                .setUserAgent(userAgent)
+                .setDefaultRequestProperties(requestHeaders);
         DefaultDataSource.Factory source = new DefaultDataSource.Factory(this, http);
         int flags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
                 | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
@@ -307,6 +380,8 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         playbackUrl = null;
         playbackExtension = null;
         relayUrl = null;
+        relayExtension = null;
+        providerHeaders = Collections.emptyMap();
         relayAttempted = false;
         resolveDirect();
     }
@@ -382,6 +457,8 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 playbackUrl = null;
                 playbackExtension = null;
                 relayUrl = null;
+                relayExtension = null;
+                providerHeaders = Collections.emptyMap();
                 relayAttempted = false;
                 binding.title.setText(name);
                 binding.epg.setText("جلب دليل البرنامج…");
@@ -421,16 +498,55 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         final int httpStatus = httpStatus(error);
         final int providerStatus = providerStatus(error);
         releasePlayer();
-        if (PlaybackRoutePolicy.isBlofyUrl(api.baseUrl(), failedUrl)
+        final boolean blofyRequest = PlaybackRoutePolicy.isBlofyUrl(api.baseUrl(), failedUrl);
+        if (blofyRequest
                 && PlaybackRoutePolicy.isBackendAuthorizationStatus(httpStatus, providerStatus)) {
             LicenseGate.openActivation(this, "انتهت جلسة التشغيل أو الاشتراك. حدّث التفعيل ثم سجّل الدخول.");
             return;
         }
-        if (!advanceAfterFailure()) {
-            String status = httpStatus > 0 ? " (HTTP " + httpStatus + ")" : "";
-            showError("تعذر تشغيل المصدر بعد تجربة الوضع المباشر والوسيط والتوافق.\n"
-                    + error.getErrorCodeName() + status);
+        if (PlaybackRoutePolicy.isHttpError(httpStatus)) {
+            int sourceStatus = providerStatus > 0 ? providerStatus : httpStatus;
+            // A 4xx/5xx is a request, account, IP or source failure. Changing
+            // MIME/decoder cannot fix it. Only an eligible device-direct error
+            // may change network route to the relay, and only once.
+            if (PlaybackRoutePolicy.isRelayEligibleHttpStatus(sourceStatus) && tryRelay()) return;
+            showError(httpFailureMessage(httpStatus, providerStatus, blofyRequest));
+            return;
         }
+        if (isRelayEligibleTransportError(error) && tryRelay()) return;
+        if (!advanceAfterFailure()) {
+            showError("تعذر فك أو قراءة صيغة المصدر بعد تجربة أوضاع التوافق.\n"
+                    + error.getErrorCodeName());
+        }
+    }
+
+    private boolean advanceAfterFailure() {
+        return advanceFallback();
+    }
+
+    private static boolean isRelayEligibleTransportError(PlaybackException error) {
+        return error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+                || error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+                || error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+                || error.errorCode == PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED;
+    }
+
+    private static String httpFailureMessage(int httpStatus, int providerStatus, boolean blofyRequest) {
+        int effective = providerStatus > 0 ? providerStatus : httpStatus;
+        String diagnostic = providerStatus > 0 && providerStatus != httpStatus
+                ? "HTTP " + httpStatus + " • المزود " + providerStatus
+                : "HTTP " + effective;
+        if (effective == 401 || effective == 402) {
+            return "رفض مزود البث بيانات الحساب (" + diagnostic + "). حدّث بيانات الباقة ثم أعد المحاولة.";
+        }
+        if (effective == 403 || effective == 451 || effective == 456) {
+            return "رفض مزود البث هذا الطلب أو مسار الشبكة (" + diagnostic + ").";
+        }
+        if (effective == 404 || effective == 410) {
+            return "رابط المحتوى غير موجود أو انتهت صلاحيته (" + diagnostic + ").";
+        }
+        return (blofyRequest ? "تعذر مسار التشغيل عبر BLOFY" : "رفض مزود البث الطلب")
+                + " (" + diagnostic + ").";
     }
 
     private static int httpStatus(Throwable error) {
@@ -438,6 +554,16 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
             if (current instanceof HttpDataSource.InvalidResponseCodeException) {
                 return ((HttpDataSource.InvalidResponseCodeException) current).responseCode;
+            }
+        }
+        return -1;
+    }
+
+    private static int apiStatus(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof ApiClient.ApiException) {
+                return ((ApiClient.ApiException) current).status;
             }
         }
         return -1;
@@ -461,8 +587,9 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             if (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
+                    || event.getKeyCode() == KeyEvent.KEYCODE_BACK
                     || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B) {
-                finish();
+                exitPlayer();
                 return true;
             }
             if (event.getKeyCode() == KeyEvent.KEYCODE_CHANNEL_UP) { switchChannel(1); return true; }
@@ -477,6 +604,15 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     }
 
     private String positionKey() { return "position_" + type + "_" + id; }
+
+    private void exitPlayer() {
+        if (exiting) return;
+        exiting = true;
+        resolveGeneration.incrementAndGet();
+        resolving = false;
+        releasePlayer();
+        finish();
+    }
 
     private void releasePlayer() {
         handler.removeCallbacks(timeout);
@@ -529,6 +665,8 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         playbackUrl = null;
         playbackExtension = null;
         relayUrl = null;
+        relayExtension = null;
+        providerHeaders = Collections.emptyMap();
         relayAttempted = false;
         extension = originalExtension;
         fallbackStage = 0;
