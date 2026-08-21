@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeSeriesInfo, XtreamClient } from "../lib/xtream.mjs";
+import { normalizeSeriesInfo, XtreamClient, xtreamResponseLimits } from "../lib/xtream.mjs";
+
+test("large Xtream catalogs use a larger bounded response window", () => {
+  const regular = xtreamResponseLimits("get_vod_categories");
+  const catalog = xtreamResponseLimits("get_vod_streams");
+  assert.equal(regular.maxBytes, 48_000_000);
+  assert.ok(catalog.maxBytes >= 160_000_000);
+  assert.ok(catalog.timeoutMs >= 60_000);
+});
 
 test("Xtream live streams default to transport stream and honor provider extensions", () => {
   const client = new XtreamClient({ serverUrl: "https://provider.example", username: "user", password: "pass" });
