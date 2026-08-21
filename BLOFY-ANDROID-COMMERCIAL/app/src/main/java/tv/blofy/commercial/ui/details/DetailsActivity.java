@@ -2,6 +2,7 @@ package tv.blofy.commercial.ui.details;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -175,6 +176,27 @@ public final class DetailsActivity extends LicensedActivity {
         episodeAdapter.notifyDataSetChanged();
     }
 
+    private boolean focusFirstEpisode() {
+        if (episodeAdapter == null || episodeAdapter.getItemCount() == 0) return false;
+        binding.episodes.scrollToPosition(0);
+        binding.episodes.post(() -> {
+            RecyclerView.ViewHolder holder = binding.episodes.findViewHolderForAdapterPosition(0);
+            if (holder != null) holder.itemView.requestFocus();
+        });
+        return true;
+    }
+
+    private boolean focusSelectedSeason() {
+        if (seasonAdapter == null || seasons.isEmpty()) return false;
+        int position = Math.max(0, Math.min(seasonAdapter.selected, seasons.size() - 1));
+        binding.seasons.scrollToPosition(position);
+        binding.seasons.post(() -> {
+            RecyclerView.ViewHolder holder = binding.seasons.findViewHolderForAdapterPosition(position);
+            if (holder != null) holder.itemView.requestFocus();
+        });
+        return true;
+    }
+
     private void play(String playId, String playName, String playType, String ext) {
         startActivity(new Intent(this, PlayerActivity.class)
                 .putExtra("id", playId)
@@ -219,6 +241,10 @@ public final class DetailsActivity extends LicensedActivity {
             holder.binding.getRoot().setOnFocusChangeListener((v, focused) -> {
                 if (focused) selectSeason(holder.getBindingAdapterPosition());
             });
+            holder.binding.getRoot().setOnKeyListener((v, keyCode, event) ->
+                    event.getAction() == KeyEvent.ACTION_DOWN
+                            && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                            && focusFirstEpisode());
         }
         @Override public int getItemCount() { return seasons.size(); }
         final class Holder extends RecyclerView.ViewHolder {
@@ -242,6 +268,14 @@ public final class DetailsActivity extends LicensedActivity {
                     play(episode.id, name + " • " + episode.title, "episode", episode.extension));
             holder.binding.getRoot().setOnFocusChangeListener((v, focused) ->
                     v.animate().scaleX(focused ? 1.045f : 1f).scaleY(focused ? 1.045f : 1f).setDuration(120).start());
+            holder.binding.getRoot().setOnKeyListener((v, keyCode, event) -> {
+                int adapterPosition = holder.getBindingAdapterPosition();
+                return event.getAction() == KeyEvent.ACTION_DOWN
+                        && keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                        && adapterPosition != RecyclerView.NO_POSITION
+                        && adapterPosition < 3
+                        && focusSelectedSeason();
+            });
         }
         @Override public int getItemCount() { return rows.size(); }
         final class Holder extends RecyclerView.ViewHolder {
@@ -256,5 +290,15 @@ public final class DetailsActivity extends LicensedActivity {
         if (store != null) store.close();
         binding = null;
         super.onDestroy();
+    }
+
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
+                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            finish();
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 }

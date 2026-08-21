@@ -3,6 +3,7 @@ package tv.blofy.commercial.ui.home;
 import android.content.Intent;
 import android.database.Cursor;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,6 +61,14 @@ public final class HomeActivity extends LicensedActivity {
         binding.heroDetails.setEnabled(false);
         binding.heroPlay.setOnClickListener(view -> open(featured, false));
         binding.heroDetails.setOnClickListener(view -> open(featured, true));
+        binding.heroPlay.setOnKeyListener((view, keyCode, event) ->
+                event.getAction() == KeyEvent.ACTION_DOWN
+                        && keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                        && focusLatest());
+        binding.heroDetails.setOnKeyListener((view, keyCode, event) ->
+                event.getAction() == KeyEvent.ACTION_DOWN
+                        && keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                        && focusLatest());
         binding.status.setOnClickListener(view -> startActivity(new Intent(this, SyncActivity.class)));
         installNavigation();
         loadHome();
@@ -85,6 +94,16 @@ public final class HomeActivity extends LicensedActivity {
                 .putExtra("type", type)
                 .putExtra("favorites", favorites)
                 .putExtra("history", history));
+    }
+
+    private boolean focusLatest() {
+        if (latestAdapter == null || latestAdapter.getItemCount() == 0) return false;
+        binding.latest.scrollToPosition(0);
+        binding.latest.post(() -> {
+            RecyclerView.ViewHolder holder = binding.latest.findViewHolderForAdapterPosition(0);
+            if (holder != null) holder.itemView.requestFocus();
+        });
+        return true;
     }
 
     private void loadHome() {
@@ -266,6 +285,19 @@ public final class HomeActivity extends LicensedActivity {
                         .translationZ(focused ? 8f : 0f).setDuration(120).start();
                 if (focused) renderHero(item);
             });
+            holder.binding.getRoot().setOnKeyListener((view, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN
+                        || keyCode != KeyEvent.KEYCODE_DPAD_LEFT) return false;
+                RecyclerView.LayoutManager raw = binding.latest.getLayoutManager();
+                if (!(raw instanceof LinearLayoutManager)) return false;
+                LinearLayoutManager layout = (LinearLayoutManager) raw;
+                int edge = layout.findLastCompletelyVisibleItemPosition();
+                if (edge == RecyclerView.NO_POSITION) edge = layout.findLastVisibleItemPosition();
+                int positionNow = holder.getBindingAdapterPosition();
+                if (positionNow == RecyclerView.NO_POSITION || positionNow < edge) return false;
+                binding.navHome.requestFocus();
+                return true;
+            });
         }
 
         @Override public int getItemCount() { return rows.size(); }
@@ -277,5 +309,15 @@ public final class HomeActivity extends LicensedActivity {
                 this.binding = binding;
             }
         }
+    }
+
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
+                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            finish();
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 }

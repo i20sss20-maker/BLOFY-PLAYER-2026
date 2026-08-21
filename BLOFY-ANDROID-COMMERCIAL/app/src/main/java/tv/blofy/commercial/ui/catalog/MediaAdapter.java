@@ -26,20 +26,24 @@ final class MediaAdapter extends ListAdapter<MediaRecord, MediaAdapter.Holder> {
     interface Favorite { void toggle(MediaRecord item); }
     interface Focused { void focused(int position, MediaRecord item); }
     interface MoveLeft { boolean move(View card); }
+    interface MoveUp { boolean move(int position); }
 
     private final boolean live;
     private final Open open;
     private final Favorite favorite;
     private final Focused focused;
     private final MoveLeft moveLeft;
+    private final MoveUp moveUp;
 
-    MediaAdapter(boolean live, Open open, Favorite favorite, Focused focused, MoveLeft moveLeft) {
+    MediaAdapter(boolean live, Open open, Favorite favorite, Focused focused,
+                 MoveLeft moveLeft, MoveUp moveUp) {
         super(DIFF);
         this.live = live;
         this.open = open;
         this.favorite = favorite;
         this.focused = focused;
         this.moveLeft = moveLeft;
+        this.moveUp = moveUp;
         setHasStableIds(true);
     }
 
@@ -108,10 +112,14 @@ final class MediaAdapter extends ListAdapter<MediaRecord, MediaAdapter.Holder> {
                 if (adapterPosition != RecyclerView.NO_POSITION) focused.focused(adapterPosition, getItem(adapterPosition));
             }
         });
-        holder.binding.getRoot().setOnKeyListener((view, keyCode, event) ->
-                event.getAction() == KeyEvent.ACTION_DOWN
-                        && keyCode == KeyEvent.KEYCODE_DPAD_LEFT
-                        && moveLeft.move(view));
+        holder.binding.getRoot().setOnKeyListener((view, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && moveLeft.move(view)) return true;
+            int adapterPosition = holder.getBindingAdapterPosition();
+            return keyCode == KeyEvent.KEYCODE_DPAD_UP
+                    && adapterPosition != RecyclerView.NO_POSITION
+                    && moveUp.move(adapterPosition);
+        });
     }
 
     @Override public void onViewRecycled(@NonNull Holder holder) {

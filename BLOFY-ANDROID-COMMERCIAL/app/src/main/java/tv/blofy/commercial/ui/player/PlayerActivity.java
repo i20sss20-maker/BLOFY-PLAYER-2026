@@ -22,6 +22,7 @@ import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -36,6 +37,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.text.DateFormat;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Collections;
@@ -46,6 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.core.LicensedActivity;
+import tv.blofy.commercial.core.PlaybackRoutePolicy;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivityPlayerBinding;
@@ -57,7 +60,9 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private CatalogStore store;
     private ExoPlayer player;
     private String id, name, type, extension, originalExtension, playbackUrl, playbackExtension;
+    private String relayUrl;
     private int fallbackStage;
+    private boolean relayAttempted;
     private boolean historyRecorded;
     private boolean initialized;
     private volatile boolean resolving;
@@ -73,7 +78,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private final Runnable timeout = () -> {
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
         releasePlayer();
-        if (!advanceFallback()) {
+        if (!advanceAfterFailure()) {
             showError("المصدر لم يرسل فيديو خلال المهلة. جرّب إعادة الاتصال أو محتوى آخر.");
         }
     };
@@ -123,6 +128,9 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 JSONObject data = api.get("/api/native-link/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
                         + "?ext=" + ApiClient.encode(requestedExtension));
                 String path = data.optString("url");
+                String relayPath = data.optString("relayUrl");
+                final String signedRelay = PlaybackRoutePolicy.isSignedRelayPath(relayPath)
+                        ? api.absoluteUrl(relayPath) : "";
                 final String resolvedUrl;
                 if (path.startsWith("/api/native-play")) {
                     resolvedUrl = api.resolveMediaRedirect(path);
@@ -132,10 +140,16 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                     throw new Exception("تعذر إصدار رابط Media3 آمن.");
                 }
                 final String mediaExtension = normalize(data.optString("extension", requestedExtension));
-                // HTTPS media stays direct. Legacy HTTP media uses BLOFY's raw
-                // byte relay (no FFmpeg) so the app never permits cleartext.
-                final String mediaUrl = resolvedUrl;
+                // Never hand a provider's cleartext URL to Media3. New servers
+                // always return a signed /api/proxy relayUrl; the legacy raw
+                // route keeps v10 deployments usable during a rolling update.
+                final boolean legacyCleartext = PlaybackRoutePolicy.isCleartextHttp(resolvedUrl);
+                final String effectiveRelay = !signedRelay.isEmpty()
+                        ? signedRelay : secureRelayUrl(requestedType, requestedId, requestedExtension);
+                final String mediaUrl = legacyCleartext ? effectiveRelay : resolvedUrl;
                 if (!isCurrent(generation, requestedId)) return;
+                relayUrl = effectiveRelay;
+                relayAttempted = legacyCleartext || path.startsWith("/api/proxy");
                 playbackUrl = mediaUrl;
                 playbackExtension = mediaExtension;
                 resolving = false;
@@ -158,6 +172,13 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         });
     }
 
+    private String secureRelayUrl(String requestedType, String requestedId, String requestedExtension) {
+        String apiType = "series".equals(requestedType) || "episode".equals(requestedType)
+                ? "episode" : requestedType;
+        return api.absoluteUrl("/api/play/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
+                + "?ext=" + ApiClient.encode(requestedExtension) + "&raw=1");
+    }
+
     private boolean isCurrent(int generation, String requestedId) {
         return generation == resolveGeneration.get() && requestedId.equals(id) && !isFinishing() && !isDestroyed();
     }
@@ -169,6 +190,19 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         playbackUrl = url;
         playbackExtension = "m3u8";
         preparePlayer(url, "m3u8");
+    }
+
+    private boolean advanceAfterFailure() {
+        if (PlaybackRoutePolicy.canTryRelay(relayUrl, relayAttempted)) {
+            relayAttempted = true;
+            extension = originalExtension;
+            playbackUrl = relayUrl;
+            playbackExtension = originalExtension;
+            showLoading();
+            preparePlayer(relayUrl, originalExtension);
+            return true;
+        }
+        return advanceFallback();
     }
 
     private void preparePlayer(String url, String mediaExtension) {
@@ -272,6 +306,8 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         extension = originalExtension;
         playbackUrl = null;
         playbackExtension = null;
+        relayUrl = null;
+        relayAttempted = false;
         resolveDirect();
     }
 
@@ -345,6 +381,8 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 historyRecorded = false;
                 playbackUrl = null;
                 playbackExtension = null;
+                relayUrl = null;
+                relayAttempted = false;
                 binding.title.setText(name);
                 binding.epg.setText("جلب دليل البرنامج…");
                 resolveDirect();
@@ -379,8 +417,45 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
 
     @Override public void onPlayerError(PlaybackException error) {
         handler.removeCallbacks(timeout);
+        final String failedUrl = playbackUrl;
+        final int httpStatus = httpStatus(error);
+        final int providerStatus = providerStatus(error);
         releasePlayer();
-        if (!advanceFallback()) showError("تعذر تشغيل ترميز هذا المصدر بعد تجربة الوضع المباشر والتوافق.\n" + error.getErrorCodeName());
+        if (PlaybackRoutePolicy.isBlofyUrl(api.baseUrl(), failedUrl)
+                && PlaybackRoutePolicy.isBackendAuthorizationStatus(httpStatus, providerStatus)) {
+            LicenseGate.openActivation(this, "انتهت جلسة التشغيل أو الاشتراك. حدّث التفعيل ثم سجّل الدخول.");
+            return;
+        }
+        if (!advanceAfterFailure()) {
+            String status = httpStatus > 0 ? " (HTTP " + httpStatus + ")" : "";
+            showError("تعذر تشغيل المصدر بعد تجربة الوضع المباشر والوسيط والتوافق.\n"
+                    + error.getErrorCodeName() + status);
+        }
+    }
+
+    private static int httpStatus(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (current instanceof HttpDataSource.InvalidResponseCodeException) {
+                return ((HttpDataSource.InvalidResponseCodeException) current).responseCode;
+            }
+        }
+        return -1;
+    }
+
+    private static int providerStatus(Throwable error) {
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
+            if (!(current instanceof HttpDataSource.InvalidResponseCodeException)) continue;
+            byte[] body = ((HttpDataSource.InvalidResponseCodeException) current).responseBody;
+            if (body == null || body.length == 0) return -1;
+            try {
+                return new JSONObject(new String(body, StandardCharsets.UTF_8)).optInt("providerStatus", -1);
+            } catch (Exception ignored) {
+                return -1;
+            }
+        }
+        return -1;
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
@@ -453,6 +528,8 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         // BLOFY for a fresh link when this screen returns to the foreground.
         playbackUrl = null;
         playbackExtension = null;
+        relayUrl = null;
+        relayAttempted = false;
         extension = originalExtension;
         fallbackStage = 0;
         super.onStop();

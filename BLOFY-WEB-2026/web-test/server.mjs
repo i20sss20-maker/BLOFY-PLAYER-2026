@@ -820,6 +820,12 @@ async function handleApi(req, res, url) {
       // copied through BLOFY HTTPS without FFmpeg/transcoding, so Android never
       // needs a global cleartext exception.
       url: signedPath(source, nativePlaybackPath(source), 7200),
+      // Some providers reject direct Android/TV requests even though the same
+      // source is valid from Railway. Keep a second raw-byte route available
+      // for Media3. This is a relay only (Range requests are preserved); it
+      // does not invoke FFmpeg and therefore starts much faster than the
+      // compatibility/transcode pipeline.
+      relayUrl: signedPath(source, "/api/proxy", 7200),
       extension: resolvedExtension,
       mode: NATIVE_PLAYBACK_MODE,
     }, securityHeaders());
