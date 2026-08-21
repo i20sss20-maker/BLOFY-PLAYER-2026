@@ -1,0 +1,60 @@
+name: Build BLOFY Commercial APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "blofy-commercial-*"
+    paths:
+      - "BLOFY-ANDROID-COMMERCIAL/**"
+      - ".github/workflows/commercial-android.yml"
+  pull_request:
+    paths:
+      - "BLOFY-ANDROID-COMMERCIAL/**"
+      - ".github/workflows/commercial-android.yml"
+
+concurrency:
+  group: blofy-commercial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commercial-apk:
+    name: Commercial Native Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+      - name: Verify commercial source
+        run: |
+          test -f BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player/PlayerActivity.java
+          ! grep -R "android.webkit.WebView" BLOFY-ANDROID-COMMERCIAL/app/src/main/java
+          grep -R "androidx.media3" BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player
+      - name: Test and build
+        working-directory: BLOFY-ANDROID-COMMERCIAL
+        env:
+          BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
+        run: gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOFY-PLAYER-COMMERCIAL-APK
+          path: BLOFY-ANDROID-COMMERCIAL/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOFY-COMMERCIAL-BUILD-REPORTS
+          path: |
+            BLOFY-ANDROID-COMMERCIAL/app/build/reports/**
+            BLOFY-ANDROID-COMMERCIAL/app/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
