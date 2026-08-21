@@ -1,0 +1,18 @@
+<resources>
+    <style name="Theme.Blofy" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">@color/blofy_purple_light</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/blofy_black</item>
+        <item name="android:navigationBarColor">@color/blofy_black</item>
+        <item name="android:windowBackground">@drawable/bg_blofy</item>
+        <item name="colorPrimary">@color/blofy_purple</item>
+        <item name="colorOnPrimary">@color/blofy_text</item>
+        <item name="colorSurface">@color/blofy_surface</item>
+        <item name="colorOnSurface">@color/blofy_text</item>
+    </style>
+    <style name="Theme.Blofy.Player" parent="Theme.Blofy">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
