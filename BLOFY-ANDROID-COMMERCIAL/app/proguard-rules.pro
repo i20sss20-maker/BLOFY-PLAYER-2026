@@ -1,0 +1,2 @@
+-keep class tv.blofy.commercial.** { *; }
+-dontwarn org.conscrypt.**
