@@ -1,5 +1,22 @@
 import { fetchSafe, readTextLimited } from "./security.mjs";
 
+const LARGE_CATALOG_ACTIONS = new Set(["get_live_streams", "get_vod_streams", "get_series"]);
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+}
+
+export function xtreamResponseLimits(action = "") {
+  if (!LARGE_CATALOG_ACTIONS.has(action)) {
+    return { maxBytes: 48_000_000, timeoutMs: 15_000 };
+  }
+  return {
+    maxBytes: boundedInteger(process.env.XTREAM_CATALOG_MAX_BYTES, 160_000_000, 48_000_000, 256_000_000),
+    timeoutMs: boundedInteger(process.env.XTREAM_CATALOG_TIMEOUT_MS, 60_000, 15_000, 120_000),
+  };
+}
+
 function cleanBase(value) {
   const raw = String(value).trim();
   const url = new URL(raw);
@@ -28,7 +45,8 @@ export class XtreamClient {
   async request(action = "", params = {}) {
     const response = await fetchSafe(this.apiUrl(action, params), { headers: { accept: "application/json" } });
     if (!response.ok) throw new Error(`الخادم رفض الطلب (${response.status}).`);
-    const text = await readTextLimited(response, 48_000_000, 15_000);
+    const limits = xtreamResponseLimits(action);
+    const text = await readTextLimited(response, limits.maxBytes, limits.timeoutMs);
     try { return JSON.parse(text); } catch { throw new Error("الخادم أعاد بيانات غير صالحة."); }
   }
 
