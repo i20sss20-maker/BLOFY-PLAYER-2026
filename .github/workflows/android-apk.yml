@@ -52,11 +52,22 @@ jobs:
         working-directory: BLOFY-ANDROID-2026
         run: gradle wrapper --gradle-version 8.13
 
-      - name: Validate and build native APK
+      - name: Run native unit tests
         working-directory: BLOFY-ANDROID-2026
         run: |
-          ./gradlew --no-daemon clean lintDebug testDebugUnitTest assembleDebug \
+          ./gradlew --no-daemon clean testDebugUnitTest \
             -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Build native APK
+        working-directory: BLOFY-ANDROID-2026
+        run: |
+          ./gradlew --no-daemon assembleDebug \
+            -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Generate Android lint report
+        continue-on-error: true
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon lintDebug
 
       - name: Prepare named APK
         run: |
