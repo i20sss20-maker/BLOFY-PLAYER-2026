@@ -1,6 +1,6 @@
 workflows:
-  blofy-player-test-apk:
-    name: BLOFY PLAYER Android Test APK
+  blofy-player-commercial-apk:
+    name: BLOFY PLAYER Commercial Native APK
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
@@ -10,12 +10,12 @@ workflows:
     scripts:
       - name: Create Gradle wrapper
         script: |
-          cd BLOFY-ANDROID-2026
+          cd BLOFY-ANDROID-COMMERCIAL
           gradle wrapper --gradle-version 8.13
       - name: Validate and build APK
         script: |
-          cd BLOFY-ANDROID-2026
+          cd BLOFY-ANDROID-COMMERCIAL
           ./gradlew --no-daemon lintDebug testDebugUnitTest assembleDebug -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
     artifacts:
-      - BLOFY-ANDROID-2026/app/build/outputs/apk/debug/*.apk
-      - BLOFY-ANDROID-2026/app/build/reports/lint-results-debug.html
+      - BLOFY-ANDROID-COMMERCIAL/app/build/outputs/apk/debug/*.apk
+      - BLOFY-ANDROID-COMMERCIAL/app/build/reports/lint-results-debug.html
