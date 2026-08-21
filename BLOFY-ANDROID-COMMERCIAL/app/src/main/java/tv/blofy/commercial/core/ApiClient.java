@@ -21,7 +21,7 @@ import tv.blofy.commercial.BuildConfig;
 public final class ApiClient {
     private static final int CONNECT_TIMEOUT = 8_000;
     private static final int READ_TIMEOUT = 20_000;
-    private static final int CATALOG_READ_TIMEOUT = 90_000;
+    private static final int CATALOG_READ_TIMEOUT = 120_000;
     private final Context context;
     private final SharedPreferences preferences;
     private final String baseUrl = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "");
