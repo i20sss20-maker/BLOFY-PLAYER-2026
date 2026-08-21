@@ -15,8 +15,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 2026082214
-        versionName = "2026.08.22.14-commercial"
+        versionCode = 2026082215
+        versionName = "2026.08.22.15-commercial"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(blofyUrl.get().trimEnd('/')))
         vectorDrawables.useSupportLibrary = true
     }
@@ -63,12 +63,8 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // Media3 is always first. LibVLC is used only after a successful provider response
-    // when Media3 cannot decode or parse the stream/container.
     implementation("org.videolan.android:libvlc-all:3.7.5")
 
-    // Local catalogue database. Screens keep bounded LIMIT/OFFSET paging so the app
-    // never loads a very large provider library into memory at once.
     implementation("androidx.room:room-runtime:$room")
     annotationProcessor("androidx.room:room-compiler:$room")
 
