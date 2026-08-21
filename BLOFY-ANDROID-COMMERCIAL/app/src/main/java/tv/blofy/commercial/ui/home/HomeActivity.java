@@ -1,7 +1,6 @@
 package tv.blofy.commercial.ui.home;
 
 import android.content.Intent;
-import android.database.Cursor;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -129,7 +128,7 @@ public final class HomeActivity extends LicensedActivity {
         });
     }
 
-    /** Provider order is retained, alternating movies and series instead of sorting 11k rows. */
+    /** Provider order is retained, alternating movies and series from bounded Room slices. */
     private List<MediaRecord> recentMixed(int limit) {
         List<MediaRecord> movies = recentType("movies", limit);
         List<MediaRecord> series = recentType("series", limit);
@@ -145,19 +144,7 @@ public final class HomeActivity extends LicensedActivity {
     }
 
     private List<MediaRecord> recentType(String type, int limit) {
-        List<MediaRecord> result = new ArrayList<>();
-        String sql = "SELECT type,id,name,image,backdrop,category_id,rating,year,extension "
-                + "FROM media WHERE type=? ORDER BY rowid DESC LIMIT ?";
-        try (Cursor cursor = store.getReadableDatabase().rawQuery(
-                sql, new String[]{type, String.valueOf(Math.max(1, limit))})) {
-            while (cursor.moveToNext()) {
-                result.add(new MediaRecord(
-                        value(cursor, 0), value(cursor, 1), value(cursor, 2),
-                        value(cursor, 3), value(cursor, 4), value(cursor, 5),
-                        value(cursor, 6), value(cursor, 7), value(cursor, 8)));
-            }
-        }
-        return result;
+        return store.recent(type, limit);
     }
 
     private void renderHome(HomeSnapshot snapshot) {
@@ -165,7 +152,7 @@ public final class HomeActivity extends LicensedActivity {
         packageKind = snapshot.kind;
         binding.welcome.setText("باقتك جاهزة • " + snapshot.live + " قناة • "
                 + snapshot.movies + " فيلم • " + snapshot.series + " مسلسل");
-        binding.status.setText("●  Media3 جاهز");
+        binding.status.setText("●  Media3 + LibVLC جاهزان");
         binding.status.setTextColor(getColor(R.color.blofy_success));
         latestAdapter.submit(snapshot.rows);
         if (snapshot.rows.isEmpty()) {
@@ -193,8 +180,8 @@ public final class HomeActivity extends LicensedActivity {
         append(meta, item.rating.isEmpty() ? "" : "★ " + item.rating);
         binding.heroMeta.setText(meta);
         binding.heroDescription.setText("live".equals(item.type)
-                ? "شغّل القناة مباشرة عبر Media3 واستمتع بالتنقل السريع بين قنوات باقتك."
-                : "شاهد " + item.name + " بجودة باقتك، مع تشغيل أصلي سريع وتجربة مصممة للتلفزيون.");
+                ? "شغّل القناة مباشرة من جهازك إلى مزود الباقة مع تبديل سريع بين القنوات."
+                : "شاهد " + item.name + " بجودة باقتك، مع تشغيل مباشر واستكمال المشاهدة.");
         String backdrop = item.backdrop.isEmpty() ? item.image : item.backdrop;
         BlofyImageLoader.backdrop(this, binding.heroBackdrop, backdrop);
         BlofyImageLoader.poster(this, binding.heroPoster, item.image);
@@ -228,10 +215,6 @@ public final class HomeActivity extends LicensedActivity {
         if (value == null || value.trim().isEmpty()) return;
         if (target.length() > 0) target.append("  •  ");
         target.append(value.trim());
-    }
-
-    private static String value(Cursor cursor, int index) {
-        return cursor.isNull(index) ? "" : cursor.getString(index);
     }
 
     @Override protected void onDestroy() {
