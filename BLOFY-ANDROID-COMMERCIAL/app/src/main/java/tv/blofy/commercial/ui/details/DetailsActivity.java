@@ -16,24 +16,26 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.BlofyImageLoader;
-import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.core.LicensedActivity;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.databinding.ActivityDetailsBinding;
 import tv.blofy.commercial.databinding.ItemEpisodeBinding;
 import tv.blofy.commercial.databinding.ItemSeasonBinding;
+import tv.blofy.commercial.provider.ProviderProfile;
+import tv.blofy.commercial.provider.ProviderProfileStore;
+import tv.blofy.commercial.provider.XtreamClient;
 import tv.blofy.commercial.ui.player.PlayerActivity;
 
+/** Movie/series metadata is fetched directly from Xtream. Railway is not part of this screen. */
 public final class DetailsActivity extends LicensedActivity {
     private ActivityDetailsBinding binding;
-    private ApiClient api;
     private CatalogStore store;
     private String type, id, name, extension, image;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -46,7 +48,6 @@ public final class DetailsActivity extends LicensedActivity {
         super.onCreate(savedInstanceState);
         binding = ActivityDetailsBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
-        api = new ApiClient(this);
         store = new CatalogStore(this);
         type = value("type", "movies");
         id = value("id", "");
@@ -74,8 +75,12 @@ public final class DetailsActivity extends LicensedActivity {
         binding.progress.setVisibility(View.VISIBLE);
         worker.execute(() -> {
             try {
-                JSONObject data = api.get(("series".equals(type) ? "/api/series/" : "/api/movie/")
-                        + ApiClient.encode(id) + "?native=1");
+                ProviderProfile profile = ProviderProfileStore.load(this);
+                if (profile == null || !profile.isXtream()) throw new Exception("بيانات Xtream غير متوفرة على الجهاز.");
+                XtreamClient client = new XtreamClient(profile);
+                JSONObject data = "series".equals(type)
+                        ? normalizeSeries(client.seriesInfo(id))
+                        : normalizeMovie(client.movieInfo(id));
                 runOnUiThread(() -> {
                     if (request != generation.get() || isFinishing() || isDestroyed()) return;
                     render(data);
@@ -84,11 +89,6 @@ public final class DetailsActivity extends LicensedActivity {
                 runOnUiThread(() -> {
                     if (request != generation.get() || isFinishing() || isDestroyed()) return;
                     binding.progress.setVisibility(View.GONE);
-                    if (LicenseGate.isAuthorizationError(error)) {
-                        LicenseGate.openActivation(this, "انتهى الاشتراك. جدّد التفعيل أو بيانات الباقة ثم سجّل الدخول.");
-                        return;
-                    }
-                    // A movie can still be played from its catalog extension when details fail.
                     if (!"series".equals(type)) {
                         binding.description.setText("تعذر جلب الوصف، لكن يمكنك تشغيل الفيلم مباشرة.");
                         binding.play.setVisibility(View.VISIBLE);
@@ -101,6 +101,81 @@ public final class DetailsActivity extends LicensedActivity {
                 });
             }
         });
+    }
+
+    private JSONObject normalizeMovie(JSONObject raw) throws Exception {
+        JSONObject info = raw.optJSONObject("info");
+        if (info == null) info = new JSONObject();
+        JSONObject movie = raw.optJSONObject("movie_data");
+        if (movie == null) movie = new JSONObject();
+        JSONObject out = new JSONObject();
+        out.put("name", movie.optString("name", info.optString("name", name)));
+        out.put("extension", movie.optString("container_extension", extension));
+        out.put("image", info.optString("movie_image", movie.optString("stream_icon", image)));
+        out.put("backdrop", firstBackdrop(info));
+        out.put("rating", info.optString("rating"));
+        out.put("genre", info.optString("genre"));
+        out.put("duration", info.optString("duration"));
+        out.put("description", info.optString("plot", "لا يوجد وصف متاح."));
+        out.put("year", year(info.optString("releasedate", info.optString("releaseDate", ""))));
+        return out;
+    }
+
+    private JSONObject normalizeSeries(JSONObject raw) throws Exception {
+        JSONObject info = raw.optJSONObject("info");
+        if (info == null) info = new JSONObject();
+        JSONObject out = new JSONObject();
+        out.put("name", info.optString("name", name));
+        out.put("image", info.optString("cover", image));
+        out.put("backdrop", firstBackdrop(info));
+        out.put("rating", info.optString("rating"));
+        out.put("genre", info.optString("genre"));
+        out.put("description", info.optString("plot", "لا يوجد وصف متاح."));
+        out.put("year", year(info.optString("releaseDate", info.optString("release_date", ""))));
+
+        JSONArray seasonsOut = new JSONArray();
+        JSONObject episodes = raw.optJSONObject("episodes");
+        if (episodes != null) {
+            Iterator<String> keys = episodes.keys();
+            while (keys.hasNext()) {
+                String seasonNumber = keys.next();
+                JSONArray source = episodes.optJSONArray(seasonNumber);
+                if (source == null) continue;
+                JSONObject season = new JSONObject();
+                season.put("season", seasonNumber);
+                JSONArray normalized = new JSONArray();
+                for (int i = 0; i < source.length(); i++) {
+                    JSONObject row = source.optJSONObject(i);
+                    if (row == null) continue;
+                    JSONObject rowInfo = row.optJSONObject("info");
+                    if (rowInfo == null) rowInfo = new JSONObject();
+                    JSONObject episode = new JSONObject();
+                    episode.put("id", row.optString("id"));
+                    episode.put("number", row.optInt("episode_num", i + 1));
+                    episode.put("title", row.optString("title", "الحلقة " + (i + 1)));
+                    episode.put("extension", row.optString("container_extension", "mp4"));
+                    episode.put("duration", rowInfo.optString("duration"));
+                    episode.put("image", rowInfo.optString("movie_image", rowInfo.optString("cover_big", "")));
+                    if (!episode.optString("id").isEmpty()) normalized.put(episode);
+                }
+                season.put("episodes", normalized);
+                if (normalized.length() > 0) seasonsOut.put(season);
+            }
+        }
+        out.put("seasons", seasonsOut);
+        return out;
+    }
+
+    private static String firstBackdrop(JSONObject info) {
+        JSONArray values = info.optJSONArray("backdrop_path");
+        if (values != null && values.length() > 0) return values.optString(0, "");
+        return info.optString("backdrop_path", "");
+    }
+
+    private static String year(String value) {
+        if (value == null) return "";
+        String text = value.trim();
+        return text.length() >= 4 ? text.substring(0, 4) : text;
     }
 
     private void render(JSONObject data) {
