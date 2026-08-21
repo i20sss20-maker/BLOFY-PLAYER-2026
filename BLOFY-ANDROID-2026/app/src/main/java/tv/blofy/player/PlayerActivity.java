@@ -38,9 +38,14 @@ import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import androidx.media3.ui.PlayerView;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.text.DateFormat;
+import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -57,8 +62,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private LinearLayout errorPanel;
     private TextView errorText;
     private TextView titleView;
+    private TextView epgView;
+    private TextView channelHintView;
     private Button retryButton;
+    private Button closeButton;
     private ExoPlayer player;
+    private CatalogDatabase database;
+    private final List<BlofyModels.Media> liveChannels = new ArrayList<>();
+    private int liveChannelIndex = -1;
     private String id;
     private String url;
     private String title;
@@ -89,8 +100,11 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         extension = PlaybackPolicy.normalizeExtension(
                 getIntent().getStringExtra(EXTRA_EXTENSION),
                 "live".equals(kind) ? "ts" : "mp4");
+        database = new CatalogDatabase(this);
+        if (isLive()) loadLiveChannels();
         buildUi();
         hideSystemUi();
+        if (isLive()) loadEpg();
         if (validUrl(url)) prepareResolvedUrl();
         else if (!id.isEmpty()) resolvePlaybackLink();
         else showResolveError("بيانات المحتوى غير مكتملة.");
@@ -137,6 +151,41 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         titleView.setBackgroundColor(Color.argb(175, 8, 7, 14));
         FrameLayout.LayoutParams titleParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58), Gravity.TOP);
         root.addView(titleView, titleParams);
+
+        epgView = new TextView(this);
+        epgView.setTextColor(Color.rgb(225, 218, 238));
+        epgView.setTextSize(13);
+        epgView.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
+        epgView.setPadding(dp(24), 0, dp(24), dp(8));
+        epgView.setBackgroundColor(Color.argb(145, 8, 7, 14));
+        epgView.setVisibility(isLive() ? View.VISIBLE : View.GONE);
+        FrameLayout.LayoutParams epgParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), Gravity.TOP);
+        epgParams.topMargin = dp(58);
+        root.addView(epgView, epgParams);
+
+        closeButton = new Button(this);
+        closeButton.setText("إغلاق  ✕");
+        closeButton.setTextColor(Color.WHITE);
+        closeButton.setTextSize(14);
+        closeButton.setAllCaps(false);
+        closeButton.setFocusable(true);
+        closeButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(42, 38, 55)));
+        closeButton.setOnClickListener(view -> finish());
+        FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(dp(124), dp(52), Gravity.TOP | Gravity.LEFT);
+        closeParams.setMargins(dp(18), dp(6), 0, 0);
+        root.addView(closeButton, closeParams);
+
+        channelHintView = new TextView(this);
+        channelHintView.setText("↑ ↓  تبديل القناة");
+        channelHintView.setTextColor(Color.rgb(218, 205, 240));
+        channelHintView.setTextSize(13);
+        channelHintView.setGravity(Gravity.CENTER);
+        channelHintView.setPadding(dp(18), dp(8), dp(18), dp(8));
+        channelHintView.setBackgroundColor(Color.argb(165, 28, 18, 45));
+        channelHintView.setVisibility(isLive() && liveChannels.size() > 1 ? View.VISIBLE : View.GONE);
+        FrameLayout.LayoutParams hintParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42), Gravity.RIGHT | Gravity.BOTTOM);
+        hintParams.setMargins(0, 0, dp(20), dp(82));
+        root.addView(channelHintView, hintParams);
 
         progress = new ProgressBar(this);
         progress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.rgb(154, 88, 255)));
@@ -223,6 +272,85 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 });
             }
         });
+    }
+
+    private void loadLiveChannels() {
+        liveChannels.clear();
+        liveChannels.addAll(database.media("live", "", "", false, false, 20_000, 0));
+        liveChannelIndex = -1;
+        for (int index = 0; index < liveChannels.size(); index++) {
+            if (id.equals(liveChannels.get(index).id)) {
+                liveChannelIndex = index;
+                break;
+            }
+        }
+    }
+
+    private void loadEpg() {
+        if (!isLive() || id.isEmpty()) return;
+        final String requestedId = id;
+        network.execute(() -> {
+            try {
+                JSONObject response = new BlofyApi(this).get("/api/epg/" + BlofyApi.encode(requestedId));
+                JSONArray entries = response.optJSONArray("entries");
+                JSONObject selected = null;
+                long now = System.currentTimeMillis();
+                if (entries != null) {
+                    for (int index = 0; index < entries.length(); index++) {
+                        JSONObject entry = entries.optJSONObject(index);
+                        if (entry == null) continue;
+                        if (selected == null) selected = entry;
+                        long start = entry.optLong("start", 0);
+                        long end = entry.optLong("end", 0);
+                        if (start <= now && (end <= 0 || now < end)) {
+                            selected = entry;
+                            break;
+                        }
+                    }
+                }
+                JSONObject finalSelected = selected;
+                runOnUiThread(() -> {
+                    if (!requestedId.equals(id) || epgView == null) return;
+                    if (finalSelected == null) {
+                        epgView.setText("البث المباشر • لا توجد بيانات برنامج حاليًا");
+                        return;
+                    }
+                    String program = finalSelected.optString("title", "البث المباشر");
+                    long start = finalSelected.optLong("start", 0);
+                    long end = finalSelected.optLong("end", 0);
+                    String time = start > 0 && end > 0
+                            ? DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(start)) + " – "
+                            + DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(end))
+                            : "الآن";
+                    epgView.setText("الآن: " + program + "   •   " + time);
+                });
+            } catch (Exception ignored) {
+                runOnUiThread(() -> {
+                    if (requestedId.equals(id) && epgView != null) epgView.setText("البث المباشر");
+                });
+            }
+        });
+    }
+
+    private void switchLiveChannel(int direction) {
+        if (!isLive() || liveChannels.size() < 2) return;
+        if (liveChannelIndex < 0) liveChannelIndex = 0;
+        liveChannelIndex = (liveChannelIndex + direction + liveChannels.size()) % liveChannels.size();
+        BlofyModels.Media channel = liveChannels.get(liveChannelIndex);
+        releasePlayer();
+        resolving = false;
+        connectionAttempt = 0;
+        id = channel.id;
+        title = channel.name;
+        extension = PlaybackPolicy.normalizeExtension(channel.extension, "ts");
+        url = null;
+        titleView.setText(title + "   (" + (liveChannelIndex + 1) + "/" + liveChannels.size() + ")");
+        titleView.setVisibility(View.VISIBLE);
+        epgView.setText("جلب دليل البرنامج…");
+        progress.setVisibility(View.VISIBLE);
+        errorPanel.setVisibility(View.GONE);
+        loadEpg();
+        resolvePlaybackLink();
     }
 
     private void prepareResolvedUrl() {
@@ -365,6 +493,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 case KeyEvent.KEYCODE_BACK:
                     finish();
                     return true;
+                case KeyEvent.KEYCODE_CHANNEL_UP:
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    if (isLive()) {
+                        switchLiveChannel(1);
+                        return true;
+                    }
+                    break;
+                case KeyEvent.KEYCODE_CHANNEL_DOWN:
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (isLive()) {
+                        switchLiveChannel(-1);
+                        return true;
+                    }
+                    break;
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                     if (player != null) {
                         if (player.isPlaying()) player.pause(); else player.play();
@@ -390,6 +532,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     @Override
     protected void onDestroy() {
         network.shutdownNow();
+        if (database != null) database.close();
         super.onDestroy();
     }
 
