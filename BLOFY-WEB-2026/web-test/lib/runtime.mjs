@@ -1,4 +1,4 @@
-export const APP_VERSION = "2026.08.21.12";
+export const APP_VERSION = "2026.08.22.13";
 export const NATIVE_PLAYBACK_MODE = "direct";
 
 export function nativePlaybackTarget(rawUrl) {
