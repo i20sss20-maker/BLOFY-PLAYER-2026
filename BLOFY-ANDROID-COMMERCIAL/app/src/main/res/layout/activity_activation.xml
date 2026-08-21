@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_blofy"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_margin="28dp"
+        android:background="@drawable/bg_panel"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="28dp">
+
+        <LinearLayout
+            android:layout_width="300dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <ImageView
+                android:layout_width="150dp"
+                android:layout_height="150dp"
+                android:contentDescription="@string/app_name"
+                android:src="@drawable/blofy_brand" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/device_id"
+                android:textColor="@color/blofy_muted"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/deviceId"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:textColor="@color/blofy_text"
+                android:textIsSelectable="true"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:id="@+id/qr"
+                android:layout_width="185dp"
+                android:layout_height="185dp"
+                android:layout_marginTop="18dp"
+                android:background="#FFFFFF"
+                android:contentDescription="QR"
+                android:padding="7dp" />
+
+            <TextView
+                android:id="@+id/licenseStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center"
+                android:text="جاري التحقق من التفعيل…"
+                android:textColor="@color/blofy_muted"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <View android:layout_width="1dp" android:layout_height="match_parent" android:background="@color/blofy_border" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="28dp"
+            android:layout_weight="1"
+            android:gravity="end"
+            android:orientation="vertical">
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="end" android:text="@string/activation_title" android:textColor="@color/blofy_text" android:textSize="27sp" android:textStyle="bold" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="end" android:text="@string/activation_intro" android:textColor="@color/blofy_muted" android:textSize="14sp" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:hint="@string/activation_code" app:boxBackgroundMode="outline" app:boxStrokeColor="@color/blofy_purple_light" app:hintTextColor="@color/blofy_muted">
+                <com.google.android.material.textfield.TextInputEditText android:id="@+id/activationCode" android:layout_width="match_parent" android:layout_height="wrap_content" android:digits="0123456789" android:inputType="number" android:maxLength="12" android:textColor="@color/blofy_text" android:textDirection="ltr" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/activate" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="10dp" android:text="@string/activate" android:textColor="@color/button_text" app:backgroundTint="@color/blofy_purple" app:cornerRadius="14dp" />
+
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/packageType" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="22dp" app:checkedButton="@id/xtream" app:selectionRequired="true" app:singleSelection="true">
+                <com.google.android.material.button.MaterialButton android:id="@+id/xtream" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1" android:text="@string/xtream" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/m3u" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1" android:text="@string/m3u" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/packageName" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="12dp" android:background="@drawable/bg_panel" android:hint="@string/package_name" android:paddingHorizontal="16dp" android:textColor="@color/blofy_text" android:textColorHint="@color/blofy_muted" />
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/serverUrl" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp" android:background="@drawable/bg_panel" android:hint="@string/server_url" android:inputType="textUri" android:paddingHorizontal="16dp" android:textColor="@color/blofy_text" android:textColorHint="@color/blofy_muted" android:textDirection="ltr" />
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/username" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp" android:background="@drawable/bg_panel" android:hint="@string/username" android:paddingHorizontal="16dp" android:textColor="@color/blofy_text" android:textColorHint="@color/blofy_muted" android:textDirection="ltr" />
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/password" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp" android:background="@drawable/bg_panel" android:hint="@string/password" android:inputType="textPassword" android:paddingHorizontal="16dp" android:textColor="@color/blofy_text" android:textColorHint="@color/blofy_muted" android:textDirection="ltr" />
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/playlistUrl" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp" android:background="@drawable/bg_panel" android:hint="@string/playlist_url" android:inputType="textUri" android:paddingHorizontal="16dp" android:textColor="@color/blofy_text" android:textColorHint="@color/blofy_muted" android:textDirection="ltr" android:visibility="gone" />
+
+            <TextView android:id="@+id/formStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:gravity="end" android:textColor="@color/blofy_muted" android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/savePackage" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="10dp" android:text="@string/save_package" android:textColor="@color/button_text" app:backgroundTint="@color/blofy_purple" app:cornerRadius="14dp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

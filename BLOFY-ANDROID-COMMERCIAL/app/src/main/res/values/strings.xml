@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">BLOFY PLAYER</string>
+    <string name="boot_title">BLOFY PLAYER</string>
+    <string name="boot_subtitle">تجربة مشاهدة أسرع، أوضح، وأذكى</string>
+    <string name="activation_title">فعّل جهازك وأضف باقتك</string>
+    <string name="activation_intro">امسح الباركود من جوالك أو أدخل رمز التفعيل، ثم أضف بيانات Xtream أو M3U.</string>
+    <string name="device_id">رقم الجهاز</string>
+    <string name="activation_code">رمز التفعيل الرقمي</string>
+    <string name="activate">تفعيل الجهاز</string>
+    <string name="xtream">Xtream Codes</string>
+    <string name="m3u">M3U / M3U8</string>
+    <string name="server_url">رابط الخادم</string>
+    <string name="username">اسم المستخدم</string>
+    <string name="password">كلمة المرور</string>
+    <string name="playlist_url">رابط القائمة</string>
+    <string name="package_name">اسم القائمة (اختياري)</string>
+    <string name="save_package">حفظ وقراءة الباقة</string>
+</resources>

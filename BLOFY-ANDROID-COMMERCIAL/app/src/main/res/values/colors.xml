@@ -1,0 +1,13 @@
+<resources>
+    <color name="blofy_black">#05040A</color>
+    <color name="blofy_surface">#0F1020</color>
+    <color name="blofy_surface_high">#181329</color>
+    <color name="blofy_purple">#7B2CFF</color>
+    <color name="blofy_purple_light">#B576FF</color>
+    <color name="blofy_magenta">#E21CFF</color>
+    <color name="blofy_text">#FFFFFF</color>
+    <color name="blofy_muted">#AAA5BA</color>
+    <color name="blofy_success">#46E6A2</color>
+    <color name="blofy_error">#FF687A</color>
+    <color name="blofy_border">#3D3159</color>
+</resources>
