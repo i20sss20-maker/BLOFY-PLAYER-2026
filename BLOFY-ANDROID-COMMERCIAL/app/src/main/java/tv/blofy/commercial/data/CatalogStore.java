@@ -30,7 +30,9 @@ public final class CatalogStore {
     public CatalogStore(Context context) {
         database = BlofyDatabase.get(context);
         dao = database.catalogDao();
-        nextSortOrder = dao.maxSortOrder() + 1L;
+        // SyncActivity always clears before a full provider import. Keeping this
+        // constructor query-free also guarantees Activity creation never blocks on Room.
+        nextSortOrder = 0L;
     }
 
     public synchronized void clearCatalog() {
