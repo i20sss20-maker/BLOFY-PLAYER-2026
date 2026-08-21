@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Provider HTTP streams are copied through BLOFY's authenticated HTTPS
-         relay. The Android app never opens cleartext traffic itself. -->
-    <base-config cleartextTrafficPermitted="false" />
+    <!-- IPTV providers commonly expose direct MPEG-TS/HLS endpoints over HTTP.
+         Playback is intentionally allowed here so the TV can connect to the
+         provider itself instead of relaying video through Railway. -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
