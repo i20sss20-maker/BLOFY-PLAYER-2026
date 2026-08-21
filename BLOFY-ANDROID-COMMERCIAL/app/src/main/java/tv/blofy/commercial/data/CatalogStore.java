@@ -115,11 +115,15 @@ public final class CatalogStore {
         sql.append("LIMIT ? OFFSET ?");
         args.add(Math.max(1, limit));
         args.add(Math.max(0, offset));
+        return records(dao.rawMedia(new SimpleSQLiteQuery(sql.toString(), args.toArray())));
+    }
 
-        List<MediaEntity> values = dao.rawMedia(new SimpleSQLiteQuery(sql.toString(), args.toArray()));
-        List<MediaRecord> result = new ArrayList<>(values == null ? 0 : values.size());
-        if (values != null) for (MediaEntity row : values) result.add(record(row));
-        return result;
+    /** Small home-page slice in provider import order; never scans into app memory. */
+    public List<MediaRecord> recent(String type, int limit) {
+        String sql = "SELECT type,id,name,image,backdrop,category_id,rating,year,extension,sort_order "
+                + "FROM media WHERE type=? ORDER BY sort_order DESC LIMIT ?";
+        return records(dao.rawMedia(new SimpleSQLiteQuery(
+                sql, new Object[]{safe(type), Math.max(1, limit)})));
     }
 
     public MediaRecord mediaById(String type, String id) {
@@ -161,6 +165,12 @@ public final class CatalogStore {
 
     /** Room is process-scoped; activity stores do not close the shared database. */
     public void close() { }
+
+    private static List<MediaRecord> records(List<MediaEntity> values) {
+        List<MediaRecord> result = new ArrayList<>(values == null ? 0 : values.size());
+        if (values != null) for (MediaEntity row : values) result.add(record(row));
+        return result;
+    }
 
     private static MediaRecord record(MediaEntity row) {
         return new MediaRecord(
