@@ -12,5 +12,5 @@
         <TextView android:id="@+id/error" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:gravity="center" android:textColor="@color/blofy_muted" android:textSize="14sp" />
         <com.google.android.material.button.MaterialButton android:id="@+id/retry" android:layout_width="240dp" android:layout_height="54dp" android:layout_marginTop="16dp" android:text="إعادة الاتصال" app:backgroundTint="@color/blofy_purple" app:cornerRadius="14dp" />
     </LinearLayout>
-    <TextView android:id="@+id/hint" android:layout_width="wrap_content" android:layout_height="44dp" android:layout_gravity="bottom|end" android:layout_margin="22dp" android:background="@drawable/bg_panel" android:gravity="center" android:paddingHorizontal="18dp" android:text="↑ ↓ تبديل القناة  •  ⚙ الجودة والصوت والترجمة" android:textColor="@color/blofy_muted" android:textSize="12sp" />
+    <TextView android:id="@+id/hint" android:layout_width="wrap_content" android:layout_height="44dp" android:layout_gravity="bottom|end" android:layout_margin="22dp" android:background="@drawable/bg_panel" android:gravity="center" android:paddingStart="18dp" android:paddingEnd="18dp" android:text="CH+ / CH− تبديل القناة  •  رجوع للخروج" android:textColor="@color/blofy_muted" android:textSize="12sp" />
 </FrameLayout>

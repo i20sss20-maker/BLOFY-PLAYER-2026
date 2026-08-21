@@ -4,13 +4,13 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 
-import androidx.appcompat.app.AppCompatActivity;
-
 import tv.blofy.commercial.R;
+import tv.blofy.commercial.core.LicensedActivity;
 import tv.blofy.commercial.databinding.ActivitySettingsBinding;
+import tv.blofy.commercial.ui.activation.ActivationActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
-public final class SettingsActivity extends AppCompatActivity {
+public final class SettingsActivity extends LicensedActivity {
     private ActivitySettingsBinding binding;
     private SharedPreferences prefs;
 
@@ -27,5 +27,8 @@ public final class SettingsActivity extends AppCompatActivity {
         binding.subtitles.setOnCheckedChangeListener((v,c)->prefs.edit().putBoolean("subtitles",c).apply());
         binding.autoplay.setOnCheckedChangeListener((v,c)->prefs.edit().putBoolean("autoplay",c).apply());
         binding.sync.setOnClickListener(v->startActivity(new Intent(this, SyncActivity.class)));
+        binding.account.setOnClickListener(v -> startActivity(new Intent(this, ActivationActivity.class)
+                .putExtra("force_form", true)
+                .putExtra("boot_error", "يمكنك تجديد التفعيل أو تحديث بيانات الباقة من هنا.")));
     }
 }

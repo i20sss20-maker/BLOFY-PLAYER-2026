@@ -79,6 +79,14 @@ export function clearSessionCookie() {
   ].filter(Boolean).join("; ");
 }
 
+export function licensePayloadIsActive(value, now = Date.now(), expectedDeviceId = "") {
+  const deviceId = String(value?.deviceId || "").trim().toUpperCase();
+  const expected = String(expectedDeviceId || "").trim().toUpperCase();
+  return Boolean(deviceId) && (!expected || deviceId === expected) &&
+    ["trial", "active"].includes(value?.plan) &&
+    Number.isFinite(Number(value?.expiresAt)) && Number(value.expiresAt) > now;
+}
+
 export function signResource(url, expiresInSeconds = 1800) {
   const expires = Math.floor(Date.now() / 1000) + expiresInSeconds;
   const encoded = seal({ url: String(url), expires });

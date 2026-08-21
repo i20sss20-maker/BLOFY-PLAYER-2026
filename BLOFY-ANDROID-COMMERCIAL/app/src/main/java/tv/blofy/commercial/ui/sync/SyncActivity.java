@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import tv.blofy.commercial.core.ApiClient;
+import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivitySyncBinding;
@@ -27,7 +28,7 @@ import tv.blofy.commercial.ui.home.HomeActivity;
 
 public final class SyncActivity extends AppCompatActivity {
     private static final String TAG = "BlofySync";
-    private static final int NATIVE_PAGE_SIZE = 2_000;
+    private static final int NATIVE_PAGE_SIZE = 4_000;
     private ActivitySyncBinding binding;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean destroyed = new AtomicBoolean(false);
@@ -71,17 +72,22 @@ public final class SyncActivity extends AppCompatActivity {
             store.putMeta("profile", profile);
             store.putMeta("last_sync", String.valueOf(System.currentTimeMillis()));
             getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit().putBoolean("catalog_ready", true).apply();
+            getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit().putInt("catalog_schema", 3).apply();
             emit(100);
             Thread.sleep(650);
             ensureActive();
             store.close();
             runOnUiThread(() -> {
                 if (destroyed.get() || isFinishing() || isDestroyed()) return;
-                startActivity(new Intent(this, HomeActivity.class));
+                startActivity(new Intent(this, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
                 finish();
             });
         } catch (Exception error) {
             if (destroyed.get() || Thread.currentThread().isInterrupted()) return;
+            if (LicenseGate.isAuthorizationError(error)) {
+                runOnUiThread(() -> LicenseGate.openActivation(this, "انتهى الاشتراك. جدّد التفعيل أو بيانات الباقة ثم أعد تسجيل الدخول."));
+                return;
+            }
             Log.e(TAG, "Catalog sync failed", error);
             emit(lastProgress.get());
             runOnUiThread(() -> {

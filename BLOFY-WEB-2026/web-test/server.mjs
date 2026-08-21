@@ -14,12 +14,14 @@ import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs
 import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackTarget } from "./lib/runtime.mjs";
 import { XtreamClient } from "./lib/xtream.mjs";
 import { pageItems, parseM3u } from "./lib/playlist.mjs";
+import { publicCatalogItem, publicSeriesItem } from "./lib/catalog-response.mjs";
 import {
   assertSafeUrl,
   clearSessionCookie,
   clientKey,
   fetchSafe,
   json,
+  licensePayloadIsActive,
   licenseCookie,
   parseCookies,
   readJson,
@@ -65,8 +67,10 @@ function activationUrlFor(req) {
 function activeLicense(req) {
   const token = parseCookies(req.headers.cookie || "").blofy_license;
   const license = token ? unseal(token) : null;
-  if (!license?.deviceId || Number(license.expiresAt || 0) <= Date.now()) return null;
-  return license;
+  // Bind native requests to the device declared by their encrypted license.
+  // Browser requests remain cookie-only because they do not send this header.
+  const nativeDeviceId = String(req.headers["x-blofy-device-id"] || "");
+  return licensePayloadIsActive(license, Date.now(), nativeDeviceId) ? license : null;
 }
 
 function requireActiveLicense(req, res) {
@@ -210,10 +214,10 @@ async function loadM3u(session) {
     const response = await fetchSafe(session.url, { headers: { accept: "application/x-mpegURL,text/plain,*/*" } });
     if (!response.ok) throw new Error(`تعذر تحميل القائمة (${response.status}).`);
     const text = await readTextLimited(response, 64_000_000, 15_000);
-    const items = parseM3u(text);
+    const items = parseM3u(text, response.url || session.url);
     if (!items.length) throw new Error("القائمة لا تحتوي على قنوات صالحة.");
     return items;
-  }, 120_000);
+  }, catalogCacheTtl);
 }
 
 async function categoriesFor(session, type) {
@@ -229,7 +233,7 @@ async function categoriesFor(session, type) {
 
 async function catalogFor(session, type, query) {
   const page = boundedInteger(query.get("page"), 1, 1, 1_000_000);
-  const maximumPageSize = query.get("native") === "1" ? 2000 : 500;
+  const maximumPageSize = query.get("native") === "1" ? 5000 : 500;
   const pageSize = boundedInteger(query.get("page_size"), 60, 30, maximumPageSize);
   const category = query.get("category") || "";
   const search = query.get("search") || "";
@@ -242,11 +246,9 @@ async function catalogFor(session, type, query) {
       category ? cacheTtl : catalogCacheTtl,
     );
   } else {
-    rows = await cached(
-      cacheKey(session, `catalog:m3u:${type}`),
-      async () => (await loadM3u(session)).filter((item) => item.type === type),
-      catalogCacheTtl,
-    );
+    // Catalog pagination and playback must reference the exact same M3U
+    // snapshot. Otherwise rotating playlist URLs can invalidate stored ids.
+    rows = (await loadM3u(session)).filter((item) => item.type === type);
   }
   // Paginate first. Signing every image in a 50k+ catalog for every page made
   // native synchronization repeat expensive work and eventually hit timeouts.
@@ -258,12 +260,27 @@ async function catalogFor(session, type, query) {
   });
   return {
     ...result,
-    items: result.items.map((item) => ({
-      ...item,
-      image: safeImage(item.image),
-      backdrop: safeImage(item.backdrop),
-    })),
+    // Store stable authenticated image routes in the Android catalogue. A
+    // short-lived signed proxy would expire while the local DB is still valid.
+    items: result.items.map((item) => publicCatalogItem(item, (_raw, kind, row) =>
+      `/api/image/${encodeURIComponent(type)}/${encodeURIComponent(String(row.id))}/${kind}`)),
   };
+}
+
+async function imageFor(session, type, id, kind) {
+  const index = await cached(cacheKey(session, `image-index:${type}`), async () => {
+    let rows;
+    if (session.kind === "xtream") {
+      const client = new XtreamClient(session);
+      rows = await cached(cacheKey(session, `catalog:${type}:`), () => client.catalog(type), catalogCacheTtl);
+    }
+    else rows = (await loadM3u(session)).filter((item) => item.type === type);
+    return new Map(rows.map((item) => [String(item.id), {
+      poster: item.image || "",
+      backdrop: item.backdrop || item.image || "",
+    }]));
+  }, catalogCacheTtl);
+  return index.get(String(id))?.[kind] || "";
 }
 
 async function sourceFor(session, type, id, extension = "") {
@@ -486,7 +503,7 @@ setInterval(() => {
 }, 30_000).unref();
 
 async function handleApi(req, res, url) {
-  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/native-") || url.pathname.startsWith("/api/transcode/");
+  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/image/") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/native-") || url.pathname.startsWith("/api/transcode/");
   if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
 
   if (req.method === "GET" && url.pathname === "/api/health") {
@@ -641,6 +658,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/native-play") {
+    if (!requireActiveLicense(req, res)) return;
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
     if (!raw) return json(res, 403, { error: "انتهى رابط Media3، أعد فتح المحتوى." }, securityHeaders());
     await assertSafeUrl(raw);
@@ -652,6 +670,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && (url.pathname === "/api/transcode/index.m3u8" || url.pathname.startsWith("/api/transcode/segment-"))) {
+    if (!requireActiveLicense(req, res)) return;
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
     if (!raw) return json(res, 403, { error: "انتهت جلسة التشغيل." }, securityHeaders());
     const fileName = url.pathname.split("/").pop();
@@ -661,6 +680,14 @@ async function handleApi(req, res, url) {
   const session = getSession(req);
   if (!session) return json(res, 401, { error: "أضف قائمة تشغيل أولًا." }, securityHeaders());
   if (!requireActiveLicense(req, res)) return;
+
+  const imageMatch = url.pathname.match(/^\/api\/image\/(live|movies|series)\/([^/]+)\/(poster|backdrop)$/);
+  if (req.method === "GET" && imageMatch) {
+    const [, type, id, kind] = imageMatch;
+    const source = await imageFor(session, type, decodeURIComponent(id), kind);
+    if (!source) return json(res, 404, { error: "لا توجد صورة لهذا المحتوى." }, securityHeaders());
+    return relayRemote(req, res, source);
+  }
 
   const nativeLinkMatch = url.pathname.match(/^\/api\/native-link\/(live|movies|episode)\/([^/]+)$/);
   if (req.method === "GET" && nativeLinkMatch) {
@@ -699,10 +726,7 @@ async function handleApi(req, res, url) {
     const client = new XtreamClient(session);
     const item = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
     if (!item.seasons.length) return json(res, 404, { error: "لم يرسل مزود القائمة مواسم أو حلقات لهذا المسلسل." }, securityHeaders());
-    item.image = safeImage(item.image);
-    item.backdrop = safeImage(item.backdrop);
-    for (const season of item.seasons) for (const episode of season.episodes) episode.image = safeImage(episode.image);
-    return json(res, 200, item, securityHeaders());
+    return json(res, 200, publicSeriesItem(item, safeImage), securityHeaders());
   }
 
   const epgMatch = url.pathname.match(/^\/api\/epg\/([^/]+)$/);
@@ -720,10 +744,11 @@ async function handleApi(req, res, url) {
     const source = await sourceFor(session, type, id, extension);
     const compatibilityLevel = url.searchParams.get("compat");
     const compatibilityMode = compatibilityLevel === "1" || compatibilityLevel === "2";
+    const secureRawRelay = url.searchParams.get("raw") === "1";
     console.log(`[media] web-open type=${type} id=${id} ext=${extension} host=${sourceHost(source)} mode=${compatibilityLevel === "2" ? "compat" : "standard"}`);
     return relayRemote(req, res, source, {
-      allowTranscode: type === "live" || compatibilityMode,
-      forceHls: type === "live" || compatibilityMode,
+      allowTranscode: !secureRawRelay && (type === "live" || compatibilityMode),
+      forceHls: !secureRawRelay && (type === "live" || compatibilityMode),
       transcodeVideo: compatibilityLevel === "2",
       preferTranscode: type === "live" && !/^m3u8$/i.test(extension),
     });

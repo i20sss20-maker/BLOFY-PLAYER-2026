@@ -1,6 +1,5 @@
 package tv.blofy.commercial.ui.player;
 
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -9,10 +8,10 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
-import androidx.activity.OnBackPressedCallback;
-import androidx.appcompat.app.AppCompatActivity;
+import androidx.lifecycle.Lifecycle;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -38,174 +37,404 @@ import org.json.JSONObject;
 
 import java.text.DateFormat;
 import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Locale;
-import java.util.Map;
+import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import tv.blofy.commercial.BuildConfig;
 import tv.blofy.commercial.core.ApiClient;
+import tv.blofy.commercial.core.LicenseGate;
+import tv.blofy.commercial.core.LicensedActivity;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivityPlayerBinding;
 
 @OptIn(markerClass = UnstableApi.class)
-public final class PlayerActivity extends AppCompatActivity implements Player.Listener {
+public final class PlayerActivity extends LicensedActivity implements Player.Listener {
     private ActivityPlayerBinding binding;
     private ApiClient api;
     private CatalogStore store;
     private ExoPlayer player;
-    private String id, name, type, extension, playbackUrl;
-    private List<MediaRecord> liveChannels;
-    private int liveIndex = -1;
-    private int attempts;
-    private boolean alternateTried;
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private String id, name, type, extension, playbackUrl, playbackExtension;
+    private int fallbackStage;
+    private boolean historyRecorded;
+    private boolean initialized;
+    private volatile boolean resolving;
+    private final ExecutorService worker = Executors.newFixedThreadPool(2);
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final AtomicInteger resolveGeneration = new AtomicInteger();
+    private final Runnable hideChrome = () -> {
+        if (binding != null) {
+            binding.topBar.setVisibility(View.GONE);
+            binding.hint.setVisibility(View.GONE);
+        }
+    };
     private final Runnable timeout = () -> {
-        if (player != null && player.getPlaybackState() != Player.STATE_READY) {
-            if (tryAlternateLive()) return;
-            releasePlayer(); showError("لم تصل بيانات فيديو قابلة للتشغيل خلال المهلة. جرّب إعادة الاتصال أو قناة أخرى.");
+        if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
+        releasePlayer();
+        if (!advanceFallback()) {
+            showError("المصدر لم يرسل فيديو خلال المهلة. جرّب إعادة الاتصال أو محتوى آخر.");
         }
     };
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
-        binding = ActivityPlayerBinding.inflate(getLayoutInflater()); setContentView(binding.getRoot());
-        api = new ApiClient(this); store = new CatalogStore(this);
-        id = extra("id", ""); name = extra("name", "BLOFY PLAYER"); type = extra("type", "live"); extension = normalize(extra("extension", isLive() ? "ts" : "mp4"));
-        binding.title.setText(name); binding.close.setOnClickListener(v -> finish()); binding.retry.setOnClickListener(v -> retry());
+        binding = ActivityPlayerBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
+        api = new ApiClient(this);
+        store = new CatalogStore(this);
+        type = extra("type", "live");
+        id = extra("id", "");
+        name = extra("name", "BLOFY PLAYER");
+        extension = normalize(extra("extension", isLive() ? "ts" : "mp4"));
+        binding.title.setText(name);
+        binding.close.setOnClickListener(v -> finish());
+        binding.retry.setOnClickListener(v -> retryFromStart());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override public void handleOnBackPressed() { finish(); }
+            @Override public void handleOnBackPressed() {
+                finish();
+            }
         });
-        if (isLive()) {
-            liveChannels = store.media("live", "", "", 20_000);
-            for (int i = 0; i < liveChannels.size(); i++) if (id.equals(liveChannels.get(i).id)) liveIndex = i;
-        } else binding.epg.setVisibility(View.GONE);
+        if (!isLive()) binding.epg.setVisibility(View.GONE);
         hideSystemUi();
-        resolve();
-        if (isLive()) loadEpg();
+        initialized = true;
+        resolveDirect();
+        if (isLive()) loadEpg(id);
     }
 
     private boolean isLive() { return "live".equals(type); }
-    private String extra(String key, String fallback) { String value = getIntent().getStringExtra(key); return value == null || value.isEmpty() ? fallback : value; }
+    private String extra(String key, String fallback) {
+        String value = getIntent().getStringExtra(key);
+        return value == null || value.isEmpty() ? fallback : value;
+    }
 
-    private void resolve() {
-        binding.progress.setVisibility(View.VISIBLE); binding.errorPanel.setVisibility(View.GONE);
+    private void resolveDirect() {
+        resolving = true;
+        final int generation = resolveGeneration.incrementAndGet();
+        final String requestedType = type;
+        final String requestedId = id;
+        final String requestedExtension = extension;
+        showLoading();
         worker.execute(() -> {
             try {
-                String apiType = "series".equals(type) || "episode".equals(type) ? "episode" : type;
-                JSONObject data = api.get("/api/native-link/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(id) + "?ext=" + ApiClient.encode(extension));
+                String apiType = "series".equals(requestedType) || "episode".equals(requestedType) ? "episode" : requestedType;
+                JSONObject data = api.get("/api/native-link/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
+                        + "?ext=" + ApiClient.encode(requestedExtension));
                 String path = data.optString("url");
                 if (!path.startsWith("/api/native-play")) throw new Exception("تعذر إصدار رابط Media3 آمن.");
-                playbackUrl = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + path;
-                extension = normalize(data.optString("extension", extension));
-                runOnUiThread(this::preparePlayer);
-            } catch (Exception error) { runOnUiThread(() -> showError(error.getMessage())); }
+                String resolvedUrl = api.resolveMediaRedirect(path);
+                final String mediaExtension = normalize(data.optString("extension", requestedExtension));
+                // Android never opens cleartext provider traffic. HTTPS
+                // providers stay direct; legacy HTTP providers use BLOFY's
+                // lightweight byte relay (no ffmpeg/transcode delay).
+                if (resolvedUrl.startsWith("http://")) {
+                    resolvedUrl = secureRelayUrl(requestedType, requestedId, requestedExtension);
+                }
+                final String mediaUrl = resolvedUrl;
+                if (!isCurrent(generation, requestedId)) return;
+                playbackUrl = mediaUrl;
+                playbackExtension = mediaExtension;
+                resolving = false;
+                runOnUiThread(() -> {
+                    if (!isCurrent(generation, requestedId)) return;
+                    if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) preparePlayer(mediaUrl, mediaExtension);
+                });
+            } catch (Exception error) {
+                if (!isCurrent(generation, requestedId)) return;
+                resolving = false;
+                runOnUiThread(() -> {
+                    if (LicenseGate.isAuthorizationError(error)) {
+                        LicenseGate.openActivation(this, "انتهى الاشتراك. جدّد التفعيل أو بيانات الباقة ثم سجّل الدخول.");
+                    } else if (!advanceFallback()) {
+                        showError(error.getMessage());
+                    }
+                });
+            }
         });
     }
 
-    private void preparePlayer() {
-        releasePlayer();
-        Map<String,String> headers = new HashMap<>(); headers.put("User-Agent", "VLC/3.0.20 BLOFY-Media3/1.11"); headers.put("Accept", "*/*");
-        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory().setConnectTimeoutMs(12_000).setReadTimeoutMs(30_000).setAllowCrossProtocolRedirects(true).setDefaultRequestProperties(headers);
-        DefaultDataSource.Factory source = new DefaultDataSource.Factory(this, http);
-        int flags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
-        DefaultExtractorsFactory extractors = new DefaultExtractorsFactory().setTsExtractorFlags(flags);
-        DefaultMediaSourceFactory mediaFactory = new DefaultMediaSourceFactory(source, extractors);
-        boolean stableBuffer = "stable".equals(getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getString("buffer", "fast"));
-        int minimum = stableBuffer ? (isLive() ? 6_000 : 14_000) : (isLive() ? 2_500 : 8_000);
-        int maximum = stableBuffer ? (isLive() ? 28_000 : 60_000) : (isLive() ? 14_000 : 40_000);
-        DefaultLoadControl loadControl = new DefaultLoadControl.Builder().setBufferDurationsMs(minimum, maximum, 600, 1_200).setPrioritizeTimeOverSizeThresholds(true).build();
-        player = new ExoPlayer.Builder(this, new DefaultRenderersFactory(this).setEnableDecoderFallback(true)).setMediaSourceFactory(mediaFactory).setLoadControl(loadControl).build();
-        player.addListener(this); player.setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true); player.setWakeMode(C.WAKE_MODE_NETWORK); binding.player.setPlayer(player);
-        String quality = getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getString("quality", "auto");
-        TrackSelectionParameters.Builder tracks = player.getTrackSelectionParameters().buildUpon();
-        if ("sd".equals(quality)) tracks.setMaxVideoSize(854, 480); else if ("hd".equals(quality)) tracks.setMaxVideoSize(1920, 1080);
-        if (getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getBoolean("subtitles", true)) tracks.setPreferredTextLanguage("ar").setSelectUndeterminedTextLanguage(true);
-        player.setTrackSelectionParameters(tracks.build());
-        MediaItem.Builder item = new MediaItem.Builder().setUri(playbackUrl).setMediaId(id);
-        String mime = mime(extension); if (mime != null) item.setMimeType(mime);
-        MediaSource media = "m3u8".equals(extension) ? new HlsMediaSource.Factory(source).setExtractorFactory(new DefaultHlsExtractorFactory(flags, true)).createMediaSource(item.build()) : mediaFactory.createMediaSource(item.build());
-        long position = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
-        player.setMediaSource(media, Math.max(0, position)); player.prepare();
-        if (getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getBoolean("autoplay", true)) player.play();
-        binding.player.requestFocus();
-        handler.removeCallbacks(timeout); handler.postDelayed(timeout, Math.min(28_000, 10_000 + attempts * 4_000L));
+    private boolean isCurrent(int generation, String requestedId) {
+        return generation == resolveGeneration.get() && requestedId.equals(id) && !isFinishing() && !isDestroyed();
     }
 
-    private void loadEpg() {
-        final String requested = id;
+    private void prepareCompatibility(boolean transcodeVideo) {
+        String apiType = "series".equals(type) || "episode".equals(type) ? "episode" : type;
+        String url = api.absoluteUrl("/api/play/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(id)
+                + "?ext=" + ApiClient.encode(extension) + "&compat=" + (transcodeVideo ? "2" : "1"));
+        playbackUrl = url;
+        playbackExtension = "m3u8";
+        preparePlayer(url, "m3u8");
+    }
+
+    private String secureRelayUrl(String requestedType, String requestedId, String requestedExtension) {
+        String apiType = "series".equals(requestedType) || "episode".equals(requestedType)
+                ? "episode" : requestedType;
+        return api.absoluteUrl("/api/play/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
+                + "?ext=" + ApiClient.encode(requestedExtension) + "&raw=1");
+    }
+
+    private void preparePlayer(String url, String mediaExtension) {
+        if (isFinishing() || isDestroyed() || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
+        releasePlayer();
+        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setConnectTimeoutMs(12_000)
+                .setReadTimeoutMs(isLive() ? 35_000 : 55_000)
+                .setAllowCrossProtocolRedirects(true)
+                .setUserAgent("BLOFY PLAYER Android TV");
+        // Compatibility streams remain on Railway and need the protected
+        // session. Direct provider playback must never receive those secrets.
+        if (url.startsWith(api.baseUrl() + "/")) http.setDefaultRequestProperties(api.authenticatedHeaders());
+        else http.setDefaultRequestProperties(Collections.emptyMap());
+        DefaultDataSource.Factory source = new DefaultDataSource.Factory(this, http);
+        int flags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+                | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
+        DefaultExtractorsFactory extractors = new DefaultExtractorsFactory().setTsExtractorFlags(flags);
+        DefaultMediaSourceFactory mediaFactory = new DefaultMediaSourceFactory(source, extractors);
+        boolean stable = "stable".equals(getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getString("buffer", "fast"));
+        int minimum = stable ? (isLive() ? 5_000 : 12_000) : (isLive() ? 1_500 : 4_000);
+        int maximum = stable ? (isLive() ? 24_000 : 55_000) : (isLive() ? 10_000 : 28_000);
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(minimum, maximum, isLive() ? 500 : 900, 1_100)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
+        player = new ExoPlayer.Builder(this, new DefaultRenderersFactory(this).setEnableDecoderFallback(true))
+                .setMediaSourceFactory(mediaFactory)
+                .setLoadControl(loadControl)
+                .build();
+        player.addListener(this);
+        player.setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
+        player.setWakeMode(C.WAKE_MODE_NETWORK);
+        binding.player.setPlayer(player);
+
+        String quality = getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getString("quality", "auto");
+        TrackSelectionParameters.Builder tracks = player.getTrackSelectionParameters().buildUpon();
+        if ("sd".equals(quality)) tracks.setMaxVideoSize(854, 480);
+        else if ("hd".equals(quality)) tracks.setMaxVideoSize(1920, 1080);
+        boolean subtitles = getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getBoolean("subtitles", true);
+        tracks.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles);
+        if (subtitles) tracks.setPreferredTextLanguage("ar").setSelectUndeterminedTextLanguage(true);
+        player.setTrackSelectionParameters(tracks.build());
+
+        MediaItem.Builder item = new MediaItem.Builder().setUri(url).setMediaId(id);
+        String declaredMime = mime(mediaExtension);
+        if (declaredMime != null) item.setMimeType(declaredMime);
+        MediaSource media = "m3u8".equals(mediaExtension)
+                ? new HlsMediaSource.Factory(source)
+                    .setExtractorFactory(new DefaultHlsExtractorFactory(flags, true))
+                    .createMediaSource(item.build())
+                : mediaFactory.createMediaSource(item.build());
+        long position = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
+        player.setMediaSource(media, Math.max(0, position));
+        player.prepare();
+        if (getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getBoolean("autoplay", true)) player.play();
+        binding.player.requestFocus();
+        handler.removeCallbacks(timeout);
+        handler.postDelayed(timeout, isLive() ? 18_000L : 32_000L);
+    }
+
+    private boolean advanceFallback() {
+        if (isFinishing() || isDestroyed()) return false;
+        if (isLive() && fallbackStage == 0) {
+            fallbackStage = 1;
+            extension = "m3u8".equals(extension) ? "ts" : "m3u8";
+            resolveDirect();
+            return true;
+        }
+        int maximum = isLive() ? 3 : 2;
+        if (fallbackStage >= maximum) return false;
+        fallbackStage++;
+        showLoading();
+        prepareCompatibility(fallbackStage == maximum);
+        return true;
+    }
+
+    private void showLoading() {
+        if (binding == null) return;
+        binding.progress.setVisibility(View.VISIBLE);
+        binding.errorPanel.setVisibility(View.GONE);
+        binding.topBar.setVisibility(View.VISIBLE);
+    }
+
+    private void retryFromStart() {
+        fallbackStage = 0;
+        playbackUrl = null;
+        playbackExtension = null;
+        resolveDirect();
+    }
+
+    private void loadEpg(String requestedId) {
         worker.execute(() -> {
             try {
-                JSONArray values = api.get("/api/epg/" + ApiClient.encode(requested)).optJSONArray("entries");
-                JSONObject selected = null; long now = System.currentTimeMillis();
-                if (values != null) for (int i=0;i<values.length();i++) { JSONObject row=values.optJSONObject(i); if(row==null)continue; if(selected==null)selected=row; if(row.optLong("start")<=now && now<row.optLong("end",Long.MAX_VALUE)){selected=row;break;} }
-                JSONObject finalSelected = selected;
-                runOnUiThread(() -> { if (!requested.equals(id)) return; if (finalSelected == null) binding.epg.setText("لا توجد بيانات برنامج حاليًا"); else binding.epg.setText("الآن: " + finalSelected.optString("title") + " • " + time(finalSelected.optLong("start")) + " – " + time(finalSelected.optLong("end"))); });
-            } catch (Exception ignored) { runOnUiThread(() -> { if (requested.equals(id)) binding.epg.setText("البث المباشر"); }); }
+                JSONArray values = api.get("/api/epg/" + ApiClient.encode(requestedId)).optJSONArray("entries");
+                JSONObject selected = null;
+                long now = System.currentTimeMillis();
+                if (values != null) for (int i = 0; i < values.length(); i++) {
+                    JSONObject row = values.optJSONObject(i);
+                    if (row == null) continue;
+                    if (selected == null) selected = row;
+                    if (row.optLong("start") <= now && now < row.optLong("end", Long.MAX_VALUE)) { selected = row; break; }
+                }
+                JSONObject current = selected;
+                runOnUiThread(() -> {
+                    if (!requestedId.equals(id) || binding == null) return;
+                    binding.epg.setText(current == null ? "لا توجد بيانات برنامج حاليًا"
+                            : "الآن: " + current.optString("title") + " • " + time(current.optLong("start")) + " – " + time(current.optLong("end")));
+                });
+            } catch (Exception ignored) {
+                runOnUiThread(() -> { if (requestedId.equals(id) && binding != null) binding.epg.setText("البث المباشر"); });
+            }
         });
     }
 
     private void switchChannel(int direction) {
-        if (!isLive() || liveChannels == null || liveChannels.size() < 2) return;
-        if (liveIndex < 0) liveIndex = 0; liveIndex = (liveIndex + direction + liveChannels.size()) % liveChannels.size();
-        MediaRecord item = liveChannels.get(liveIndex); id=item.id; name=item.name; extension=normalize(item.extension.isEmpty()?"ts":item.extension); playbackUrl=null; attempts=0; alternateTried=false;
-        binding.title.setText(name + " • " + (liveIndex+1) + "/" + liveChannels.size());
-        binding.epg.setText("جلب دليل البرنامج…");
-        resolve();
-        loadEpg();
+        if (!isLive()) return;
+        final int generation = resolveGeneration.incrementAndGet();
+        final String currentId = id;
+        showLoading();
+        worker.execute(() -> {
+            MediaRecord item = store.adjacentLive(currentId, direction);
+            if (item == null || generation != resolveGeneration.get()) return;
+            runOnUiThread(() -> {
+                if (generation != resolveGeneration.get() || isFinishing() || isDestroyed()) return;
+                id = item.id;
+                name = item.name;
+                extension = normalize(item.extension.isEmpty() ? "ts" : item.extension);
+                fallbackStage = 0;
+                historyRecorded = false;
+                playbackUrl = null;
+                playbackExtension = null;
+                binding.title.setText(name);
+                binding.epg.setText("جلب دليل البرنامج…");
+                resolveDirect();
+                loadEpg(id);
+            });
+        });
     }
 
-    private void retry() { attempts++; alternateTried=false; resolve(); }
-    private boolean tryAlternateLive() {
-        if (!isLive() || alternateTried) return false;
-        alternateTried = true;
-        extension = "m3u8".equals(extension) ? "ts" : "m3u8";
-        releasePlayer();
-        resolve();
-        return true;
+    private void showError(String message) {
+        if (binding == null || isFinishing() || isDestroyed()) return;
+        binding.progress.setVisibility(View.GONE);
+        binding.errorPanel.setVisibility(View.VISIBLE);
+        binding.error.setText(message == null || message.trim().isEmpty() ? "حدث خطأ غير متوقع." : message);
+        binding.retry.requestFocus();
     }
-    private void showError(String message) { binding.progress.setVisibility(View.GONE); binding.errorPanel.setVisibility(View.VISIBLE); binding.error.setText(message == null ? "حدث خطأ غير متوقع." : message); binding.retry.requestFocus(); }
 
     @Override public void onPlaybackStateChanged(int state) {
+        if (binding == null) return;
         binding.progress.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
-        if (state == Player.STATE_READY) { handler.removeCallbacks(timeout); attempts = 0; binding.topBar.postDelayed(() -> binding.topBar.setVisibility(View.GONE), 3500); binding.hint.postDelayed(() -> binding.hint.setVisibility(View.GONE), 6500); }
+        if (state == Player.STATE_READY) {
+            handler.removeCallbacks(timeout);
+            handler.removeCallbacks(hideChrome);
+            handler.postDelayed(hideChrome, 4_500L);
+            if (!historyRecorded) {
+                historyRecorded = true;
+                final String readyType = type;
+                final String readyId = id;
+                worker.execute(() -> store.addHistory(readyType, readyId));
+            }
+        }
     }
+
     @Override public void onPlayerError(PlaybackException error) {
         handler.removeCallbacks(timeout);
-        if (tryAlternateLive()) return;
-        showError("المصدر لم يستجب أو الترميز غير مدعوم على هذا الجهاز.\n" + error.getErrorCodeName());
+        releasePlayer();
+        if (!advanceFallback()) showError("تعذر تشغيل ترميز هذا المصدر بعد تجربة الوضع المباشر والتوافق.\n" + error.getErrorCodeName());
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() == KeyEvent.ACTION_DOWN) switch (event.getKeyCode()) {
-            case KeyEvent.KEYCODE_CHANNEL_UP: case KeyEvent.KEYCODE_DPAD_UP: if(isLive()){switchChannel(1);return true;} break;
-            case KeyEvent.KEYCODE_CHANNEL_DOWN: case KeyEvent.KEYCODE_DPAD_DOWN: if(isLive()){switchChannel(-1);return true;} break;
-            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE: if(player!=null){if(player.isPlaying())player.pause();else player.play();} return true;
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
+                    || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B) {
+                finish();
+                return true;
+            }
+            if (event.getKeyCode() == KeyEvent.KEYCODE_CHANNEL_UP) { switchChannel(1); return true; }
+            if (event.getKeyCode() == KeyEvent.KEYCODE_CHANNEL_DOWN) { switchChannel(-1); return true; }
+            if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && player != null) {
+                if (player.isPlaying()) player.pause(); else player.play();
+                return true;
+            }
         }
-        binding.topBar.setVisibility(View.VISIBLE); return super.dispatchKeyEvent(event);
+        if (binding != null) binding.topBar.setVisibility(View.VISIBLE);
+        return super.dispatchKeyEvent(event);
     }
 
-    private String positionKey(){return "p_"+Integer.toHexString((type+":"+id).hashCode());}
-    private void releasePlayer(){handler.removeCallbacks(timeout);if(player==null)return;if(!isLive()){long p=player.getCurrentPosition(),d=player.getDuration();if(d>0&&p>d-30000)p=0;getSharedPreferences("blofy_positions",MODE_PRIVATE).edit().putLong(positionKey(),Math.max(0,p)).apply();}binding.player.setPlayer(null);player.removeListener(this);player.release();player=null;}
-    private static String normalize(String ext){String value=ext==null?"":ext.toLowerCase(Locale.US).replaceAll("[^a-z0-9]","");return value.isEmpty()?"mp4":value;}
-    private static String mime(String ext){
-        if("m3u8".equals(ext))return MimeTypes.APPLICATION_M3U8;
-        if("mpd".equals(ext))return MimeTypes.APPLICATION_MPD;
-        if("ts".equals(ext)||"mts".equals(ext)||"m2ts".equals(ext))return MimeTypes.VIDEO_MP2T;
-        if("mp4".equals(ext)||"m4v".equals(ext))return MimeTypes.VIDEO_MP4;
-        if("mkv".equals(ext))return MimeTypes.VIDEO_MATROSKA;
-        if("webm".equals(ext))return MimeTypes.VIDEO_WEBM;
+    private String positionKey() { return "position_" + type + "_" + id; }
+
+    private void releasePlayer() {
+        handler.removeCallbacks(timeout);
+        handler.removeCallbacks(hideChrome);
+        if (player == null) return;
+        if (!isLive()) {
+            long position = player.getCurrentPosition();
+            long duration = player.getDuration();
+            if (duration > 0 && position > duration - 30_000) position = 0;
+            getSharedPreferences("blofy_positions", MODE_PRIVATE).edit().putLong(positionKey(), Math.max(0, position)).apply();
+        }
+        if (binding != null) binding.player.setPlayer(null);
+        player.removeListener(this);
+        player.release();
+        player = null;
+    }
+
+    private static String normalize(String ext) {
+        String value = ext == null ? "" : ext.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
+        return value.isEmpty() ? "mp4" : value;
+    }
+
+    private static String mime(String ext) {
+        if ("m3u8".equals(ext)) return MimeTypes.APPLICATION_M3U8;
+        if ("mpd".equals(ext)) return MimeTypes.APPLICATION_MPD;
+        if ("ts".equals(ext) || "mts".equals(ext) || "m2ts".equals(ext)) return MimeTypes.VIDEO_MP2T;
+        if ("mp4".equals(ext) || "m4v".equals(ext)) return MimeTypes.VIDEO_MP4;
+        if ("mkv".equals(ext)) return MimeTypes.VIDEO_MATROSKA;
+        if ("webm".equals(ext)) return MimeTypes.VIDEO_WEBM;
         return null;
     }
-    private static String time(long value){return value<=0?"":DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(value));}
 
-    @Override protected void onStop(){releasePlayer();super.onStop();}
-    @Override protected void onStart(){super.onStart();if(playbackUrl!=null&&player==null)preparePlayer();}
-    @Override protected void onDestroy(){worker.shutdownNow();if(store!=null)store.close();super.onDestroy();}
-    private void hideSystemUi(){if(android.os.Build.VERSION.SDK_INT>=30){WindowInsetsController c=getWindow().getInsetsController();if(c!=null){c.hide(WindowInsets.Type.statusBars()|WindowInsets.Type.navigationBars());c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);}}else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);}
-    @Override public void onWindowFocusChanged(boolean hasFocus){super.onWindowFocusChanged(hasFocus);if(hasFocus)hideSystemUi();}
+    private static String time(long value) {
+        return value <= 0 ? "" : DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(value));
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        if (!initialized || player != null) return;
+        if (playbackUrl != null) preparePlayer(playbackUrl, playbackExtension == null ? extension : playbackExtension);
+        else if (!resolving) resolveDirect();
+    }
+
+    @Override protected void onStop() {
+        resolveGeneration.incrementAndGet();
+        resolving = false;
+        releasePlayer();
+        super.onStop();
+    }
+
+    @Override protected void onDestroy() {
+        resolveGeneration.incrementAndGet();
+        worker.shutdownNow();
+        if (store != null) store.close();
+        binding = null;
+        super.onDestroy();
+    }
+
+    private void hideSystemUi() {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        }
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemUi();
+    }
 }

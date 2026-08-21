@@ -2,16 +2,14 @@ package tv.blofy.commercial.ui.details;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
+import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-
-import com.bumptech.glide.Glide;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -20,84 +18,242 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import tv.blofy.commercial.R;
 import tv.blofy.commercial.core.ApiClient;
+import tv.blofy.commercial.core.BlofyImageLoader;
+import tv.blofy.commercial.core.LicenseGate;
+import tv.blofy.commercial.core.LicensedActivity;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.databinding.ActivityDetailsBinding;
+import tv.blofy.commercial.databinding.ItemEpisodeBinding;
+import tv.blofy.commercial.databinding.ItemSeasonBinding;
 import tv.blofy.commercial.ui.player.PlayerActivity;
 
-public final class DetailsActivity extends AppCompatActivity {
+public final class DetailsActivity extends LicensedActivity {
     private ActivityDetailsBinding binding;
     private ApiClient api;
     private CatalogStore store;
-    private String type, id, name, extension;
+    private String type, id, name, extension, image;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private final List<Episode> episodes = new ArrayList<>();
+    private final AtomicInteger generation = new AtomicInteger();
+    private final List<Season> seasons = new ArrayList<>();
+    private SeasonAdapter seasonAdapter;
+    private EpisodeAdapter episodeAdapter;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        binding = ActivityDetailsBinding.inflate(getLayoutInflater()); setContentView(binding.getRoot());
-        api = new ApiClient(this); store = new CatalogStore(this);
-        type = value("type", "movies"); id = value("id", ""); name = value("name", "BLOFY PLAYER"); extension = value("extension", "mp4");
-        binding.title.setText(name); Glide.with(this).load(value("image", "")).into(binding.poster);
+        binding = ActivityDetailsBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
+        api = new ApiClient(this);
+        store = new CatalogStore(this);
+        type = value("type", "movies");
+        id = value("id", "");
+        name = value("name", "BLOFY PLAYER");
+        extension = value("extension", "mp4");
+        image = value("image", "");
+
+        binding.title.setText(name);
+        BlofyImageLoader.poster(this, binding.poster, image);
+        binding.back.setOnClickListener(v -> finish());
+        binding.retry.setOnClickListener(v -> load());
+        binding.favorite.setOnClickListener(v -> {
+            boolean saved = store.toggleFavorite(type, id);
+            binding.favorite.setText(saved ? "♥  محفوظ" : "♡  المفضلة");
+        });
         binding.play.setOnClickListener(v -> play(id, name, type, extension));
-        binding.favorite.setOnClickListener(v -> { boolean saved = store.toggleFavorite(type, id); binding.favorite.setText(saved ? "محفوظ بالمفضلة" : "إضافة للمفضلة"); });
-        worker.execute(this::load);
+        if ("series".equals(type)) binding.play.setVisibility(View.GONE);
+        else binding.play.requestFocus();
+        load();
     }
 
     private void load() {
-        try {
-            JSONObject data = api.get(("series".equals(type) ? "/api/series/" : "/api/movie/") + ApiClient.encode(id));
-            runOnUiThread(() -> render(data));
-        } catch (Exception error) {
-            runOnUiThread(() -> { binding.progress.setVisibility(View.GONE); Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show(); });
-        }
+        final int request = generation.incrementAndGet();
+        binding.errorPanel.setVisibility(View.GONE);
+        binding.progress.setVisibility(View.VISIBLE);
+        worker.execute(() -> {
+            try {
+                JSONObject data = api.get(("series".equals(type) ? "/api/series/" : "/api/movie/") + ApiClient.encode(id));
+                runOnUiThread(() -> {
+                    if (request != generation.get() || isFinishing() || isDestroyed()) return;
+                    render(data);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (request != generation.get() || isFinishing() || isDestroyed()) return;
+                    binding.progress.setVisibility(View.GONE);
+                    if (LicenseGate.isAuthorizationError(error)) {
+                        LicenseGate.openActivation(this, "انتهى الاشتراك. جدّد التفعيل أو بيانات الباقة ثم سجّل الدخول.");
+                        return;
+                    }
+                    // A movie can still be played from its catalog extension when details fail.
+                    if (!"series".equals(type)) {
+                        binding.description.setText("تعذر جلب الوصف، لكن يمكنك تشغيل الفيلم مباشرة.");
+                        binding.play.setVisibility(View.VISIBLE);
+                        binding.play.requestFocus();
+                    } else {
+                        binding.error.setText(error.getMessage() == null ? "لم يرسل المزود مواسم أو حلقات." : error.getMessage());
+                        binding.errorPanel.setVisibility(View.VISIBLE);
+                        binding.retry.requestFocus();
+                    }
+                });
+            }
+        });
     }
 
     private void render(JSONObject data) {
         binding.progress.setVisibility(View.GONE);
-        name = data.optString("name", name); extension = data.optString("extension", extension);
+        name = data.optString("name", name);
+        extension = data.optString("extension", extension);
+        image = data.optString("image", image);
         binding.title.setText(name);
-        binding.meta.setText((data.optString("year").isEmpty() ? "" : data.optString("year") + "  •  ") + (data.optString("rating").isEmpty() ? "" : "★ " + data.optString("rating") + "  •  ") + data.optString("genre"));
+        StringBuilder meta = new StringBuilder();
+        append(meta, data.optString("year"));
+        append(meta, data.optString("rating").isEmpty() ? "" : "★ " + data.optString("rating"));
+        append(meta, data.optString("genre"));
+        append(meta, data.optString("duration"));
+        binding.meta.setText(meta);
         binding.description.setText(data.optString("description", "لا يوجد وصف متاح."));
-        Glide.with(this).load(data.optString("image", value("image", ""))).into(binding.poster);
-        Glide.with(this).load(data.optString("backdrop")).centerCrop().into(binding.backdrop);
-        if (!"series".equals(type)) { binding.play.requestFocus(); return; }
-        JSONArray seasons = data.optJSONArray("seasons");
-        if (seasons != null) for (int i = 0; i < seasons.length(); i++) {
-            JSONObject season = seasons.optJSONObject(i); if (season == null) continue;
-            String seasonNumber = season.optString("season", String.valueOf(i + 1));
-            JSONArray values = season.optJSONArray("episodes");
-            if (values == null) continue;
-            for (int e = 0; e < values.length(); e++) {
-                JSONObject episode = values.optJSONObject(e); if (episode != null) episodes.add(new Episode(seasonNumber, episode));
-            }
+        BlofyImageLoader.poster(this, binding.poster, image);
+        BlofyImageLoader.backdrop(this, binding.backdrop, data.optString("backdrop"));
+
+        if (!"series".equals(type)) {
+            binding.play.setVisibility(View.VISIBLE);
+            binding.play.requestFocus();
+            return;
         }
-        binding.play.setVisibility(View.GONE);
-        binding.episodesTitle.setVisibility(View.VISIBLE); binding.episodes.setVisibility(View.VISIBLE);
-        binding.episodes.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)); binding.episodes.setAdapter(new EpisodeAdapter());
-        binding.episodes.post(() -> { if (binding.episodes.getChildCount() > 0) binding.episodes.getChildAt(0).requestFocus(); });
+
+        seasons.clear();
+        JSONArray values = data.optJSONArray("seasons");
+        if (values != null) for (int i = 0; i < values.length(); i++) {
+            JSONObject rawSeason = values.optJSONObject(i);
+            if (rawSeason == null) continue;
+            Season season = new Season(rawSeason.optString("season", String.valueOf(i + 1)));
+            JSONArray rawEpisodes = rawSeason.optJSONArray("episodes");
+            if (rawEpisodes != null) for (int e = 0; e < rawEpisodes.length(); e++) {
+                JSONObject episode = rawEpisodes.optJSONObject(e);
+                if (episode != null) season.episodes.add(new Episode(episode));
+            }
+            if (!season.episodes.isEmpty()) seasons.add(season);
+        }
+
+        if (seasons.isEmpty()) {
+            binding.error.setText("لم يرسل مزود الباقة حلقات صالحة لهذا المسلسل.");
+            binding.errorPanel.setVisibility(View.VISIBLE);
+            binding.retry.requestFocus();
+            return;
+        }
+        binding.seriesPanel.setVisibility(View.VISIBLE);
+        binding.seasons.setLayoutManager(new LinearLayoutManager(this));
+        seasonAdapter = new SeasonAdapter();
+        binding.seasons.setAdapter(seasonAdapter);
+        binding.episodes.setLayoutManager(new GridLayoutManager(this, 3, RecyclerView.HORIZONTAL, false));
+        episodeAdapter = new EpisodeAdapter();
+        binding.episodes.setAdapter(episodeAdapter);
+        selectSeason(0);
+        binding.seasons.post(() -> {
+            RecyclerView.ViewHolder holder = binding.seasons.findViewHolderForAdapterPosition(0);
+            if (holder != null) holder.itemView.requestFocus();
+        });
+    }
+
+    private static void append(StringBuilder target, String value) {
+        if (value == null || value.trim().isEmpty()) return;
+        if (target.length() > 0) target.append("  •  ");
+        target.append(value.trim());
+    }
+
+    private void selectSeason(int index) {
+        if (index < 0 || index >= seasons.size()) return;
+        seasonAdapter.selected = index;
+        seasonAdapter.notifyDataSetChanged();
+        Season selected = seasons.get(index);
+        binding.episodesTitle.setText("حلقات الموسم " + selected.number);
+        episodeAdapter.rows.clear();
+        episodeAdapter.rows.addAll(selected.episodes);
+        episodeAdapter.notifyDataSetChanged();
     }
 
     private void play(String playId, String playName, String playType, String ext) {
-        store.addHistory(type, id);
-        startActivity(new Intent(this, PlayerActivity.class).putExtra("id", playId).putExtra("name", playName).putExtra("type", playType).putExtra("extension", ext));
+        startActivity(new Intent(this, PlayerActivity.class)
+                .putExtra("id", playId)
+                .putExtra("name", playName)
+                .putExtra("type", playType)
+                .putExtra("extension", ext));
     }
 
-    private String value(String key, String fallback) { String value = getIntent().getStringExtra(key); return value == null || value.isEmpty() ? fallback : value; }
+    private String value(String key, String fallback) {
+        String raw = getIntent().getStringExtra(key);
+        return raw == null || raw.isEmpty() ? fallback : raw;
+    }
+
+    private static final class Season {
+        final String number;
+        final List<Episode> episodes = new ArrayList<>();
+        Season(String number) { this.number = number == null || number.isEmpty() ? "1" : number; }
+    }
 
     private static final class Episode {
-        final String season, id, title, extension;
-        Episode(String season, JSONObject row) { this.season = season; id = row.optString("id"); title = row.optString("title", "الحلقة " + row.optInt("number")); extension = row.optString("extension", "mp4"); }
+        final String id, title, extension, duration, image;
+        Episode(JSONObject row) {
+            id = row.optString("id");
+            int number = row.optInt("number", 0);
+            title = row.optString("title", number > 0 ? "الحلقة " + number : "حلقة");
+            extension = row.optString("extension", "mp4");
+            duration = row.optString("duration");
+            image = row.optString("image");
+        }
+    }
+
+    private final class SeasonAdapter extends RecyclerView.Adapter<SeasonAdapter.Holder> {
+        int selected;
+        @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            return new Holder(ItemSeasonBinding.inflate(LayoutInflater.from(parent.getContext()), parent, false));
+        }
+        @Override public void onBindViewHolder(@NonNull Holder holder, int position) {
+            Season season = seasons.get(position);
+            holder.binding.name.setText((position == selected ? "●  " : "") + "الموسم " + season.number);
+            holder.binding.getRoot().setSelected(position == selected);
+            holder.binding.getRoot().setOnClickListener(v -> selectSeason(holder.getBindingAdapterPosition()));
+            holder.binding.getRoot().setOnFocusChangeListener((v, focused) -> {
+                if (focused) selectSeason(holder.getBindingAdapterPosition());
+            });
+        }
+        @Override public int getItemCount() { return seasons.size(); }
+        final class Holder extends RecyclerView.ViewHolder {
+            final ItemSeasonBinding binding;
+            Holder(ItemSeasonBinding binding) { super(binding.getRoot()); this.binding = binding; }
+        }
     }
 
     private final class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.Holder> {
-        @Override public Holder onCreateViewHolder(ViewGroup parent, int viewType) { Button button = new Button(parent.getContext()); button.setTextColor(getColor(R.color.blofy_text)); button.setTextSize(14); button.setAllCaps(false); button.setFocusable(true); button.setBackgroundResource(R.drawable.bg_home_card); button.setLayoutParams(new RecyclerView.LayoutParams(240, 105)); return new Holder(button); }
-        @Override public void onBindViewHolder(Holder holder, int position) { Episode episode = episodes.get(position); holder.button.setText("الموسم " + episode.season + "\n" + episode.title); holder.button.setOnClickListener(v -> play(episode.id, name + " • " + episode.title, "episode", episode.extension)); }
-        @Override public int getItemCount() { return episodes.size(); }
-        final class Holder extends RecyclerView.ViewHolder { final Button button; Holder(Button button) { super(button); this.button = button; } }
+        final List<Episode> rows = new ArrayList<>();
+        @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            return new Holder(ItemEpisodeBinding.inflate(LayoutInflater.from(parent.getContext()), parent, false));
+        }
+        @Override public void onBindViewHolder(@NonNull Holder holder, int position) {
+            Episode episode = rows.get(position);
+            holder.binding.title.setText(episode.title);
+            holder.binding.meta.setText(episode.duration.isEmpty() ? episode.extension.toUpperCase() : episode.duration);
+            BlofyImageLoader.poster(DetailsActivity.this, holder.binding.image,
+                    episode.image.isEmpty() ? image : episode.image);
+            holder.binding.getRoot().setOnClickListener(v ->
+                    play(episode.id, name + " • " + episode.title, "episode", episode.extension));
+            holder.binding.getRoot().setOnFocusChangeListener((v, focused) ->
+                    v.animate().scaleX(focused ? 1.045f : 1f).scaleY(focused ? 1.045f : 1f).setDuration(120).start());
+        }
+        @Override public int getItemCount() { return rows.size(); }
+        final class Holder extends RecyclerView.ViewHolder {
+            final ItemEpisodeBinding binding;
+            Holder(ItemEpisodeBinding binding) { super(binding.getRoot()); this.binding = binding; }
+        }
     }
 
-    @Override protected void onDestroy() { worker.shutdownNow(); if (store != null) store.close(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        generation.incrementAndGet();
+        worker.shutdownNow();
+        if (store != null) store.close();
+        binding = null;
+        super.onDestroy();
+    }
 }

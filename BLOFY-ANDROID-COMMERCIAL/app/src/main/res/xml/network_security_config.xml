@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Provider HTTP streams are relayed through BLOFY HTTPS; the app itself
+         never opens cleartext traffic. -->
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

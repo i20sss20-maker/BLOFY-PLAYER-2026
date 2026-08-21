@@ -28,7 +28,14 @@ function extensionFor(url, type) {
   }
 }
 
-export function parseM3u(text) {
+function resolvePlaylistUrl(value, baseUrl) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try { return baseUrl ? new URL(raw, baseUrl).toString() : new URL(raw).toString(); }
+  catch { return raw; }
+}
+
+export function parseM3u(text, baseUrl = "") {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const items = [];
   let meta = null;
@@ -44,9 +51,17 @@ export function parseM3u(text) {
       continue;
     }
     if (!line.startsWith("#") && meta) {
-      const id = crypto.createHash("sha1").update(line).digest("hex").slice(0, 16);
-      const type = kindFor(meta.category, line);
-      items.push({ id, ...meta, sourceUrl: line, type, extension: extensionFor(line, type) });
+      const sourceUrl = resolvePlaylistUrl(line, baseUrl);
+      const id = crypto.createHash("sha1").update(sourceUrl).digest("hex").slice(0, 16);
+      const type = kindFor(meta.category, sourceUrl);
+      items.push({
+        id,
+        ...meta,
+        image: resolvePlaylistUrl(meta.image, baseUrl),
+        sourceUrl,
+        type,
+        extension: extensionFor(sourceUrl, type),
+      });
       meta = null;
     }
   }

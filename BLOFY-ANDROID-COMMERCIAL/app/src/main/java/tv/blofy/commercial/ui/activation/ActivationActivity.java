@@ -23,7 +23,9 @@ import java.util.concurrent.Executors;
 import tv.blofy.commercial.R;
 import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.DeviceIdentity;
+import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.databinding.ActivityActivationBinding;
+import tv.blofy.commercial.ui.home.HomeActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
 public final class ActivationActivity extends AppCompatActivity {
@@ -31,6 +33,9 @@ public final class ActivationActivity extends AppCompatActivity {
     private ApiClient api;
     private boolean licensed;
     private volatile boolean refreshing;
+    private volatile boolean navigating;
+    private volatile boolean pairingReady;
+    private boolean forceForm;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Runnable poll = this::refreshLicense;
@@ -40,6 +45,7 @@ public final class ActivationActivity extends AppCompatActivity {
         binding = ActivityActivationBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         api = new ApiClient(this);
+        forceForm = getIntent().getBooleanExtra("force_form", false);
         binding.deviceId.setText(api.deviceId());
         binding.qr.setImageBitmap(qr(activationUrl(), 380));
         String error = getIntent().getStringExtra("boot_error");
@@ -64,19 +70,26 @@ public final class ActivationActivity extends AppCompatActivity {
     }
 
     private void refreshLicense() {
-        if (refreshing || isFinishing() || isDestroyed()) return;
+        if (refreshing || navigating || isFinishing() || isDestroyed()) return;
         refreshing = true;
         worker.execute(() -> {
             try {
+                ensureFreshPairing();
                 JSONObject data = api.get("/api/license?device_id=" + ApiClient.encode(api.deviceId()));
-                licensed = "trial".equals(data.optString("plan")) || "active".equals(data.optString("plan"));
+                licensed = LicenseGate.isLicensed(data);
                 int days = data.optInt("remainingDays", 0);
                 boolean configured = licensed && restoreRemoteSession();
                 runOnUiThread(() -> {
                     binding.licenseStatus.setText(licensed ? "مفعّل • متبقي " + days + " أيام" : "الجهاز غير مفعّل");
                     binding.licenseStatus.setTextColor(getColor(licensed ? R.color.blofy_success : R.color.blofy_error));
-                    if (configured && !isFinishing()) {
-                        startActivity(new Intent(this, SyncActivity.class));
+                    if (configured && !forceForm && !isFinishing()) {
+                        navigating = true;
+                        main.removeCallbacks(poll);
+                        boolean ready = getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
+                                .getBoolean("catalog_ready", false)
+                                && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
+                                .getInt("catalog_schema", 0) >= 3;
+                        startActivity(new Intent(this, ready ? HomeActivity.class : SyncActivity.class));
                         finish();
                     }
                 });
@@ -85,15 +98,44 @@ public final class ActivationActivity extends AppCompatActivity {
             } finally {
                 refreshing = false;
                 main.removeCallbacks(poll);
-                if (!isFinishing() && !isDestroyed()) main.postDelayed(poll, 5_000);
+                if (!navigating && !isFinishing() && !isDestroyed()) main.postDelayed(poll, 5_000);
             }
         });
+    }
+
+    /** Refreshes the QR token whenever this screen is entered, so a token left
+     * on a TV for more than 24 hours never leads to a dead mobile form. */
+    private void ensureFreshPairing() {
+        if (pairingReady) return;
+        try {
+            JSONObject body = new JSONObject();
+            body.put("deviceId", api.deviceId());
+            body.put("deviceKey", DeviceIdentity.secret(this));
+            JSONObject result = api.post("/api/device/register", body);
+            String token = result.optString("pairToken", "");
+            if (token.isEmpty()) return;
+            DeviceIdentity.pairToken(this, token);
+            pairingReady = true;
+            Bitmap image = qr(activationUrl(), 380);
+            runOnUiThread(() -> {
+                if (binding != null && image != null) binding.qr.setImageBitmap(image);
+            });
+        } catch (Exception error) {
+            if (DeviceIdentity.pairToken(this) == null || DeviceIdentity.pairToken(this).isEmpty()) {
+                showStatus("تعذر تحديث باركود الربط. تحقق من الاتصال ثم أعد المحاولة.", true);
+            }
+        }
     }
 
     private boolean restoreRemoteSession() {
         try {
             api.get("/api/device/bootstrap?device_id=" + ApiClient.encode(api.deviceId()));
-            return api.get("/api/session").optJSONObject("session") != null;
+            JSONObject session = api.get("/api/session").optJSONObject("session");
+            if (!LicenseGate.isPackageUsable(session)) {
+                showStatus("انتهى اشتراك الباقة. أدخل بيانات الباقة المجددة ثم احفظها.", true);
+                return false;
+            }
+            return session != null;
         } catch (Exception ignored) {
             return false;
         }
@@ -112,7 +154,7 @@ public final class ActivationActivity extends AppCompatActivity {
                     api.post("/api/activate", body);
                 }
                 JSONObject data = api.get("/api/license?device_id=" + ApiClient.encode(api.deviceId()));
-                licensed = "trial".equals(data.optString("plan")) || "active".equals(data.optString("plan"));
+                licensed = LicenseGate.isLicensed(data);
                 if (!licensed) throw new Exception("رمز التفعيل غير صحيح أو انتهت صلاحيته.");
                 runOnUiThread(() -> {
                     binding.activate.setEnabled(true);
@@ -154,6 +196,8 @@ public final class ActivationActivity extends AppCompatActivity {
                 JSONObject session = api.get("/api/session").optJSONObject("session");
                 if (session == null) throw new Exception("لم يتم حفظ جلسة الباقة.");
                 runOnUiThread(() -> {
+                    navigating = true;
+                    main.removeCallbacks(poll);
                     startActivity(new Intent(this, SyncActivity.class));
                     finish();
                 });

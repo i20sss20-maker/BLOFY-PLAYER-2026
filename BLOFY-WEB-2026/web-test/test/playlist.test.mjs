@@ -31,3 +31,12 @@ test("extensionless live M3U sources default to raw transport stream", () => {
 https://media.example/live/channel?id=42`);
   assert.equal(item.extension, "ts");
 });
+
+test("M3U snapshot resolves relative media and logo URLs against its final URL", () => {
+  const [item] = parseM3u(`#EXTM3U
+#EXTINF:-1 tvg-logo="../logos/channel.png" group-title="Live",Relative channel
+./streams/channel.ts`, "https://provider.example/packages/main/list.m3u8?token=secret");
+  assert.equal(item.sourceUrl, "https://provider.example/packages/main/streams/channel.ts");
+  assert.equal(item.image, "https://provider.example/packages/logos/channel.png");
+  assert.equal(item.extension, "ts");
+});
