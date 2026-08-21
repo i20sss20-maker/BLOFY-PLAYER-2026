@@ -11,6 +11,7 @@ import android.view.WindowInsetsController;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
@@ -76,6 +77,9 @@ public final class PlayerActivity extends AppCompatActivity implements Player.Li
         api = new ApiClient(this); store = new CatalogStore(this);
         id = extra("id", ""); name = extra("name", "BLOFY PLAYER"); type = extra("type", "live"); extension = normalize(extra("extension", isLive() ? "ts" : "mp4"));
         binding.title.setText(name); binding.close.setOnClickListener(v -> finish()); binding.retry.setOnClickListener(v -> retry());
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() { finish(); }
+        });
         if (isLive()) {
             liveChannels = store.media("live", "", "", 20_000);
             for (int i = 0; i < liveChannels.size(); i++) if (id.equals(liveChannels.get(i).id)) liveIndex = i;
@@ -178,7 +182,6 @@ public final class PlayerActivity extends AppCompatActivity implements Player.Li
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) switch (event.getKeyCode()) {
-            case KeyEvent.KEYCODE_BACK: finish(); return true;
             case KeyEvent.KEYCODE_CHANNEL_UP: case KeyEvent.KEYCODE_DPAD_UP: if(isLive()){switchChannel(1);return true;} break;
             case KeyEvent.KEYCODE_CHANNEL_DOWN: case KeyEvent.KEYCODE_DPAD_DOWN: if(isLive()){switchChannel(-1);return true;} break;
             case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE: if(player!=null){if(player.isPlaying())player.pause();else player.play();} return true;
