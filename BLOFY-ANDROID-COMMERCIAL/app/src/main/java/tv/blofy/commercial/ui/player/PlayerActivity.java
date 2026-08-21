@@ -1,5 +1,6 @@
 package tv.blofy.commercial.ui.player;
 
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -35,6 +36,9 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.videolan.libvlc.LibVLC;
+import org.videolan.libvlc.Media;
+import org.videolan.libvlc.MediaPlayer;
 
 import java.text.DateFormat;
 import java.util.Date;
@@ -54,6 +58,14 @@ import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivityPlayerBinding;
 
+/**
+ * BLOFY playback policy:
+ * 1) Railway authenticates and returns a short-lived redirect only.
+ * 2) Media3 + OkHttp connects directly from the TV to the IPTV provider.
+ * 3) 401/403/456 are provider/account/IP/header failures and never switch engine.
+ * 4) LibVLC is tried once only after a provider 2xx when Media3 fails parsing/decoding.
+ * 5) No Railway proxy/transcode is part of the normal Android playback path.
+ */
 @OptIn(markerClass = UnstableApi.class)
 public final class PlayerActivity extends LicensedActivity implements Player.Listener {
     private static final String PROVIDER_USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
@@ -61,14 +73,23 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private ActivityPlayerBinding binding;
     private ApiClient api;
     private CatalogStore store;
+
     private ExoPlayer player;
+    private LibVLC libVlc;
+    private MediaPlayer vlcPlayer;
+
     private String id, name, type, extension, originalExtension, playbackUrl, playbackExtension;
     private boolean historyRecorded;
     private boolean initialized;
+    private boolean vlcAttempted;
+    private boolean vlcReady;
     private volatile boolean resolving;
+    private long pendingVlcSeekMs;
+
     private final ExecutorService worker = Executors.newFixedThreadPool(2);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AtomicInteger resolveGeneration = new AtomicInteger();
+    private final AtomicInteger providerHttpStatus = new AtomicInteger(-1);
 
     private final Runnable hideChrome = () -> {
         if (binding != null) {
@@ -78,9 +99,20 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     };
 
     private final Runnable timeout = () -> {
+        if (vlcPlayer != null) {
+            if (vlcReady) return;
+            releaseVlc(true);
+            showError("LibVLC لم يستلم فيديو صالحًا خلال المهلة من رابط المزوّد المباشر.");
+            return;
+        }
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
-        releasePlayer();
-        showError("المزوّد لم يرسل فيديو خلال المهلة. التشغيل كان مباشرًا من الجهاز ولم يمر عبر Railway.");
+        int observed = providerHttpStatus.get();
+        releaseMedia3(true);
+        if (observed == 401 || observed == 403 || observed == 456) {
+            showProviderRejected(observed);
+        } else {
+            showError("المزوّد لم يرسل فيديو خلال المهلة. التشغيل كان مباشرًا من الجهاز ولم يمر عبر Railway.");
+        }
     };
 
     @Override protected void onCreate(@Nullable Bundle state) {
@@ -115,11 +147,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         return value == null || value.isEmpty() ? fallback : value;
     }
 
-    /**
-     * Railway only authenticates the device and signs a short-lived redirect.
-     * resolveMediaRedirect() reads Location without downloading the video body.
-     * Media3 then connects from the TV directly to the IPTV provider.
-     */
+    /** Railway returns Location only; it never carries the media body here. */
     private void resolveDirect() {
         resolving = true;
         final int generation = resolveGeneration.incrementAndGet();
@@ -179,21 +207,32 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private void prepareMedia3Direct(String url, String mediaExtension) {
         if (isFinishing() || isDestroyed()
                 || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
-        releasePlayer();
+        releaseMedia3(false);
+        releaseVlc(false);
+        vlcReady = false;
+        providerHttpStatus.set(-1);
+
+        binding.vlcPlayer.setVisibility(View.GONE);
+        binding.player.setVisibility(View.VISIBLE);
 
         OkHttpClient client = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(isLive() ? 35 : 60, TimeUnit.SECONDS)
-                .callTimeout(isLive() ? 45 : 75, TimeUnit.SECONDS)
+                // Do not set callTimeout: a live/VOD stream is intentionally a long-running call.
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true)
+                .addNetworkInterceptor(chain -> {
+                    okhttp3.Response response = chain.proceed(chain.request());
+                    providerHttpStatus.set(response.code());
+                    return response;
+                })
                 .build();
 
         Map<String, String> providerHeaders = new LinkedHashMap<>();
         providerHeaders.put("Accept", "*/*");
         providerHeaders.put("Accept-Encoding", "identity");
-        providerHeaders.put("Connection", "keep-alive");
+        providerHeaders.put("Cache-Control", "no-cache");
         providerHeaders.put("Icy-MetaData", "1");
 
         OkHttpDataSource.Factory http = new OkHttpDataSource.Factory(client)
@@ -236,9 +275,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         boolean subtitles = getSharedPreferences("blofy_player_settings", MODE_PRIVATE)
                 .getBoolean("subtitles", true);
         tracks.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles);
-        if (subtitles) {
-            tracks.setPreferredTextLanguage("ar").setSelectUndeterminedTextLanguage(true);
-        }
+        if (subtitles) tracks.setPreferredTextLanguage("ar").setSelectUndeterminedTextLanguage(true);
         player.setTrackSelectionParameters(tracks.build());
 
         MediaItem.Builder item = new MediaItem.Builder().setUri(url).setMediaId(id);
@@ -265,7 +302,79 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         handler.postDelayed(timeout, isLive() ? 15_000L : 25_000L);
     }
 
+    /** Called only after Media3 saw provider 2xx and then failed parsing/decoding. */
+    private void prepareVlcDirect(String url) {
+        if (url == null || url.isEmpty() || isFinishing() || isDestroyed()) {
+            showError("تعذر بدء محرك LibVLC الاحتياطي.");
+            return;
+        }
+        releaseMedia3(true);
+        releaseVlc(false);
+        vlcReady = false;
+        showLoading();
+
+        binding.player.setPlayer(null);
+        binding.player.setVisibility(View.GONE);
+        binding.vlcPlayer.setVisibility(View.VISIBLE);
+
+        try {
+            libVlc = new LibVLC(getApplicationContext());
+            vlcPlayer = new MediaPlayer(libVlc);
+            boolean subtitles = getSharedPreferences("blofy_player_settings", MODE_PRIVATE)
+                    .getBoolean("subtitles", true);
+            vlcPlayer.attachViews(binding.vlcPlayer, null, subtitles, false);
+            vlcPlayer.setEventListener(event -> {
+                if (event == null) return;
+                if (event.type == MediaPlayer.Event.Playing) {
+                    runOnUiThread(() -> {
+                        if (vlcPlayer == null || binding == null) return;
+                        vlcReady = true;
+                        if (pendingVlcSeekMs > 0L && !isLive()) {
+                            try { vlcPlayer.setTime(pendingVlcSeekMs); } catch (Exception ignored) { }
+                            pendingVlcSeekMs = 0L;
+                        }
+                        onEngineReady();
+                    });
+                } else if (event.type == MediaPlayer.Event.EncounteredError) {
+                    runOnUiThread(() -> {
+                        releaseVlc(true);
+                        showError("وصل رابط المزوّد بنجاح، لكن Media3 وLibVLC لم يستطيعا تشغيل هذا المصدر.");
+                    });
+                } else if (event.type == MediaPlayer.Event.EndReached && !isLive()) {
+                    runOnUiThread(() -> {
+                        getSharedPreferences("blofy_positions", MODE_PRIVATE).edit()
+                                .putLong(positionKey(), 0L).apply();
+                        finish();
+                    });
+                }
+            });
+
+            Media media = new Media(libVlc, Uri.parse(url));
+            media.setHWDecoderEnabled(true, false);
+            media.addOption(":http-user-agent=" + PROVIDER_USER_AGENT);
+            media.addOption(":http-reconnect");
+            media.addOption(":network-caching=" + (isLive() ? 1_000 : 2_500));
+            if (isLive()) media.addOption(":live-caching=1000");
+            vlcPlayer.setMedia(media);
+            media.release();
+
+            pendingVlcSeekMs = isLive() ? 0L : getSharedPreferences("blofy_positions", MODE_PRIVATE)
+                    .getLong(positionKey(), 0L);
+            vlcPlayer.play();
+            handler.removeCallbacks(timeout);
+            handler.postDelayed(timeout, isLive() ? 18_000L : 30_000L);
+        } catch (Exception error) {
+            releaseVlc(false);
+            showError("تعذر تشغيل LibVLC الاحتياطي: "
+                    + (error.getMessage() == null ? "خطأ غير معروف" : error.getMessage()));
+        }
+    }
+
     private void retryDirect() {
+        releasePlayback(true);
+        vlcAttempted = false;
+        vlcReady = false;
+        providerHttpStatus.set(-1);
         extension = originalExtension;
         playbackUrl = null;
         playbackExtension = null;
@@ -316,9 +425,12 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         final int generation = resolveGeneration.incrementAndGet();
         final String currentId = id;
         resolving = true;
-        releasePlayer();
+        releasePlayback(true);
         playbackUrl = null;
         playbackExtension = null;
+        vlcAttempted = false;
+        vlcReady = false;
+        providerHttpStatus.set(-1);
         showLoading();
 
         worker.execute(() -> {
@@ -355,6 +467,11 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         });
     }
 
+    private void showProviderRejected(int status) {
+        showError("المزوّد رفض رابط التشغيل المباشر (HTTP " + status + ").\n"
+                + "نراجع الرابط أو صلاحية الحساب أو تقييد IP/Headers؛ تغيير المحرك لن يحل هذا الرد.");
+    }
+
     private void showError(String message) {
         if (binding == null || isFinishing() || isDestroyed()) return;
         binding.progress.setVisibility(View.GONE);
@@ -364,30 +481,36 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         binding.retry.requestFocus();
     }
 
-    @Override public void onPlaybackStateChanged(int state) {
+    private void onEngineReady() {
         if (binding == null) return;
-        binding.progress.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
-        if (state == Player.STATE_READY) {
-            handler.removeCallbacks(timeout);
-            handler.removeCallbacks(hideChrome);
-            handler.postDelayed(hideChrome, 4_500L);
-            if (!historyRecorded) {
-                historyRecorded = true;
-                final String readyType = type;
-                final String readyId = id;
-                worker.execute(() -> store.addHistory(readyType, readyId));
-            }
+        handler.removeCallbacks(timeout);
+        binding.progress.setVisibility(View.GONE);
+        handler.removeCallbacks(hideChrome);
+        handler.postDelayed(hideChrome, 4_500L);
+        if (!historyRecorded) {
+            historyRecorded = true;
+            final String readyType = type;
+            final String readyId = id;
+            worker.execute(() -> store.addHistory(readyType, readyId));
         }
+    }
+
+    @Override public void onPlaybackStateChanged(int state) {
+        if (binding == null || player == null) return;
+        binding.progress.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
+        if (state == Player.STATE_READY) onEngineReady();
     }
 
     @Override public void onPlayerError(PlaybackException error) {
         handler.removeCallbacks(timeout);
-        final int status = httpStatus(error);
-        releasePlayer();
+        int status = httpStatus(error);
+        if (status > 0) providerHttpStatus.set(status);
+        int observed = providerHttpStatus.get();
+        releaseMedia3(true);
 
-        if (status == 401 || status == 403 || status == 456) {
-            showError("المزوّد رفض رابط التشغيل المباشر (HTTP " + status + ").\n"
-                    + "هذه ليست مشكلة محرك تشغيل؛ نحتاج فحص الرابط أو الحساب أو الـIP/Headers.");
+        if (status == 401 || status == 403 || status == 456
+                || observed == 401 || observed == 403 || observed == 456) {
+            showProviderRejected(status > 0 ? status : observed);
             return;
         }
         if (status >= 400) {
@@ -395,8 +518,25 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                     + error.getErrorCodeName());
             return;
         }
-        showError("وصلنا للمزوّد مباشرة لكن Media3 لم يستطع تشغيل الصيغة/الترميز.\n"
-                + error.getErrorCodeName() + "\nالخطوة التالية لهذه الحالة هي LibVLC الاحتياطي.");
+
+        if (observed >= 200 && observed < 300 && !vlcAttempted && media3FormatFailure(error)) {
+            vlcAttempted = true;
+            prepareVlcDirect(playbackUrl);
+            return;
+        }
+
+        if (observed >= 200 && observed < 300) {
+            showError("وصلنا للمزوّد مباشرة (HTTP " + observed + ") لكن التشغيل توقف: "
+                    + error.getErrorCodeName());
+        } else {
+            showError("تعذر تثبيت اتصال فيديو مباشر مع المزوّد: " + error.getErrorCodeName());
+        }
+    }
+
+    private static boolean media3FormatFailure(PlaybackException error) {
+        int code = error.getErrorCode();
+        // 3xxx = container/manifest parsing, 4xxx = decoder, 5xxx = audio sink/format.
+        return code >= 3000 && code < 6000;
     }
 
     private static int httpStatus(Throwable error) {
@@ -424,9 +564,15 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 switchChannel(-1);
                 return true;
             }
-            if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && player != null) {
-                if (player.isPlaying()) player.pause(); else player.play();
-                return true;
+            if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                if (player != null) {
+                    if (player.isPlaying()) player.pause(); else player.play();
+                    return true;
+                }
+                if (vlcPlayer != null) {
+                    if (vlcPlayer.isPlaying()) vlcPlayer.pause(); else vlcPlayer.play();
+                    return true;
+                }
             }
         }
         if (binding != null) binding.topBar.setVisibility(View.VISIBLE);
@@ -435,11 +581,15 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
 
     private String positionKey() { return "position_" + type + "_" + id; }
 
-    private void releasePlayer() {
+    private void releasePlayback(boolean savePosition) {
+        releaseMedia3(savePosition);
+        releaseVlc(savePosition);
+    }
+
+    private void releaseMedia3(boolean savePosition) {
         handler.removeCallbacks(timeout);
-        handler.removeCallbacks(hideChrome);
         if (player == null) return;
-        if (!isLive()) {
+        if (savePosition && !isLive()) {
             long position = player.getCurrentPosition();
             long duration = player.getDuration();
             if (duration > 0 && position > duration - 30_000) position = 0;
@@ -450,6 +600,32 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         player.removeListener(this);
         player.release();
         player = null;
+    }
+
+    private void releaseVlc(boolean savePosition) {
+        handler.removeCallbacks(timeout);
+        if (vlcPlayer != null) {
+            if (savePosition && !isLive()) {
+                try {
+                    long position = Math.max(0L, vlcPlayer.getTime());
+                    long duration = vlcPlayer.getLength();
+                    if (duration > 0L && position > duration - 30_000L) position = 0L;
+                    getSharedPreferences("blofy_positions", MODE_PRIVATE).edit()
+                            .putLong(positionKey(), position).apply();
+                } catch (Exception ignored) { }
+            }
+            try { vlcPlayer.stop(); } catch (Exception ignored) { }
+            try { vlcPlayer.detachViews(); } catch (Exception ignored) { }
+            try { vlcPlayer.release(); } catch (Exception ignored) { }
+            vlcPlayer = null;
+        }
+        if (libVlc != null) {
+            try { libVlc.release(); } catch (Exception ignored) { }
+            libVlc = null;
+        }
+        vlcReady = false;
+        pendingVlcSeekMs = 0L;
+        if (binding != null) binding.vlcPlayer.setVisibility(View.GONE);
     }
 
     private static String normalize(String ext) {
@@ -475,8 +651,9 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
 
     @Override protected void onStart() {
         super.onStart();
-        if (!initialized || player != null) return;
+        if (!initialized || player != null || vlcPlayer != null) return;
         if (playbackUrl != null) {
+            vlcAttempted = false;
             prepareMedia3Direct(playbackUrl,
                     playbackExtension == null ? extension : playbackExtension);
         } else if (!resolving) {
@@ -487,15 +664,18 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     @Override protected void onStop() {
         resolveGeneration.incrementAndGet();
         resolving = false;
-        releasePlayer();
+        releasePlayback(true);
         playbackUrl = null;
         playbackExtension = null;
+        vlcAttempted = false;
+        providerHttpStatus.set(-1);
         extension = originalExtension;
         super.onStop();
     }
 
     @Override protected void onDestroy() {
         resolveGeneration.incrementAndGet();
+        releasePlayback(false);
         worker.shutdownNow();
         if (store != null) store.close();
         binding = null;
