@@ -218,7 +218,6 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         OkHttpClient client = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(isLive() ? 35 : 60, TimeUnit.SECONDS)
-                // Do not set callTimeout: a live/VOD stream is intentionally a long-running call.
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true)
@@ -534,8 +533,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     }
 
     private static boolean media3FormatFailure(PlaybackException error) {
-        int code = error.getErrorCode();
-        // 3xxx = container/manifest parsing, 4xxx = decoder, 5xxx = audio sink/format.
+        int code = error.errorCode;
         return code >= 3000 && code < 6000;
     }
 
