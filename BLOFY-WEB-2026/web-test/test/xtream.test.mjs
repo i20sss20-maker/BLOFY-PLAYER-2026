@@ -3,11 +3,36 @@ import test from "node:test";
 import { normalizeSeriesInfo, XtreamClient, xtreamResponseLimits } from "../lib/xtream.mjs";
 
 test("large Xtream catalogs use a larger bounded response window", () => {
-  const regular = xtreamResponseLimits("get_vod_categories");
-  const catalog = xtreamResponseLimits("get_vod_streams");
-  assert.equal(regular.maxBytes, 48_000_000);
-  assert.ok(catalog.maxBytes >= 160_000_000);
-  assert.ok(catalog.timeoutMs >= 60_000);
+  const names = [
+    "XTREAM_CATALOG_MAX_BYTES",
+    "XTREAM_CATALOG_HEADER_TIMEOUT_MS",
+    "XTREAM_CATALOG_IDLE_TIMEOUT_MS",
+    "XTREAM_CATALOG_TOTAL_TIMEOUT_MS",
+  ];
+  const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    const regular = xtreamResponseLimits("get_vod_categories");
+    for (const action of ["get_live_streams", "get_vod_streams", "get_series"]) {
+      const catalog = xtreamResponseLimits(action);
+      assert.equal(catalog.catalog, true);
+      assert.equal(catalog.maxBytes, 160_000_000);
+      assert.equal(catalog.headerTimeoutMs, 60_000);
+      assert.equal(catalog.totalTimeoutMs, 120_000);
+    }
+    assert.equal(regular.catalog, false);
+    assert.equal(regular.maxBytes, 48_000_000);
+    process.env.XTREAM_CATALOG_MAX_BYTES = "999999999";
+    process.env.XTREAM_CATALOG_HEADER_TIMEOUT_MS = "invalid";
+    const bounded = xtreamResponseLimits("get_vod_streams");
+    assert.equal(bounded.maxBytes, 160_000_000);
+    assert.equal(bounded.headerTimeoutMs, 60_000);
+  } finally {
+    for (const name of names) {
+      if (original[name] === undefined) delete process.env[name];
+      else process.env[name] = original[name];
+    }
+  }
 });
 
 test("Xtream live streams default to transport stream and honor provider extensions", () => {
