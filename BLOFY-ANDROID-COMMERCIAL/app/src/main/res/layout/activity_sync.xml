@@ -7,5 +7,17 @@
     <TextView android:id="@+id/detail" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="9dp" android:text="التحقق من الخادم…" android:textColor="@color/blofy_muted" android:textSize="14sp" app:layout_constraintBottom_toTopOf="@id/progress" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/title" />
     <com.google.android.material.progressindicator.LinearProgressIndicator android:id="@+id/progress" android:layout_width="420dp" android:layout_height="10dp" android:layout_marginTop="24dp" android:max="100" app:indicatorColor="@color/blofy_purple_light" app:trackColor="#35FFFFFF" app:trackCornerRadius="5dp" app:layout_constraintBottom_toTopOf="@id/percent" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/detail" />
     <TextView android:id="@+id/percent" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="0%" android:textColor="@color/blofy_purple_light" android:textSize="18sp" android:textStyle="bold" app:layout_constraintBottom_toTopOf="@id/analysis" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/progress" />
-    <TextView android:id="@+id/analysis" android:layout_width="520dp" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:background="@drawable/bg_panel" android:gravity="center" android:padding="16dp" android:text="سيظهر هنا تحليل الخادم وصيغة التشغيل" android:textColor="@color/blofy_muted" android:textSize="13sp" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/percent" />
+    <TextView android:id="@+id/analysis" android:layout_width="520dp" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:background="@drawable/bg_panel" android:gravity="center" android:padding="16dp" android:text="سيظهر هنا تحليل الخادم وصيغة التشغيل" android:textColor="@color/blofy_muted" android:textSize="13sp" app:layout_constraintBottom_toTopOf="@id/retry" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/percent" />
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/retry"
+        android:layout_width="220dp"
+        android:layout_height="54dp"
+        android:layout_marginBottom="24dp"
+        android:text="إعادة المحاولة"
+        android:textSize="16sp"
+        android:visibility="gone"
+        app:backgroundTint="@color/blofy_purple"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 </androidx.constraintlayout.widget.ConstraintLayout>
