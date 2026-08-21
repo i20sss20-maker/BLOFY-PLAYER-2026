@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><shape android:shape="rectangle"><gradient android:angle="0" android:startColor="#0A0912" android:centerColor="#24103D" android:endColor="#090810"/></shape></item>
+    <item android:width="110dp" android:height="110dp" android:gravity="center" android:alpha="0.45" android:drawable="@drawable/blofy_brand"/>
+</layer-list>

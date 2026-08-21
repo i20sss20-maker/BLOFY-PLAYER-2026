@@ -31,6 +31,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
+      - name: Test BLOFY service contracts
+        working-directory: BLOFY-WEB-2026/web-test
+        run: |
+          node --check server.mjs
+          node --test test/*.test.mjs
       - name: Verify commercial source
         run: |
           test -f BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player/PlayerActivity.java

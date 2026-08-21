@@ -21,7 +21,7 @@ import tv.blofy.commercial.BuildConfig;
 public final class ApiClient {
     private static final int CONNECT_TIMEOUT = 8_000;
     private static final int READ_TIMEOUT = 20_000;
-    private static final int CATALOG_READ_TIMEOUT = 120_000;
+    private static final int CATALOG_READ_TIMEOUT = 150_000;
     private final Context context;
     private final SharedPreferences preferences;
     private final String baseUrl = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "");
@@ -36,10 +36,66 @@ public final class ApiClient {
 
     public String baseUrl() { return baseUrl; }
     public String deviceId() { return DeviceIdentity.id(context); }
+    public String absoluteUrl(String value) {
+        String raw = value == null ? "" : value.trim();
+        if (raw.isEmpty()) return "";
+        return raw.startsWith("http://") || raw.startsWith("https://")
+                ? raw : baseUrl + (raw.startsWith("/") ? raw : "/" + raw);
+    }
+    public Map<String, String> authenticatedHeaders() {
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("User-Agent", "BLOFY-COMMERCIAL/" + BuildConfig.VERSION_NAME);
+        values.put("X-Blofy-Device-Id", deviceId());
+        values.put("X-Blofy-Device-Key", DeviceIdentity.secret(context));
+        String cookie = cookieHeader();
+        if (!cookie.isEmpty()) values.put("Cookie", cookie);
+        return values;
+    }
+    public void clearSession() {
+        synchronized (this) {
+            cookies.remove("blofy_session");
+            cookies.remove("blofy_license");
+            preferences.edit().putString("cookies", cookieHeader()).apply();
+        }
+    }
     public JSONObject get(String path) throws Exception { return request("GET", path, null, READ_TIMEOUT); }
     public JSONObject getCatalog(String path) throws Exception { return request("GET", path, null, CATALOG_READ_TIMEOUT); }
     public JSONObject post(String path, JSONObject body) throws Exception { return request("POST", path, body, READ_TIMEOUT); }
     public JSONObject delete(String path) throws Exception { return request("DELETE", path, null, READ_TIMEOUT); }
+
+    /**
+     * Resolves BLOFY's short-lived native-play redirect without forwarding the
+     * device key or session cookie to the external IPTV provider.
+     */
+    public String resolveMediaRedirect(String path) throws Exception {
+        HttpURLConnection connection = open(path, "GET", READ_TIMEOUT);
+        connection.setInstanceFollowRedirects(false);
+        try {
+            int status = connection.getResponseCode();
+            captureCookies(connection);
+            if (status >= 300 && status < 400) {
+                String location = connection.getHeaderField("Location");
+                if (location == null || location.trim().isEmpty()) {
+                    throw new ApiException(status, "لم يرسل الخادم رابط التشغيل المباشر.");
+                }
+                URL resolved = new URL(new URL(absoluteUrl(path)), location);
+                String protocol = resolved.getProtocol();
+                if (!"http".equalsIgnoreCase(protocol) && !"https".equalsIgnoreCase(protocol)) {
+                    throw new ApiException(403, "تم رفض بروتوكول تشغيل غير آمن.");
+                }
+                return resolved.toString();
+            }
+            InputStream stream = status >= 200 && status < 400
+                    ? connection.getInputStream() : connection.getErrorStream();
+            String text = stream == null ? "" : read(stream);
+            String message = "تعذر إصدار رابط التشغيل (" + status + ").";
+            try { message = new JSONObject(text).optString("error", message); }
+            catch (Exception ignored) {}
+            throw new ApiException(status, message);
+        } finally {
+            connection.disconnect();
+        }
+    }
 
     public JSONObject request(String method, String path, JSONObject body) throws Exception {
         return request(method, path, body, READ_TIMEOUT);
@@ -140,6 +196,6 @@ public final class ApiClient {
 
     public static final class ApiException extends Exception {
         public final int status;
-        ApiException(int status, String message) { super(message); this.status = status; }
+        public ApiException(int status, String message) { super(message); this.status = status; }
     }
 }
