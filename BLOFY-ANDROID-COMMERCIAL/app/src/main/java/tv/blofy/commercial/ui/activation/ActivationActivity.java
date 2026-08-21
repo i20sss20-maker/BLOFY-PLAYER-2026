@@ -7,7 +7,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
-import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -25,6 +24,9 @@ import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.DeviceIdentity;
 import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.databinding.ActivityActivationBinding;
+import tv.blofy.commercial.provider.ProviderProfile;
+import tv.blofy.commercial.provider.ProviderProfileStore;
+import tv.blofy.commercial.provider.XtreamClient;
 import tv.blofy.commercial.ui.home.HomeActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
@@ -50,6 +52,7 @@ public final class ActivationActivity extends AppCompatActivity {
         binding.qr.setImageBitmap(qr(activationUrl(), 380));
         String error = getIntent().getStringExtra("boot_error");
         if (error != null && !error.isEmpty()) binding.formStatus.setText(error);
+
         binding.packageType.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
             if (!isChecked) return;
             boolean xtream = checkedId == R.id.xtream;
@@ -60,7 +63,23 @@ public final class ActivationActivity extends AppCompatActivity {
         });
         binding.activate.setOnClickListener(view -> activate());
         binding.savePackage.setOnClickListener(view -> savePackage());
+        restoreLocalProfile();
         refreshLicense();
+    }
+
+    private void restoreLocalProfile() {
+        ProviderProfile profile = ProviderProfileStore.load(this);
+        if (profile == null) return;
+        binding.packageName.setText(profile.name);
+        if (profile.isXtream()) {
+            binding.packageType.check(R.id.xtream);
+            binding.serverUrl.setText(profile.serverUrl);
+            binding.username.setText(profile.username);
+            binding.password.setText(profile.password);
+        } else {
+            binding.packageType.check(R.id.m3u);
+            binding.playlistUrl.setText(profile.playlistUrl);
+        }
     }
 
     private String activationUrl() {
@@ -78,7 +97,7 @@ public final class ActivationActivity extends AppCompatActivity {
                 JSONObject data = api.get("/api/license?device_id=" + ApiClient.encode(api.deviceId()));
                 licensed = LicenseGate.isLicensed(data);
                 int days = data.optInt("remainingDays", 0);
-                boolean configured = licensed && restoreRemoteSession();
+                boolean configured = licensed && ProviderProfileStore.hasProfile(this);
                 runOnUiThread(() -> {
                     binding.licenseStatus.setText(licensed ? "مفعّل • متبقي " + days + " أيام" : "الجهاز غير مفعّل");
                     binding.licenseStatus.setTextColor(getColor(licensed ? R.color.blofy_success : R.color.blofy_error));
@@ -103,8 +122,6 @@ public final class ActivationActivity extends AppCompatActivity {
         });
     }
 
-    /** Refreshes the QR token whenever this screen is entered, so a token left
-     * on a TV for more than 24 hours never leads to a dead mobile form. */
     private void ensureFreshPairing() {
         if (pairingReady) return;
         try {
@@ -124,20 +141,6 @@ public final class ActivationActivity extends AppCompatActivity {
             if (DeviceIdentity.pairToken(this) == null || DeviceIdentity.pairToken(this).isEmpty()) {
                 showStatus("تعذر تحديث باركود الربط. تحقق من الاتصال ثم أعد المحاولة.", true);
             }
-        }
-    }
-
-    private boolean restoreRemoteSession() {
-        try {
-            api.get("/api/device/bootstrap?device_id=" + ApiClient.encode(api.deviceId()));
-            JSONObject session = api.get("/api/session").optJSONObject("session");
-            if (!LicenseGate.isPackageUsable(session)) {
-                showStatus("انتهى اشتراك الباقة. أدخل بيانات الباقة المجددة ثم احفظها.", true);
-                return false;
-            }
-            return session != null;
-        } catch (Exception ignored) {
-            return false;
         }
     }
 
@@ -176,25 +179,26 @@ public final class ActivationActivity extends AppCompatActivity {
             return;
         }
         boolean xtream = binding.packageType.getCheckedButtonId() == R.id.xtream;
-        JSONObject body = new JSONObject();
-        try {
-            body.put("kind", xtream ? "xtream" : "m3u");
-            body.put("name", text(binding.packageName));
-            if (xtream) {
-                body.put("serverUrl", text(binding.serverUrl));
-                body.put("username", text(binding.username));
-                body.put("password", text(binding.password));
-            } else {
-                body.put("url", text(binding.playlistUrl));
-            }
-        } catch (Exception ignored) {}
+        ProviderProfile profile = new ProviderProfile(
+                xtream ? "xtream" : "m3u",
+                text(binding.packageName),
+                xtream ? text(binding.serverUrl) : "",
+                xtream ? text(binding.username) : "",
+                xtream ? text(binding.password) : "",
+                xtream ? "" : text(binding.playlistUrl));
+        if (!profile.isValid()) {
+            showStatus(xtream ? "أدخل رابط السيرفر واسم المستخدم وكلمة المرور." : "أدخل رابط M3U صحيح.", true);
+            return;
+        }
+
         binding.savePackage.setEnabled(false);
-        showStatus("فحص الخادم وبيانات الباقة…", false);
+        showStatus(xtream ? "فحص Xtream مباشرة من الجهاز…" : "حفظ قائمة M3U محليًا…", false);
         worker.execute(() -> {
             try {
-                api.post("/api/session", body);
-                JSONObject session = api.get("/api/session").optJSONObject("session");
-                if (session == null) throw new Exception("لم يتم حفظ جلسة الباقة.");
+                if (profile.isXtream()) new XtreamClient(profile).validate();
+                ProviderProfileStore.save(this, profile);
+                getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
+                        .putBoolean("catalog_ready", false).apply();
                 runOnUiThread(() -> {
                     navigating = true;
                     main.removeCallbacks(poll);
@@ -210,6 +214,7 @@ public final class ActivationActivity extends AppCompatActivity {
 
     private void showStatus(String message, boolean error) {
         runOnUiThread(() -> {
+            if (binding == null) return;
             binding.formStatus.setText(message == null ? "حدث خطأ غير متوقع." : message);
             binding.formStatus.setTextColor(getColor(error ? R.color.blofy_error : R.color.blofy_muted));
         });
@@ -235,6 +240,7 @@ public final class ActivationActivity extends AppCompatActivity {
     @Override protected void onDestroy() {
         main.removeCallbacks(poll);
         worker.shutdownNow();
+        binding = null;
         super.onDestroy();
     }
 }
