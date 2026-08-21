@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowInsets;
@@ -37,6 +38,7 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -48,20 +50,20 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.OkHttpClient;
-import tv.blofy.commercial.core.ApiClient;
-import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.core.LicensedActivity;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivityPlayerBinding;
+import tv.blofy.commercial.provider.ProviderProfile;
+import tv.blofy.commercial.provider.ProviderProfileStore;
+import tv.blofy.commercial.provider.XtreamClient;
 
-/** Primary player stays Media3-only. LibVLC is isolated in a second Activity and loaded lazily. */
+/** Media3 first, direct provider traffic only. LibVLC remains an isolated lazy fallback. */
 @OptIn(markerClass = UnstableApi.class)
 public final class PlayerActivity extends LicensedActivity implements Player.Listener {
     private static final String PROVIDER_USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
 
     private ActivityPlayerBinding binding;
-    private ApiClient api;
     private CatalogStore store;
     private ExoPlayer player;
 
@@ -87,18 +89,14 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
         int observed = providerHttpStatus.get();
         releasePlayer(true);
-        if (observed == 401 || observed == 403 || observed == 456) {
-            showProviderRejected(observed);
-        } else {
-            showError("المزوّد لم يرسل فيديو خلال المهلة. التشغيل مباشر من الجهاز.");
-        }
+        if (observed == 401 || observed == 403 || observed == 456) showProviderRejected(observed);
+        else showError("المزوّد لم يرسل فيديو خلال المهلة. التشغيل مباشر من الجهاز.");
     };
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
         binding = ActivityPlayerBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
-        api = new ApiClient(this);
         store = new CatalogStore(this);
         type = extra("type", "live");
         id = extra("id", "");
@@ -126,6 +124,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         return value == null || value.isEmpty() ? fallback : value;
     }
 
+    /** Builds the provider URL locally. No BLOFY/Railway media endpoint is involved. */
     private void resolveDirect() {
         resolving = true;
         final int generation = resolveGeneration.incrementAndGet();
@@ -136,39 +135,32 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
 
         worker.execute(() -> {
             try {
-                String apiType = "series".equals(requestedType) || "episode".equals(requestedType)
-                        ? "episode" : requestedType;
-                JSONObject data = api.get("/api/native-link/" + ApiClient.encode(apiType) + "/"
-                        + ApiClient.encode(requestedId) + "?ext=" + ApiClient.encode(requestedExtension));
-                String path = data.optString("url");
-                if (!path.startsWith("/api/native-play")) throw new Exception("الخادم لم يصدر رابط تشغيل مباشر.");
-
-                final String directUrl = api.resolveMediaRedirect(path);
-                if (!(directUrl.startsWith("http://") || directUrl.startsWith("https://"))) {
-                    throw new Exception("رابط المزوّد المباشر غير صالح.");
+                ProviderProfile profile = ProviderProfileStore.load(this);
+                if (profile == null) throw new Exception("بيانات الباقة غير موجودة على الجهاز.");
+                final String directUrl;
+                if (profile.isXtream()) {
+                    directUrl = new XtreamClient(profile).playbackUrl(requestedType, requestedId, requestedExtension);
+                } else {
+                    directUrl = requestedId;
                 }
-                final String mediaExtension = normalize(data.optString("extension", requestedExtension));
+                if (!(directUrl.startsWith("http://") || directUrl.startsWith("https://"))) {
+                    throw new Exception("رابط التشغيل المحلي غير صالح.");
+                }
                 if (!isCurrent(generation, requestedId)) return;
-
                 playbackUrl = directUrl;
-                playbackExtension = mediaExtension;
+                playbackExtension = requestedExtension;
                 resolving = false;
                 runOnUiThread(() -> {
                     if (!isCurrent(generation, requestedId)) return;
                     if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
-                        prepareMedia3Direct(directUrl, mediaExtension);
+                        prepareMedia3Direct(directUrl, requestedExtension);
                     }
                 });
             } catch (Exception error) {
                 if (!isCurrent(generation, requestedId)) return;
                 resolving = false;
                 runOnUiThread(() -> {
-                    if (!isCurrent(generation, requestedId)) return;
-                    if (LicenseGate.isAuthorizationError(error)) {
-                        LicenseGate.openActivation(this, "انتهى الاشتراك أو التفعيل. حدّث البيانات ثم سجّل الدخول.");
-                    } else {
-                        showError(error.getMessage());
-                    }
+                    if (isCurrent(generation, requestedId)) showError(error.getMessage());
                 });
             }
         });
@@ -285,24 +277,31 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private void loadEpg(String requestedId) {
         worker.execute(() -> {
             try {
-                JSONArray values = api.get("/api/epg/" + ApiClient.encode(requestedId)).optJSONArray("entries");
+                ProviderProfile profile = ProviderProfileStore.load(this);
+                if (profile == null || !profile.isXtream()) throw new Exception("No Xtream EPG");
+                JSONObject payload = new XtreamClient(profile).epg(requestedId, 8);
+                JSONArray values = payload.optJSONArray("epg_listings");
                 JSONObject selected = null;
                 long now = System.currentTimeMillis();
                 if (values != null) for (int i = 0; i < values.length(); i++) {
                     JSONObject row = values.optJSONObject(i);
                     if (row == null) continue;
+                    long start = row.optLong("start_timestamp", 0L) * 1000L;
+                    long end = row.optLong("stop_timestamp", 0L) * 1000L;
                     if (selected == null) selected = row;
-                    if (row.optLong("start") <= now && now < row.optLong("end", Long.MAX_VALUE)) {
-                        selected = row;
-                        break;
-                    }
+                    if (start <= now && now < end) { selected = row; break; }
                 }
                 JSONObject current = selected;
                 runOnUiThread(() -> {
                     if (!requestedId.equals(id) || binding == null) return;
-                    binding.epg.setText(current == null ? "لا توجد بيانات برنامج حاليًا"
-                            : "الآن: " + current.optString("title") + " • "
-                            + time(current.optLong("start")) + " – " + time(current.optLong("end")));
+                    if (current == null) {
+                        binding.epg.setText("لا توجد بيانات برنامج حاليًا");
+                        return;
+                    }
+                    long start = current.optLong("start_timestamp", 0L) * 1000L;
+                    long end = current.optLong("stop_timestamp", 0L) * 1000L;
+                    binding.epg.setText("الآن: " + decodeEpg(current.optString("title")) + " • "
+                            + time(start) + " – " + time(end));
                 });
             } catch (Exception ignored) {
                 runOnUiThread(() -> { if (requestedId.equals(id) && binding != null) binding.epg.setText("البث المباشر"); });
@@ -397,7 +396,6 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         if (status > 0) providerHttpStatus.set(status);
         int observed = providerHttpStatus.get();
         releasePlayer(true);
-
         if (status == 401 || status == 403 || status == 456
                 || observed == 401 || observed == 403 || observed == 456) {
             showProviderRejected(status > 0 ? status : observed);
@@ -475,6 +473,15 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         if ("mkv".equals(ext)) return MimeTypes.VIDEO_MATROSKA;
         if ("webm".equals(ext)) return MimeTypes.VIDEO_WEBM;
         return null;
+    }
+
+    private static String decodeEpg(String value) {
+        if (value == null || value.isEmpty()) return "برنامج مباشر";
+        try {
+            byte[] raw = Base64.decode(value, Base64.DEFAULT);
+            String decoded = new String(raw, StandardCharsets.UTF_8).trim();
+            return decoded.isEmpty() ? value : decoded;
+        } catch (Exception ignored) { return value; }
     }
 
     private static String time(long value) {
