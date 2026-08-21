@@ -35,7 +35,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
 const transcodeRoot = path.join(os.tmpdir(), "blofy-player-transcodes");
 const port = Number(process.env.PORT || 3000);
-const cacheTtl = Number(process.env.CACHE_TTL_MS || 300_000);
+const cacheTtl = boundedInteger(process.env.CACHE_TTL_MS, 300_000, 1_000, 86_400_000);
+const catalogCacheTtl = Math.max(cacheTtl,
+  boundedInteger(process.env.CATALOG_CACHE_TTL_MS, 3_600_000, 60_000, 86_400_000));
+const maxMemoryCacheEntries = boundedInteger(process.env.MAX_MEMORY_CACHE_ENTRIES, 96, 16, 1_000);
 const configuredActivationUrl = String(process.env.ACTIVATION_URL || "").trim();
 const trialDays = Math.max(1, Number(process.env.TRIAL_DAYS || 7));
 const maxTranscodes = Math.max(1, Number(process.env.MAX_TRANSCODE_SESSIONS || 4));
@@ -108,12 +111,44 @@ function cacheKey(session, suffix) {
   return crypto.createHash("sha256").update(JSON.stringify(session)).update(suffix).digest("hex");
 }
 
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
+}
+
+function pruneMemoryCache(now = Date.now()) {
+  for (const [key, record] of memoryCache) {
+    if (record.expiresAt <= now) memoryCache.delete(key);
+  }
+  while (memoryCache.size > maxMemoryCacheEntries) {
+    const oldest = memoryCache.keys().next().value;
+    if (oldest === undefined) break;
+    memoryCache.delete(oldest);
+  }
+}
+
 async function cached(key, loader, ttl = cacheTtl) {
+  const now = Date.now();
   const current = memoryCache.get(key);
-  if (current && current.expiresAt > Date.now()) return current.value;
-  const value = await loader();
-  memoryCache.set(key, { value, expiresAt: Date.now() + ttl });
-  return value;
+  if (current && current.expiresAt > now) return current.value;
+  if (current) memoryCache.delete(key);
+  // Cache the in-flight Promise too. Large Xtream catalogs can otherwise be
+  // downloaded several times when multiple native requests arrive together.
+  const pending = Promise.resolve().then(loader);
+  memoryCache.set(key, { value: pending, expiresAt: now + ttl });
+  pruneMemoryCache(now);
+  try {
+    const value = await pending;
+    // A very slow loader can outlive its TTL. Never overwrite a newer load.
+    if (memoryCache.get(key)?.value === pending) {
+      memoryCache.set(key, { value, expiresAt: Date.now() + ttl });
+    }
+    return value;
+  } catch (error) {
+    if (memoryCache.get(key)?.value === pending) memoryCache.delete(key);
+    throw error;
+  }
 }
 
 function getSession(req) {
@@ -193,25 +228,42 @@ async function categoriesFor(session, type) {
 }
 
 async function catalogFor(session, type, query) {
-  const page = Math.max(1, Number(query.get("page") || 1));
-  const requestedPageSize = Math.max(30, Number(query.get("page_size") || 60));
-  const pageSize = Math.min(500, requestedPageSize);
+  const page = boundedInteger(query.get("page"), 1, 1, 1_000_000);
+  const maximumPageSize = query.get("native") === "1" ? 2000 : 500;
+  const pageSize = boundedInteger(query.get("page_size"), 60, 30, maximumPageSize);
   const category = query.get("category") || "";
   const search = query.get("search") || "";
   let rows;
   if (session.kind === "xtream") {
     const client = new XtreamClient(session);
-    rows = await cached(cacheKey(session, `catalog:${type}:${category}`), () => client.catalog(type, category));
+    rows = await cached(
+      cacheKey(session, `catalog:${type}:${category}`),
+      () => client.catalog(type, category),
+      category ? cacheTtl : catalogCacheTtl,
+    );
   } else {
-    rows = (await loadM3u(session)).filter((item) => item.type === type);
+    rows = await cached(
+      cacheKey(session, `catalog:m3u:${type}`),
+      async () => (await loadM3u(session)).filter((item) => item.type === type),
+      catalogCacheTtl,
+    );
   }
-  const result = pageItems(rows.map((item) => ({ ...item, image: safeImage(item.image), backdrop: safeImage(item.backdrop) })), {
+  // Paginate first. Signing every image in a 50k+ catalog for every page made
+  // native synchronization repeat expensive work and eventually hit timeouts.
+  const result = pageItems(rows, {
     category,
     search,
     page,
     pageSize,
   });
-  return result;
+  return {
+    ...result,
+    items: result.items.map((item) => ({
+      ...item,
+      image: safeImage(item.image),
+      backdrop: safeImage(item.backdrop),
+    })),
+  };
 }
 
 async function sourceFor(session, type, id, extension = "") {
@@ -426,6 +478,7 @@ async function serveTranscode(res, rawUrl, query, fileName) {
 }
 
 setInterval(() => {
+  pruneMemoryCache();
   const cutoff = Date.now() - 120_000;
   for (const [key, record] of transcodes) if (record.lastAccess < cutoff) stopTranscode(key);
   const rateCutoff = Date.now() - 120_000;
