@@ -1,20 +1,33 @@
 import { fetchSafe, readTextLimited } from "./security.mjs";
 
 const LARGE_CATALOG_ACTIONS = new Set(["get_live_streams", "get_vod_streams", "get_series"]);
+let catalogQueue = Promise.resolve();
 
 function boundedInteger(value, fallback, minimum, maximum) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, Math.trunc(parsed))) : fallback;
 }
 
 export function xtreamResponseLimits(action = "") {
   if (!LARGE_CATALOG_ACTIONS.has(action)) {
-    return { maxBytes: 48_000_000, timeoutMs: 15_000 };
+    return { catalog: false, maxBytes: 48_000_000, headerTimeoutMs: 9_000, idleTimeoutMs: 15_000, totalTimeoutMs: 0 };
   }
   return {
-    maxBytes: boundedInteger(process.env.XTREAM_CATALOG_MAX_BYTES, 160_000_000, 48_000_000, 256_000_000),
-    timeoutMs: boundedInteger(process.env.XTREAM_CATALOG_TIMEOUT_MS, 60_000, 15_000, 120_000),
+    catalog: true,
+    maxBytes: boundedInteger(process.env.XTREAM_CATALOG_MAX_BYTES, 160_000_000, 48_000_000, 160_000_000),
+    headerTimeoutMs: boundedInteger(process.env.XTREAM_CATALOG_HEADER_TIMEOUT_MS, 60_000, 9_000, 120_000),
+    idleTimeoutMs: boundedInteger(process.env.XTREAM_CATALOG_IDLE_TIMEOUT_MS, 30_000, 10_000, 60_000),
+    totalTimeoutMs: boundedInteger(process.env.XTREAM_CATALOG_TOTAL_TIMEOUT_MS, 120_000, 30_000, 180_000),
   };
+}
+
+async function serializeLargeCatalog(loader) {
+  const previous = catalogQueue;
+  let release;
+  catalogQueue = new Promise((resolve) => { release = resolve; });
+  await previous.catch(() => {});
+  try { return await loader(); }
+  finally { release(); }
 }
 
 function cleanBase(value) {
@@ -43,11 +56,17 @@ export class XtreamClient {
   }
 
   async request(action = "", params = {}) {
-    const response = await fetchSafe(this.apiUrl(action, params), { headers: { accept: "application/json" } });
-    if (!response.ok) throw new Error(`الخادم رفض الطلب (${response.status}).`);
     const limits = xtreamResponseLimits(action);
-    const text = await readTextLimited(response, limits.maxBytes, limits.timeoutMs);
-    try { return JSON.parse(text); } catch { throw new Error("الخادم أعاد بيانات غير صالحة."); }
+    const load = async () => {
+      const response = await fetchSafe(this.apiUrl(action, params), {
+        headers: { accept: "application/json" },
+        requestTimeoutMs: limits.headerTimeoutMs,
+      });
+      if (!response.ok) throw new Error(`الخادم رفض الطلب (${response.status}).`);
+      const text = await readTextLimited(response, limits.maxBytes, limits.idleTimeoutMs, limits.totalTimeoutMs);
+      try { return JSON.parse(text); } catch { throw new Error("الخادم أعاد بيانات غير صالحة."); }
+    };
+    return limits.catalog ? serializeLargeCatalog(load) : load();
   }
 
   async validate() {
