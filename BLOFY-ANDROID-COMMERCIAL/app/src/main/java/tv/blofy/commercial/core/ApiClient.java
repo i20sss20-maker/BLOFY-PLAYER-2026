@@ -21,6 +21,7 @@ import tv.blofy.commercial.BuildConfig;
 public final class ApiClient {
     private static final int CONNECT_TIMEOUT = 8_000;
     private static final int READ_TIMEOUT = 20_000;
+    private static final int CATALOG_READ_TIMEOUT = 120_000;
     private final Context context;
     private final SharedPreferences preferences;
     private final String baseUrl = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "");
@@ -35,12 +36,17 @@ public final class ApiClient {
 
     public String baseUrl() { return baseUrl; }
     public String deviceId() { return DeviceIdentity.id(context); }
-    public JSONObject get(String path) throws Exception { return request("GET", path, null); }
-    public JSONObject post(String path, JSONObject body) throws Exception { return request("POST", path, body); }
-    public JSONObject delete(String path) throws Exception { return request("DELETE", path, null); }
+    public JSONObject get(String path) throws Exception { return request("GET", path, null, READ_TIMEOUT); }
+    public JSONObject getCatalog(String path) throws Exception { return request("GET", path, null, CATALOG_READ_TIMEOUT); }
+    public JSONObject post(String path, JSONObject body) throws Exception { return request("POST", path, body, READ_TIMEOUT); }
+    public JSONObject delete(String path) throws Exception { return request("DELETE", path, null, READ_TIMEOUT); }
 
     public JSONObject request(String method, String path, JSONObject body) throws Exception {
-        HttpURLConnection connection = open(path, method);
+        return request(method, path, body, READ_TIMEOUT);
+    }
+
+    private JSONObject request(String method, String path, JSONObject body, int readTimeout) throws Exception {
+        HttpURLConnection connection = open(path, method, readTimeout);
         try {
             if (body != null) {
                 connection.setDoOutput(true);
@@ -62,14 +68,14 @@ public final class ApiClient {
         }
     }
 
-    private HttpURLConnection open(String path, String method) throws Exception {
+    private HttpURLConnection open(String path, String method, int readTimeout) throws Exception {
         URL base = new URL(baseUrl);
         URL target = new URL(path.startsWith("http") ? path : baseUrl + (path.startsWith("/") ? path : "/" + path));
         if (!base.getHost().equalsIgnoreCase(target.getHost())) throw new ApiException(403, "تم رفض رابط خارج خادم BLOFY.");
         HttpURLConnection connection = (HttpURLConnection) target.openConnection();
         connection.setRequestMethod(method);
         connection.setConnectTimeout(CONNECT_TIMEOUT);
-        connection.setReadTimeout(READ_TIMEOUT);
+        connection.setReadTimeout(readTimeout);
         connection.setUseCaches(false);
         connection.setInstanceFollowRedirects(true);
         connection.setRequestProperty("Accept", "application/json");

@@ -139,25 +139,29 @@ export async function assertSafeUrl(raw) {
 
 export async function fetchSafe(rawUrl, options = {}, redirects = 0) {
   const url = await assertSafeUrl(rawUrl);
-  const timeout = Number(process.env.REQUEST_TIMEOUT_MS || 9000);
+  const { requestTimeoutMs, ...fetchOptions } = options;
+  const configuredTimeout = Number(requestTimeoutMs ?? process.env.REQUEST_TIMEOUT_MS ?? 9000);
+  const timeout = Number.isFinite(configuredTimeout)
+    ? Math.min(120_000, Math.max(2_500, Math.trunc(configuredTimeout)))
+    : 9_000;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(2500, timeout));
+  const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       redirect: "manual",
       signal: controller.signal,
       headers: {
         "user-agent": "BLOFY-PLAYER/2026 Mozilla/5.0",
         accept: "*/*",
-        ...(options.headers || {}),
+        ...(fetchOptions.headers || {}),
       },
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (redirects >= 3) throw new Error("الخادم أعاد توجيهات كثيرة.");
       const next = response.headers.get("location");
       if (!next) throw new Error("إعادة توجيه غير مكتملة.");
-      return fetchSafe(new URL(next, url).toString(), options, redirects + 1);
+      return fetchSafe(new URL(next, url).toString(), { ...fetchOptions, requestTimeoutMs: timeout }, redirects + 1);
     }
     return response;
   } finally {
@@ -205,19 +209,23 @@ export function readJson(req, maxBytes = 32_768) {
   });
 }
 
-export async function readTextLimited(response, maxBytes = 32_000_000, timeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 9000)) {
+export async function readTextLimited(response, maxBytes = 32_000_000, timeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 9000), totalTimeoutMs = 0) {
   if (!response.body) return "";
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let text = "";
   let received = 0;
+  const startedAt = Date.now();
   try {
     while (true) {
+      const remaining = totalTimeoutMs > 0 ? totalTimeoutMs - (Date.now() - startedAt) : timeoutMs;
+      if (remaining <= 0) throw Object.assign(new Error("انتهت المهلة الكاملة لقراءة استجابة الخادم."), { name: "AbortError" });
+      const waitMs = Math.max(1, Math.min(Math.max(2_500, timeoutMs), remaining));
       let timer;
       const next = await Promise.race([
         reader.read(),
         new Promise((_, reject) => {
-          timer = setTimeout(() => reject(Object.assign(new Error("انتهت مهلة قراءة استجابة الخادم."), { name: "AbortError" })), Math.max(2500, timeoutMs));
+          timer = setTimeout(() => reject(Object.assign(new Error("انتهت مهلة قراءة استجابة الخادم."), { name: "AbortError" })), waitMs);
         }),
       ]).finally(() => clearTimeout(timer));
       if (next.done) break;
