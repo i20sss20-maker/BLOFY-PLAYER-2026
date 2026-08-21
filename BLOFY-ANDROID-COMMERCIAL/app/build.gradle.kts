@@ -43,6 +43,9 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = true
+        // BLOFY uses a date-based monotonic code (yyyyMMddRR) so existing TV
+        // installations can update in place. It remains below Play's limit.
+        disable += "HighAppVersionCode"
     }
 }
 
