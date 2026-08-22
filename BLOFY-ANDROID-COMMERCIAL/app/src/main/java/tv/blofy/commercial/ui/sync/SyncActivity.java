@@ -125,10 +125,21 @@ public final class SyncActivity extends AppCompatActivity {
     private void syncXtream(ProviderProfile profile) throws Exception {
         XtreamClient client = new XtreamClient(profile);
         emit(8);
-        client.validate();
-        importXtreamType(client, "live", 12, 42);
-        importXtreamType(client, "movies", 42, 70);
-        importXtreamType(client, "series", 70, 94);
+        try {
+            client.validate();
+            importXtreamType(client, "live", 12, 42);
+            importXtreamType(client, "movies", 42, 70);
+            importXtreamType(client, "series", 70, 94);
+        } catch (Exception apiError) {
+            String message = apiError.getMessage() == null ? "" : apiError.getMessage();
+            if (!message.contains("HTTP 403")) throw apiError;
+            Log.w(TAG, "Xtream API blocked with 403; switching to get.php/M3U fallback");
+            store.clearCatalog();
+            store.putMeta("kind", "m3u");
+            store.putMeta("server", (profile.name.isEmpty() ? profile.serverUrl : profile.name) + " • M3U fallback");
+            emit(10);
+            syncM3u(client.playlistFallbackProfile());
+        }
     }
 
     private void importXtreamType(XtreamClient client, String type, int start, int end) throws Exception {

@@ -15,8 +15,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 2026082220
-        versionName = "2026.08.22.20-commercial"
+        versionCode = 2026082221
+        versionName = "2026.08.22.21-commercial"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(blofyUrl.get().trimEnd('/')))
         vectorDrawables.useSupportLibrary = true
     }

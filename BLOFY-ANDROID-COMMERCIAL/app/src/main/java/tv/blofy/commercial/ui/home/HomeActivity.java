@@ -2,6 +2,8 @@ package tv.blofy.commercial.ui.home;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -42,6 +44,9 @@ public final class HomeActivity extends LicensedActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean destroyed = new AtomicBoolean(false);
     private MediaRecord featured;
+    private final Handler heroHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingHeroArtwork;
+    private int heroArtworkGeneration;
     private String packageKind = "";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
@@ -52,6 +57,7 @@ public final class HomeActivity extends LicensedActivity {
 
         binding.latest.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false));
         binding.latest.setHasFixedSize(true);
+        binding.latest.setItemAnimator(null);
         binding.latest.setItemViewCacheSize(10);
         latestAdapter = new LatestAdapter();
         binding.latest.setAdapter(latestAdapter);
@@ -183,8 +189,14 @@ public final class HomeActivity extends LicensedActivity {
                 ? "شغّل القناة مباشرة من جهازك إلى مزود الباقة مع تبديل سريع بين القنوات."
                 : "شاهد " + item.name + " بجودة باقتك، مع تشغيل مباشر واستكمال المشاهدة.");
         String backdrop = item.backdrop.isEmpty() ? item.image : item.backdrop;
-        BlofyImageLoader.backdrop(this, binding.heroBackdrop, backdrop);
-        BlofyImageLoader.poster(this, binding.heroPoster, item.image);
+        int artworkGeneration = ++heroArtworkGeneration;
+        if (pendingHeroArtwork != null) heroHandler.removeCallbacks(pendingHeroArtwork);
+        pendingHeroArtwork = () -> {
+            if (binding == null || artworkGeneration != heroArtworkGeneration) return;
+            BlofyImageLoader.backdrop(this, binding.heroBackdrop, backdrop);
+            BlofyImageLoader.poster(this, binding.heroPoster, item.image);
+        };
+        heroHandler.postDelayed(pendingHeroArtwork, 140);
         binding.heroPlay.setEnabled(true);
         binding.heroDetails.setEnabled(true);
     }
@@ -219,6 +231,7 @@ public final class HomeActivity extends LicensedActivity {
 
     @Override protected void onDestroy() {
         destroyed.set(true);
+        if (pendingHeroArtwork != null) heroHandler.removeCallbacks(pendingHeroArtwork);
         worker.shutdownNow();
         if (store != null) store.close();
         binding = null;
@@ -265,7 +278,7 @@ public final class HomeActivity extends LicensedActivity {
             holder.binding.getRoot().setOnClickListener(view -> open(item, false));
             holder.binding.getRoot().setOnFocusChangeListener((view, focused) -> {
                 view.animate().scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
-                        .translationZ(focused ? 8f : 0f).setDuration(120).start();
+                        .setDuration(80).start();
                 if (focused) renderHero(item);
             });
             holder.binding.getRoot().setOnKeyListener((view, keyCode, event) -> {

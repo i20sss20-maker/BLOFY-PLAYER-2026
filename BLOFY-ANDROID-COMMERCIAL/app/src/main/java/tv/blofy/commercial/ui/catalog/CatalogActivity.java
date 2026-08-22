@@ -85,6 +85,7 @@ public final class CatalogActivity extends LicensedActivity {
         gridLayout = new GridLayoutManager(this, columns);
         binding.list.setLayoutManager(gridLayout);
         binding.list.setHasFixedSize(true);
+        binding.list.setItemAnimator(null);
         binding.list.setItemViewCacheSize(columns * 3);
 
         mediaAdapter = new MediaAdapter(
@@ -99,6 +100,7 @@ public final class CatalogActivity extends LicensedActivity {
         categoryAdapter = new CategoryAdapter(this::selectCategory, this::moveFromCategoriesToGrid);
         binding.categories.setLayoutManager(new LinearLayoutManager(this));
         binding.categories.setHasFixedSize(true);
+        binding.categories.setItemAnimator(null);
         binding.categories.setItemViewCacheSize(18);
         binding.categories.setAdapter(categoryAdapter);
 

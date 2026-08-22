@@ -116,6 +116,20 @@ public final class XtreamClient {
     }
 
     public String serverName() { return profile.name.isEmpty() ? profile.serverUrl : profile.name; }
+
+    /** Standard Xtream M3U endpoint used when a provider blocks player_api.php. */
+    public ProviderProfile playlistFallbackProfile() {
+        HttpUrl base = HttpUrl.parse(profile.serverUrl + "/get.php");
+        if (base == null) throw new IllegalArgumentException("رابط Xtream غير صالح.");
+        String url = base.newBuilder()
+                .addQueryParameter("username", profile.username)
+                .addQueryParameter("password", profile.password)
+                .addQueryParameter("type", "m3u_plus")
+                .addQueryParameter("output", "ts")
+                .build().toString();
+        return new ProviderProfile("m3u", profile.name, "", "", "", url);
+    }
+
     public String workingUserAgent() { return workingUserAgent; }
     public int lastApiStatus() { return lastApiStatus; }
 

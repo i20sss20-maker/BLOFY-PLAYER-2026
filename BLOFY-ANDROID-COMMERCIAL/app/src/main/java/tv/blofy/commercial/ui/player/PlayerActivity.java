@@ -138,7 +138,9 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 ProviderProfile profile = ProviderProfileStore.load(this);
                 if (profile == null) throw new Exception("بيانات الباقة غير موجودة على الجهاز.");
                 final String directUrl;
-                if (profile.isXtream()) {
+                if (requestedId.startsWith("http://") || requestedId.startsWith("https://")) {
+                    directUrl = requestedId;
+                } else if (profile.isXtream()) {
                     directUrl = new XtreamClient(profile).playbackUrl(requestedType, requestedId, requestedExtension);
                 } else {
                     directUrl = requestedId;

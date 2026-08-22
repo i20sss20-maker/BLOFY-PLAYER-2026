@@ -184,7 +184,6 @@ public final class ActivationActivity extends AppCompatActivity {
         showStatus(xtream ? "فحص Xtream مباشرة من الجهاز…" : "حفظ قائمة M3U محليًا…", false);
         worker.execute(() -> {
             try {
-                if (profile.isXtream()) new XtreamClient(profile).validate();
                 ProviderProfileStore.save(this, profile);
                 getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
                         .putBoolean("catalog_ready", false).apply();
