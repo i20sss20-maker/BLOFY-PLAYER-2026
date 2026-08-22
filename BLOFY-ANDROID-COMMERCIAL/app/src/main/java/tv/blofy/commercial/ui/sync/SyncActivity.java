@@ -25,6 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivitySyncBinding;
+import tv.blofy.commercial.provider.CompatibilityProfile;
+import tv.blofy.commercial.provider.CompatibilityProfileStore;
 import tv.blofy.commercial.provider.M3uClient;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
@@ -45,6 +47,7 @@ public final class SyncActivity extends AppCompatActivity {
     private final AtomicInteger lastInternalProgress = new AtomicInteger(0);
     private final Map<String, Integer> formats = new LinkedHashMap<>();
     private CatalogStore store;
+    private String discoveredLiveExtension = "";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -81,6 +84,8 @@ public final class SyncActivity extends AppCompatActivity {
         try {
             ensureActive();
             formats.clear();
+            CompatibilityProfile compatibility = CompatibilityProfileStore.load(this, activePlaylist.id);
+            discoveredLiveExtension = protocolExtension(compatibility == null ? "" : compatibility.liveProtocol);
             PlaylistStateStore.markSyncing(this, activePlaylist.id);
             runOnUiThread(() -> {
                 if (binding == null) return;
@@ -95,6 +100,7 @@ public final class SyncActivity extends AppCompatActivity {
             store.putMeta("kind", profile.kind);
             store.putMeta("server", profile.name.isEmpty()
                     ? (profile.isXtream() ? profile.serverUrl : "M3U") : profile.name);
+            if (!discoveredLiveExtension.isEmpty()) store.putMeta("live_extension", discoveredLiveExtension);
 
             if (profile.isXtream()) syncXtream(profile); else syncM3u(profile);
 
@@ -162,6 +168,12 @@ public final class SyncActivity extends AppCompatActivity {
         client.streamCatalog(type, item -> {
             ensureActive();
             MediaRecord row = MediaRecord.from(item, type);
+            if ("live".equals(type)
+                    && row.directSource.isEmpty()
+                    && shouldUseDiscoveredProtocol(row.extension, discoveredLiveExtension)) {
+                row = new MediaRecord(row.type, row.id, row.name, row.image, row.backdrop,
+                        row.categoryId, row.rating, row.year, discoveredLiveExtension, row.directSource);
+            }
             batch.add(row);
             trackFormat(row);
             loaded[0]++;
@@ -192,8 +204,15 @@ public final class SyncActivity extends AppCompatActivity {
             if (savedCategories.add(categoryKey)) store.saveCategory(type, categoryId, categoryName);
             List<MediaRecord> batch = batches.get(type);
             if (batch == null) batch = batches.get("live");
-            batch.add(item);
-            trackFormat(item);
+            MediaRecord row = item;
+            if ("live".equals(type)
+                    && row.directSource.isEmpty()
+                    && shouldUseDiscoveredProtocol(row.extension, discoveredLiveExtension)) {
+                row = new MediaRecord(row.type, row.id, row.name, row.image, row.backdrop,
+                        row.categoryId, row.rating, row.year, discoveredLiveExtension, row.directSource);
+            }
+            batch.add(row);
+            trackFormat(row);
             loaded[0]++;
             if (batch.size() >= DB_BATCH) {
                 store.saveMedia(new ArrayList<>(batch));
@@ -203,6 +222,23 @@ public final class SyncActivity extends AppCompatActivity {
         });
         for (List<MediaRecord> batch : batches.values()) if (!batch.isEmpty()) store.saveMedia(batch);
         emit(94);
+    }
+
+    private static boolean shouldUseDiscoveredProtocol(String current, String discovered) {
+        if (discovered == null || discovered.isEmpty()) return false;
+        String saved = current == null ? "" : current.toLowerCase(Locale.US);
+        if ("m3u8".equals(discovered)) return saved.isEmpty() || "ts".equals(saved);
+        if ("mpd".equals(discovered)) return saved.isEmpty() || "ts".equals(saved);
+        return saved.isEmpty();
+    }
+
+    private static String protocolExtension(String protocol) {
+        String value = protocol == null ? "" : protocol.trim().toLowerCase(Locale.US);
+        if ("hls".equals(value) || "m3u8".equals(value)) return "m3u8";
+        if ("dash".equals(value) || "mpd".equals(value)) return "mpd";
+        if ("ts".equals(value) || "mpegts".equals(value)) return "ts";
+        if ("mp4".equals(value)) return "mp4";
+        return "";
     }
 
     private void trackFormat(MediaRecord item) {
