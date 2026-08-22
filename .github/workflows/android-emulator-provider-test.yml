@@ -2,24 +2,38 @@ name: BLOFY Android Emulator Provider Test
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/android-emulator-provider-test.yml"
+      - "BLOFY-ANDROID-COMMERCIAL/app/src/androidTest/**"
+      - "BLOFY-ANDROID-COMMERCIAL/app/src/main/**"
+      - "BLOFY-ANDROID-COMMERCIAL/app/build.gradle.kts"
 
 concurrency:
-  group: blofy-emulator-provider-test
+  group: blofy-emulator-provider-test-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   emulator-smoke-test:
-    name: Real Provider Emulator Test
+    name: Provider Emulator — ${{ matrix.host_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host_name: cf
+            server_url: http://cf.business-cdn-8k.com
+          - host_name: pro
+            server_url: http://pro.business-cdn-8k.com
+          - host_name: tv
+            server_url: http://tv.business-cdn-8k.com
     env:
-      BLOFY_TEST_PROVIDER_KIND: ${{ secrets.BLOFY_TEST_PROVIDER_KIND }}
-      BLOFY_TEST_SERVER_URL: ${{ secrets.BLOFY_TEST_SERVER_URL }}
       BLOFY_TEST_USERNAME: ${{ secrets.BLOFY_TEST_USERNAME }}
       BLOFY_TEST_PASSWORD: ${{ secrets.BLOFY_TEST_PASSWORD }}
-      BLOFY_TEST_PLAYLIST_URL: ${{ secrets.BLOFY_TEST_PLAYLIST_URL }}
+      BLOFY_TEST_SERVER_URL: ${{ matrix.server_url }}
 
     steps:
       - name: Checkout BLOFY
@@ -40,15 +54,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          KIND="${BLOFY_TEST_PROVIDER_KIND:-xtream}"
-          if [ "$KIND" = "m3u" ]; then
-            test -n "${BLOFY_TEST_PLAYLIST_URL:-}"
-          else
-            test -n "${BLOFY_TEST_SERVER_URL:-}"
-            test -n "${BLOFY_TEST_USERNAME:-}"
-            test -n "${BLOFY_TEST_PASSWORD:-}"
-          fi
-          echo "Provider test secrets are configured."
+          test -n "${BLOFY_TEST_USERNAME:-}"
+          test -n "${BLOFY_TEST_PASSWORD:-}"
+          test -n "${BLOFY_TEST_SERVER_URL:-}"
+          echo "Provider test secrets are configured for host ${{ matrix.host_name }}."
 
       - name: Enable KVM
         shell: bash
@@ -78,11 +87,10 @@ jobs:
             gradle --no-daemon connectedDebugAndroidTest \
               -PBLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app" \
               -Pandroid.testInstrumentationRunnerArguments.class=tv.blofy.commercial.CommercialEmulatorSmokeTest \
-              -Pandroid.testInstrumentationRunnerArguments.providerKind="${BLOFY_TEST_PROVIDER_KIND:-xtream}" \
+              -Pandroid.testInstrumentationRunnerArguments.providerKind="xtream" \
               -Pandroid.testInstrumentationRunnerArguments.serverUrl="$BLOFY_TEST_SERVER_URL" \
               -Pandroid.testInstrumentationRunnerArguments.username="$BLOFY_TEST_USERNAME" \
-              -Pandroid.testInstrumentationRunnerArguments.password="$BLOFY_TEST_PASSWORD" \
-              -Pandroid.testInstrumentationRunnerArguments.playlistUrl="$BLOFY_TEST_PLAYLIST_URL"
+              -Pandroid.testInstrumentationRunnerArguments.password="$BLOFY_TEST_PASSWORD"
             TEST_EXIT=$?
             cd ..
 
@@ -101,7 +109,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-EMULATOR-REAL-PROVIDER-EVIDENCE
+          name: BLOFY-EMULATOR-EVIDENCE-${{ matrix.host_name }}
           path: emulator-artifacts/**
           if-no-files-found: warn
           retention-days: 7
