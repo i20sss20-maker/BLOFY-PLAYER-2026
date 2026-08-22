@@ -22,6 +22,7 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -49,9 +50,11 @@ public final class LiveActivity extends LicensedActivity {
     private TextView previewName, previewEpg, previewMeta, count;
     private EditText search;
     private String activeCategory = "", query = "";
+    private boolean sportsOnly;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        sportsOnly = getIntent().getBooleanExtra("sports_only", false);
         store = new CatalogStore(this);
         setContentView(buildUi());
         loadCategories();
@@ -71,7 +74,7 @@ public final class LiveActivity extends LicensedActivity {
         top.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
 
-        TextView title = text("LIVE TV", 28, true);
+        TextView title = text(sportsOnly ? "SPORTS" : "LIVE TV", 28, true);
         top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         count = text("", 13, false);
@@ -79,7 +82,7 @@ public final class LiveActivity extends LicensedActivity {
         top.addView(count, new LinearLayout.LayoutParams(dp(125), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         search = new EditText(this);
-        search.setHint("⌕  بحث في القنوات");
+        search.setHint(sportsOnly ? "⌕  بحث رياضي" : "⌕  بحث في القنوات");
         search.setSingleLine(true);
         search.setTextColor(getColor(R.color.blofy_text));
         search.setHintTextColor(getColor(R.color.blofy_muted));
@@ -186,9 +189,18 @@ public final class LiveActivity extends LicensedActivity {
 
     private void loadCategories() {
         worker.execute(() -> {
+            List<CategoryRecord> saved = store.categories("live");
             List<CategoryRecord> rows = new ArrayList<>();
-            rows.add(new CategoryRecord("", "الكل", store.count("live")));
-            rows.addAll(store.categories("live"));
+            if (sportsOnly) {
+                for (CategoryRecord row : saved) if (isSports(row.name)) rows.add(row);
+                if (rows.isEmpty()) {
+                    // Keep a usable sports entry even when a provider does not name categories consistently.
+                    rows.add(new CategoryRecord("@sports-all", "الرياضة", 0));
+                }
+            } else {
+                rows.add(new CategoryRecord("", "الكل", store.count("live")));
+                rows.addAll(saved);
+            }
             runOnUiThread(() -> {
                 categoryAdapter.submit(rows);
                 if (!rows.isEmpty()) {
@@ -203,15 +215,21 @@ public final class LiveActivity extends LicensedActivity {
     private void loadChannels(String categoryId) {
         activeCategory = categoryId == null ? "" : categoryId;
         int request = generation.incrementAndGet();
-        final String c = activeCategory;
+        final String c = "@sports-all".equals(activeCategory) ? "" : activeCategory;
         final String q = query;
         worker.execute(() -> {
-            List<MediaRecord> rows = store.media("live", c, q, false, false, 700, 0);
+            List<MediaRecord> source = store.media("live", c, q, false, false, 900, 0);
+            List<MediaRecord> rows = source;
+            if (sportsOnly && "@sports-all".equals(activeCategory)) {
+                rows = new ArrayList<>();
+                for (MediaRecord item : source) if (isSports(item.name)) rows.add(item);
+            }
+            final List<MediaRecord> result = rows;
             runOnUiThread(() -> {
                 if (request != generation.get()) return;
-                channelAdapter.submit(rows);
-                count.setText(rows.size() + " قناة");
-                if (!rows.isEmpty()) showPreview(rows.get(0));
+                channelAdapter.submit(result);
+                count.setText(result.size() + " قناة");
+                if (!result.isEmpty()) showPreview(result.get(0));
                 else {
                     previewName.setText("لا توجد نتائج");
                     previewMeta.setText("");
@@ -219,6 +237,13 @@ public final class LiveActivity extends LicensedActivity {
                 }
             });
         });
+    }
+
+    private static boolean isSports(String value) {
+        String text = value == null ? "" : value.toLowerCase(Locale.ROOT);
+        return text.contains("sport") || text.contains("football") || text.contains("soccer")
+                || text.contains("bein") || text.contains("ssc") || text.contains("رياض")
+                || text.contains("كورة") || text.contains("كرة") || text.contains("مبار");
     }
 
     private void showPreview(MediaRecord item) {
@@ -349,7 +374,7 @@ public final class LiveActivity extends LicensedActivity {
         }
         @Override public void onBindViewHolder(@NonNull Holder holder, int position) {
             MediaRecord row = rows.get(position);
-            holder.text.setText(String.format(java.util.Locale.US, "%03d   %s", position + 1, row.name));
+            holder.text.setText(String.format(Locale.US, "%03d   %s", position + 1, row.name));
             holder.text.setOnFocusChangeListener((v, focused) -> {
                 v.animate().scaleX(focused ? 1.02f : 1f).scaleY(focused ? 1.02f : 1f).setDuration(65).start();
                 if (focused) { focusedId = row.id; showPreview(row); }
