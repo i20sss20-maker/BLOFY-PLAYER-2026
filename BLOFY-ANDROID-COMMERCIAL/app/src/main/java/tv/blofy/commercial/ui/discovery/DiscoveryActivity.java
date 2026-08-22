@@ -33,12 +33,13 @@ public final class DiscoveryActivity extends AppCompatActivity {
     }
 
     private void discover() {
-        PlaylistProfile playlist = PlaylistRepository.active(this);
-        if (playlist == null) playlist = PlaylistRepository.importLegacySingleProfile(this);
-        if (playlist == null) {
+        PlaylistProfile selected = PlaylistRepository.active(this);
+        if (selected == null) selected = PlaylistRepository.importLegacySingleProfile(this);
+        if (selected == null) {
             openActivation();
             return;
         }
+        final PlaylistProfile playlist = selected;
 
         try {
             ServerDiscoveryEngine engine = new ServerDiscoveryEngine();
@@ -55,7 +56,6 @@ public final class DiscoveryActivity extends AppCompatActivity {
             });
         } catch (Exception error) {
             if (destroyed.get()) return;
-            // Discovery errors are routed back to playlist/account management rather than exposed on the clean progress UI.
             runOnUiThread(() -> {
                 if (destroyed.get() || isFinishing() || isDestroyed()) return;
                 startActivity(new Intent(this, ActivationActivity.class)
