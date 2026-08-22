@@ -7,6 +7,7 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.io.Reader;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.HttpUrl;
@@ -159,6 +160,14 @@ public final class XtreamClient {
             }
         }
         reader.endObject();
+
+        String safeDirectSource = isHttpUrl(directSource) ? directSource : "";
+        String normalizedExtension = "series".equals(type)
+                ? ""
+                : cleanExtension(ext, "live".equals(type) ? "ts" : "mp4");
+        String directExtension = extensionFromUrl(safeDirectSource);
+        if (!directExtension.isEmpty() && !"series".equals(type)) normalizedExtension = directExtension;
+
         JSONObject item = new JSONObject();
         item.put("type", type);
         item.put("id", id);
@@ -168,8 +177,8 @@ public final class XtreamClient {
         item.put("categoryId", category);
         item.put("rating", rating);
         item.put("year", year);
-        item.put("extension", "series".equals(type) ? "" : cleanExtension(ext, "live".equals(type) ? "ts" : "mp4"));
-        item.put("directSource", isHttpUrl(directSource) ? directSource : "");
+        item.put("extension", normalizedExtension);
+        item.put("directSource", safeDirectSource);
         return item;
     }
 
@@ -294,8 +303,24 @@ public final class XtreamClient {
     }
 
     private static String cleanExtension(String value, String fallback) {
-        String ext = value == null ? "" : value.toLowerCase().replaceAll("[^a-z0-9]", "");
+        String ext = value == null ? "" : value.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
         return ext.isEmpty() ? fallback : ext;
+    }
+
+    private static String extensionFromUrl(String value) {
+        if (!isHttpUrl(value)) return "";
+        String lower = value.toLowerCase(Locale.US);
+        int query = lower.indexOf('?');
+        String path = query >= 0 ? lower.substring(0, query) : lower;
+        if (path.endsWith(".m3u8")) return "m3u8";
+        if (path.endsWith(".mpd")) return "mpd";
+        if (path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".m2ts")) return "ts";
+        if (path.endsWith(".mp4") || path.endsWith(".m4v")) return "mp4";
+        if (path.endsWith(".mkv")) return "mkv";
+        if (path.endsWith(".webm")) return "webm";
+        if (lower.contains("output=m3u8") || lower.contains("format=m3u8")) return "m3u8";
+        if (lower.contains("output=ts") || lower.contains("format=ts")) return "ts";
+        return "";
     }
 
     private static boolean isHttpUrl(String value) {
