@@ -15,10 +15,10 @@ import org.videolan.libvlc.MediaPlayer;
 import java.util.ArrayList;
 
 import tv.blofy.commercial.databinding.ActivityVlcFallbackBinding;
+import tv.blofy.commercial.provider.PlaybackCompatibility;
 
-/** LibVLC lives in a separate Activity so native VLC code is loaded only when Media3 really needs fallback. */
+/** LibVLC is loaded lazily and reuses the active playlist's discovered HTTP identity. */
 public final class VlcFallbackActivity extends AppCompatActivity {
-    private static final String USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
     private ActivityVlcFallbackBinding binding;
     private LibVLC libVlc;
     private MediaPlayer player;
@@ -40,6 +40,7 @@ public final class VlcFallbackActivity extends AppCompatActivity {
 
     private void startVlc() {
         try {
+            PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
             ArrayList<String> options = new ArrayList<>();
             options.add("--no-drop-late-frames");
             options.add("--no-skip-frames");
@@ -62,7 +63,8 @@ public final class VlcFallbackActivity extends AppCompatActivity {
             });
             Media media = new Media(libVlc, Uri.parse(url));
             media.setHWDecoderEnabled(true, false);
-            media.addOption(":http-user-agent=" + USER_AGENT);
+            media.addOption(":http-user-agent=" + compatibility.userAgent);
+            if (!compatibility.referer.isEmpty()) media.addOption(":http-referrer=" + compatibility.referer);
             media.addOption(":http-reconnect");
             media.addOption(":network-caching=" + (live ? "1000" : "2500"));
             if (live) media.addOption(":live-caching=1000");
@@ -82,8 +84,7 @@ public final class VlcFallbackActivity extends AppCompatActivity {
             if (event.getKeyCode() == KeyEvent.KEYCODE_BACK
                     || event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
                     || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B) {
-                finish();
-                return true;
+                finish(); return true;
             }
             if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && player != null) {
                 if (player.isPlaying()) player.pause(); else player.play();
