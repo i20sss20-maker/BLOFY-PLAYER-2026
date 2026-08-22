@@ -18,6 +18,7 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -181,10 +182,16 @@ public final class DetailsActivity extends LicensedActivity {
             JSONObject row = source.optJSONObject(i); if (row == null) continue;
             JSONObject rowInfo = row.optJSONObject("info"); if (rowInfo == null) rowInfo = new JSONObject();
             JSONObject episode = new JSONObject();
+            String sourceUrl = firstHttp(row.optString("direct_source"), row.optString("directSource"),
+                    rowInfo.optString("direct_source"), rowInfo.optString("directSource"));
+            String episodeExtension = row.optString("container_extension", "mp4");
+            String sourceExtension = extensionFromUrl(sourceUrl);
+            if (!sourceExtension.isEmpty()) episodeExtension = sourceExtension;
             episode.put("id", row.optString("id"));
             episode.put("number", row.optInt("episode_num", row.optInt("episode", i + 1)));
             episode.put("title", row.optString("title", "الحلقة " + (i + 1)));
-            episode.put("extension", row.optString("container_extension", "mp4"));
+            episode.put("extension", episodeExtension);
+            episode.put("directSource", sourceUrl);
             episode.put("duration", rowInfo.optString("duration"));
             episode.put("image", rowInfo.optString("movie_image", rowInfo.optString("cover_big", "")));
             if (!episode.optString("id").isEmpty()) normalized.put(episode);
@@ -255,10 +262,25 @@ public final class DetailsActivity extends LicensedActivity {
     }
     private String value(String key, String fallback) { String raw=getIntent().getStringExtra(key); return raw==null||raw.isEmpty()?fallback:raw; }
 
+    private static String firstHttp(String... values) {
+        if (values != null) for (String value : values) if (isHttp(value)) return value.trim();
+        return "";
+    }
+    private static boolean isHttp(String value) { return value != null && (value.startsWith("http://") || value.startsWith("https://")); }
+    private static String extensionFromUrl(String value) {
+        if (!isHttp(value)) return "";
+        String lower=value.toLowerCase(Locale.US); int q=lower.indexOf('?'); String path=q>=0?lower.substring(0,q):lower;
+        if(path.endsWith(".m3u8"))return "m3u8"; if(path.endsWith(".mpd"))return "mpd";
+        if(path.endsWith(".ts")||path.endsWith(".mts")||path.endsWith(".m2ts"))return "ts";
+        if(path.endsWith(".mp4")||path.endsWith(".m4v"))return "mp4"; if(path.endsWith(".mkv"))return "mkv"; if(path.endsWith(".webm"))return "webm";
+        if(lower.contains("output=m3u8")||lower.contains("format=m3u8"))return "m3u8"; if(lower.contains("output=ts")||lower.contains("format=ts"))return "ts";
+        return "";
+    }
+
     private static final class Season { final String number; final List<Episode> episodes=new ArrayList<>(); Season(String n){number=n==null||n.isEmpty()?"1":n;} }
     private static final class Episode {
-        final String id,title,extension,duration,image;
-        Episode(JSONObject row){id=row.optString("id");int number=row.optInt("number",0);title=row.optString("title",number>0?"الحلقة "+number:"حلقة");extension=row.optString("extension","mp4");duration=row.optString("duration");image=row.optString("image");}
+        final String id,title,extension,duration,image,directSource;
+        Episode(JSONObject row){id=row.optString("id");int number=row.optInt("number",0);title=row.optString("title",number>0?"الحلقة "+number:"حلقة");extension=row.optString("extension","mp4");duration=row.optString("duration");image=row.optString("image");directSource=row.optString("directSource",row.optString("direct_source"));}
     }
 
     private final class SeasonAdapter extends RecyclerView.Adapter<SeasonAdapter.Holder> {
@@ -272,7 +294,7 @@ public final class DetailsActivity extends LicensedActivity {
     private final class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.Holder> {
         final List<Episode> rows=new ArrayList<>();
         @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent,int viewType){return new Holder(ItemEpisodeBinding.inflate(LayoutInflater.from(parent.getContext()),parent,false));}
-        @Override public void onBindViewHolder(@NonNull Holder holder,int position){Episode ep=rows.get(position);holder.binding.title.setText(ep.title);holder.binding.meta.setText(ep.duration.isEmpty()?ep.extension.toUpperCase():ep.duration);safePoster(holder.binding.image,ep.image.isEmpty()?image:ep.image);holder.binding.getRoot().setOnClickListener(v->play(ep.id,name+" • "+ep.title,"episode",ep.extension,""));holder.binding.getRoot().setOnFocusChangeListener((v,f)->v.animate().scaleX(f?1.045f:1f).scaleY(f?1.045f:1f).setDuration(100).start());holder.binding.getRoot().setOnKeyListener((v,k,e)->{int p=holder.getBindingAdapterPosition();return e.getAction()==KeyEvent.ACTION_DOWN&&k==KeyEvent.KEYCODE_DPAD_LEFT&&p!=RecyclerView.NO_POSITION&&p<3&&focusSelectedSeason();});}
+        @Override public void onBindViewHolder(@NonNull Holder holder,int position){Episode ep=rows.get(position);holder.binding.title.setText(ep.title);holder.binding.meta.setText(ep.duration.isEmpty()?ep.extension.toUpperCase(Locale.US):ep.duration);safePoster(holder.binding.image,ep.image.isEmpty()?image:ep.image);holder.binding.getRoot().setOnClickListener(v->play(ep.id,name+" • "+ep.title,"episode",ep.extension,ep.directSource));holder.binding.getRoot().setOnFocusChangeListener((v,f)->v.animate().scaleX(f?1.045f:1f).scaleY(f?1.045f:1f).setDuration(100).start());holder.binding.getRoot().setOnKeyListener((v,k,e)->{int p=holder.getBindingAdapterPosition();return e.getAction()==KeyEvent.ACTION_DOWN&&k==KeyEvent.KEYCODE_DPAD_LEFT&&p!=RecyclerView.NO_POSITION&&p<3&&focusSelectedSeason();});}
         @Override public int getItemCount(){return rows.size();}
         final class Holder extends RecyclerView.ViewHolder{final ItemEpisodeBinding binding;Holder(ItemEpisodeBinding b){super(b.getRoot());binding=b;}}
     }
