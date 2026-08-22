@@ -26,13 +26,15 @@ import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivitySyncBinding;
 import tv.blofy.commercial.provider.M3uClient;
+import tv.blofy.commercial.provider.PlaylistProfile;
+import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.PlaylistStateStore;
 import tv.blofy.commercial.provider.ProviderProfile;
-import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.provider.XtreamClient;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
 
-/** Provider sync runs directly on-device. Railway is not involved in IPTV catalogue traffic. */
+/** Provider sync runs directly on-device and is isolated per playlist. */
 public final class SyncActivity extends AppCompatActivity {
     private static final String TAG = "BlofySync";
     private static final int DB_BATCH = 500;
@@ -62,28 +64,30 @@ public final class SyncActivity extends AppCompatActivity {
     }
 
     private void sync() {
+        PlaylistProfile playlist = PlaylistRepository.active(this);
+        if (playlist == null) playlist = PlaylistRepository.importLegacySingleProfile(this);
+        if (playlist == null || playlist.provider == null) {
+            runOnUiThread(() -> {
+                startActivity(new Intent(this, ActivationActivity.class).putExtra("force_form", true));
+                finish();
+            });
+            return;
+        }
+        final PlaylistProfile activePlaylist = playlist;
         try {
             ensureActive();
             formats.clear();
+            PlaylistStateStore.markSyncing(this, activePlaylist.id);
             runOnUiThread(() -> {
                 if (binding == null) return;
                 binding.error.setVisibility(View.GONE);
                 binding.retry.setVisibility(View.GONE);
             });
-            getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                    .putBoolean("catalog_ready", false).apply();
             emit(4);
 
-            ProviderProfile profile = ProviderProfileStore.load(this);
-            if (profile == null) {
-                runOnUiThread(() -> {
-                    startActivity(new Intent(this, ActivationActivity.class).putExtra("force_form", true));
-                    finish();
-                });
-                return;
-            }
-
+            ProviderProfile profile = activePlaylist.provider;
             store.clearCatalog();
+            store.putMeta("playlist_id", activePlaylist.id);
             store.putMeta("kind", profile.kind);
             store.putMeta("server", profile.name.isEmpty()
                     ? (profile.isXtream() ? profile.serverUrl : "M3U") : profile.name);
@@ -93,12 +97,9 @@ public final class SyncActivity extends AppCompatActivity {
 
             store.putMeta("profile", playbackProfile());
             store.putMeta("last_sync", String.valueOf(System.currentTimeMillis()));
-            getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                    .putBoolean("catalog_ready", true)
-                    .putInt("catalog_schema", 4)
-                    .apply();
+            PlaylistStateStore.markReady(this, activePlaylist.id);
             emit(100);
-            Thread.sleep(350);
+            Thread.sleep(250);
             ensureActive();
             runOnUiThread(() -> {
                 if (destroyed.get() || isFinishing() || isDestroyed()) return;
