@@ -33,7 +33,7 @@ import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.ui.details.DetailsActivity;
 import tv.blofy.commercial.ui.player.PlayerActivity;
 
-/** Two-pane TV library: category rail + poster grid. Search never steals focus on entry. */
+/** IBO/7up-style Movies/Series browser: category rail + poster wall + explicit search. */
 public final class LibraryActivity extends LicensedActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicInteger generation = new AtomicInteger();
@@ -57,7 +57,7 @@ public final class LibraryActivity extends LicensedActivity {
     private View buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(28), dp(22), dp(28), dp(24));
+        root.setPadding(dp(24), dp(18), dp(24), dp(22));
         root.setBackgroundResource(R.drawable.bg_blofy);
         root.setFocusable(true);
         root.setFocusableInTouchMode(true);
@@ -66,17 +66,17 @@ public final class LibraryActivity extends LicensedActivity {
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
 
-        TextView title = text("series".equals(type) ? "المسلسلات" : "الأفلام", 27, true);
+        TextView title = text("series".equals(type) ? "SERIES" : "MOVIES", 28, true);
         top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         count = text("", 13, false);
         count.setTextColor(getColor(R.color.blofy_muted));
-        top.addView(count, new LinearLayout.LayoutParams(dp(110), ViewGroup.LayoutParams.WRAP_CONTENT));
+        top.addView(count, new LinearLayout.LayoutParams(dp(120), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         search = new EditText(this);
-        search.setHint("بحث");
+        search.setHint("⌕  بحث");
         search.setSingleLine(true);
         search.setTextColor(getColor(R.color.blofy_text));
         search.setHintTextColor(getColor(R.color.blofy_muted));
@@ -85,7 +85,7 @@ public final class LibraryActivity extends LicensedActivity {
         search.setShowSoftInputOnFocus(false);
         search.setFocusable(true);
         search.setFocusableInTouchMode(false);
-        top.addView(search, new LinearLayout.LayoutParams(dp(260), dp(48)));
+        top.addView(search, new LinearLayout.LayoutParams(dp(280), dp(48)));
         search.setOnEditorActionListener((v, action, event) -> {
             query = v.getText() == null ? "" : v.getText().toString().trim();
             hideKeyboard();
@@ -96,8 +96,7 @@ public final class LibraryActivity extends LicensedActivity {
         search.setOnKeyListener((v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                showKeyboard();
-                return true;
+                showKeyboard(); return true;
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (posterAdapter != null && posterAdapter.getItemCount() > 0) focus(grid, 0);
@@ -111,17 +110,27 @@ public final class LibraryActivity extends LicensedActivity {
         body.setOrientation(LinearLayout.HORIZONTAL);
         body.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         LinearLayout.LayoutParams bodyLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        bodyLp.topMargin = dp(12);
+        bodyLp.topMargin = dp(10);
         root.addView(body, bodyLp);
+
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        left.setBackgroundResource(R.drawable.bg_panel);
+        left.setPadding(dp(8), dp(8), dp(8), dp(8));
+        body.addView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, .23f));
+
+        TextView categoryTitle = text("التصنيفات", 16, true);
+        categoryTitle.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        left.addView(categoryTitle, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
         categories = list();
         categories.setLayoutManager(new LinearLayoutManager(this));
-        body.addView(categories, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.23f));
+        left.addView(categories, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         grid = list();
         grid.setLayoutManager(new GridLayoutManager(this, 5));
-        LinearLayout.LayoutParams gridLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.77f);
-        gridLp.setMarginStart(dp(14));
+        LinearLayout.LayoutParams gridLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, .77f);
+        gridLp.setMarginStart(dp(12));
         body.addView(grid, gridLp);
 
         categoryAdapter = new CategoryAdapter();
@@ -136,7 +145,7 @@ public final class LibraryActivity extends LicensedActivity {
         RecyclerView view = new RecyclerView(this);
         view.setHasFixedSize(true);
         view.setItemAnimator(null);
-        view.setItemViewCacheSize(20);
+        view.setItemViewCacheSize(24);
         view.setFocusable(false);
         return view;
     }
@@ -159,7 +168,7 @@ public final class LibraryActivity extends LicensedActivity {
         final String c = category;
         final String q = query;
         worker.execute(() -> {
-            List<MediaRecord> rows = store.media(type, c, q, false, false, 800, 0);
+            List<MediaRecord> rows = store.media(type, c, q, false, false, 900, 0);
             runOnUiThread(() -> {
                 if (request != generation.get()) return;
                 posterAdapter.submit(rows);
@@ -177,7 +186,8 @@ public final class LibraryActivity extends LicensedActivity {
                 .putExtra("id", item.id)
                 .putExtra("name", item.name)
                 .putExtra("extension", item.extension)
-                .putExtra("image", item.image));
+                .putExtra("image", item.image)
+                .putExtra("direct_source", item.directSource));
     }
 
     private TextView categoryRow(ViewGroup parent) {
@@ -185,7 +195,7 @@ public final class LibraryActivity extends LicensedActivity {
         view.setTextColor(getColor(R.color.blofy_text));
         view.setTextSize(15);
         view.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        view.setPadding(dp(17), 0, dp(12), 0);
+        view.setPadding(dp(15), 0, dp(10), 0);
         view.setFocusable(true);
         view.setSingleLine(true);
         view.setBackgroundResource(R.drawable.bg_home_status);
@@ -196,10 +206,10 @@ public final class LibraryActivity extends LicensedActivity {
     private View posterCard(ViewGroup parent) {
         LinearLayout card = new LinearLayout(parent.getContext());
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(5), dp(5), dp(5), dp(8));
+        card.setPadding(dp(5), dp(5), dp(5), dp(7));
         card.setFocusable(true);
         card.setBackgroundResource(R.drawable.bg_home_status);
-        card.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(250)));
+        card.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(258)));
         ImageView image = new ImageView(parent.getContext());
         image.setId(View.generateViewId());
         image.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -207,7 +217,7 @@ public final class LibraryActivity extends LicensedActivity {
         TextView title = text("", 13, true);
         title.setGravity(Gravity.CENTER);
         title.setMaxLines(2);
-        card.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        card.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
         card.setTag(new Object[]{image, title});
         return card;
     }
@@ -223,9 +233,7 @@ public final class LibraryActivity extends LicensedActivity {
 
     private TextView text(String value, int sp, boolean bold) {
         TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextColor(getColor(R.color.blofy_text));
-        view.setTextSize(sp);
+        view.setText(value); view.setTextColor(getColor(R.color.blofy_text)); view.setTextSize(sp);
         if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return view;
     }
@@ -253,17 +261,14 @@ public final class LibraryActivity extends LicensedActivity {
             CategoryRecord row = rows.get(position);
             holder.text.setText(row.name + (row.count > 0 ? "  " + row.count : ""));
             holder.text.setOnFocusChangeListener((v, focused) -> {
-                v.animate().scaleX(focused ? 1.02f : 1f).scaleY(focused ? 1.02f : 1f).setDuration(60).start();
+                v.animate().scaleX(focused ? 1.025f : 1f).scaleY(focused ? 1.025f : 1f).setDuration(65).start();
                 if (focused && !row.id.equals(category)) { category = row.id; loadMedia(); }
             });
             holder.text.setOnClickListener(v -> { if (posterAdapter.getItemCount() > 0) focus(grid, 0); });
             holder.text.setOnKeyListener((v, keyCode, event) -> {
-                if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && posterAdapter.getItemCount() > 0) {
-                    focus(grid, 0); return true;
-                }
-                if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP && holder.getBindingAdapterPosition() == 0) {
-                    search.requestFocus(); return true;
-                }
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && posterAdapter.getItemCount() > 0) { focus(grid, 0); return true; }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP && holder.getBindingAdapterPosition() == 0) { search.requestFocus(); return true; }
                 return false;
             });
         }
@@ -281,7 +286,7 @@ public final class LibraryActivity extends LicensedActivity {
             BlofyImageLoader.poster(LibraryActivity.this, holder.image, row.image);
             holder.itemView.setOnClickListener(v -> open(row));
             holder.itemView.setOnFocusChangeListener((v, focused) -> v.animate()
-                    .scaleX(focused ? 1.045f : 1f).scaleY(focused ? 1.045f : 1f).setDuration(70).start());
+                    .scaleX(focused ? 1.05f : 1f).scaleY(focused ? 1.05f : 1f).setDuration(75).start());
             holder.itemView.setOnKeyListener((v, keyCode, event) -> {
                 int p = holder.getBindingAdapterPosition();
                 if (event.getAction() != KeyEvent.ACTION_DOWN || p == RecyclerView.NO_POSITION) return false;
@@ -304,8 +309,7 @@ public final class LibraryActivity extends LicensedActivity {
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
-            hideKeyboard();
-            finish(); return true;
+            hideKeyboard(); finish(); return true;
         }
         return super.dispatchKeyEvent(event);
     }
