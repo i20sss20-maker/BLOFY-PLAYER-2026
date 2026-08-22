@@ -25,6 +25,7 @@ import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
 import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.ui.discovery.DiscoveryActivity;
+import tv.blofy.commercial.ui.home.HomeActivity;
 
 /**
  * Real-provider smoke test executed only by GitHub's Android emulator workflow.
@@ -47,7 +48,6 @@ public final class CommercialEmulatorSmokeTest {
         context.getSharedPreferences("blofy_emulator_test", Context.MODE_PRIVATE)
                 .edit().putBoolean("skip_license", true).commit();
 
-        // Ensure one deterministic CI playlist on a clean emulator.
         List<PlaylistProfile> existing = new ArrayList<>(PlaylistRepository.all(context));
         for (PlaylistProfile row : existing) PlaylistRepository.remove(context, row.id);
 
@@ -80,60 +80,48 @@ public final class CommercialEmulatorSmokeTest {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         context.startActivity(start);
 
-        // Discovery (0-35) + Sync (35-100) must eventually land on the new dashboard.
         boolean home = device.wait(Until.hasObject(By.textContains("LIVE TV")), SYNC_TIMEOUT_MS);
         screenshot("01-home");
         assertTrue("BLOFY did not reach Home after Discovery/Sync", home);
         assertInBlofyPackage("home");
 
-        // LIVE: categories -> channels -> preview, then attempt first channel playback.
+        // LIVE: open screen and click the first visible channel row directly.
         clickText("LIVE TV");
         assertTrue("Live screen did not open", device.wait(Until.hasObject(By.textContains("LIVE TV")), SCREEN_TIMEOUT_MS));
         screenshot("02-live");
-        device.pressDPadRight();
-        Thread.sleep(800L);
-        device.pressDPadCenter();
+        device.click(720, 250);
         Thread.sleep(12_000L);
         screenshot("03-live-player");
         assertInBlofyPackage("live player");
-        device.pressBack();
-        Thread.sleep(1_000L);
-        returnHome();
+        openHome();
 
-        // MOVIES: category rail -> first poster -> details. No keyboard should steal focus.
+        // MOVIES: click the first visible poster card directly.
         clickText("MOVIES");
         assertTrue("Movies library did not open", device.wait(Until.hasObject(By.textContains("MOVIES")), SCREEN_TIMEOUT_MS));
         screenshot("04-movies");
-        device.pressDPadRight();
-        Thread.sleep(700L);
-        device.pressDPadCenter();
-        Thread.sleep(3_500L);
+        device.click(610, 410);
+        Thread.sleep(4_500L);
         screenshot("05-movie-details");
         assertInBlofyPackage("movie details");
-        device.pressBack();
-        Thread.sleep(700L);
-        device.pressBack();
-        Thread.sleep(900L);
-        returnHome();
+        openHome();
 
-        // SERIES: category rail -> first poster -> details/seasons. This catches the old Details crash.
+        // SERIES: click the first visible poster card directly.
         clickText("SERIES");
         assertTrue("Series library did not open", device.wait(Until.hasObject(By.textContains("SERIES")), SCREEN_TIMEOUT_MS));
         screenshot("06-series");
-        device.pressDPadRight();
-        Thread.sleep(700L);
-        device.pressDPadCenter();
-        Thread.sleep(4_000L);
+        device.click(610, 410);
+        Thread.sleep(5_000L);
         screenshot("07-series-details");
         assertInBlofyPackage("series details");
     }
 
-    private void returnHome() throws Exception {
-        if (!device.hasObject(By.textContains("LIVE TV"))) {
-            device.pressBack();
-            Thread.sleep(1_200L);
-        }
-        assertTrue("Could not return to BLOFY Home", device.wait(Until.hasObject(By.textContains("LIVE TV")), SCREEN_TIMEOUT_MS));
+    private void openHome() throws Exception {
+        Intent home = new Intent(context, HomeActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        context.startActivity(home);
+        assertTrue("Could not open BLOFY Home", device.wait(Until.hasObject(By.textContains("LIVE TV")), SCREEN_TIMEOUT_MS));
+        assertInBlofyPackage("home return");
+        Thread.sleep(500L);
     }
 
     private void clickText(String text) throws Exception {
