@@ -89,8 +89,17 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
         int observed = providerHttpStatus.get();
         releasePlayer(true);
-        if (observed == 401 || observed == 403 || observed == 456) showProviderRejected(observed);
-        else showError("المزوّد لم يرسل فيديو خلال المهلة. التشغيل مباشر من الجهاز.");
+        if (observed == 401 || observed == 403 || observed == 456) {
+            showProviderRejected(observed);
+            return;
+        }
+        PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
+        if (!vlcAttempted && "libvlc".equals(compatibility.fallbackEngine)
+                && playbackUrl != null && !playbackUrl.isEmpty()) {
+            launchVlcFallback();
+            return;
+        }
+        showError("المزوّد لم يرسل فيديو خلال المهلة بعد تجربة المشغل الاحتياطي.");
     };
 
     @Override protected void onCreate(@Nullable Bundle state) {
@@ -425,12 +434,12 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
             showError("المزوّد أعاد HTTP " + status + " أثناء التشغيل المباشر.");
             return;
         }
-        if (observed >= 200 && observed < 300 && media3FormatFailure(error)) {
-            PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
-            if ("libvlc".equals(compatibility.fallbackEngine)) {
-                launchVlcFallback();
-                return;
-            }
+        PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
+        if (!vlcAttempted && "libvlc".equals(compatibility.fallbackEngine)
+                && playbackUrl != null && !playbackUrl.isEmpty()
+                && (media3FormatFailure(error) || observed == -1 || (observed >= 200 && observed < 300))) {
+            launchVlcFallback();
+            return;
         }
         showError("تعذر تشغيل المصدر مباشرة: " + error.getErrorCodeName());
     }
