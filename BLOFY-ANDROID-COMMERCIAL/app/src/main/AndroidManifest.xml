@@ -25,6 +25,7 @@
         <activity android:name=".ui.catalog.CatalogActivity" android:exported="false" />
         <activity android:name=".ui.home.HomeActivity" android:exported="false" />
         <activity android:name=".ui.settings.SettingsActivity" android:exported="false" />
+        <activity android:name=".ui.playlists.PlaylistsActivity" android:exported="false" />
         <activity android:name=".ui.sync.SyncActivity" android:exported="false" />
         <activity android:name=".ui.discovery.DiscoveryActivity" android:exported="false" />
         <activity android:name=".ui.activation.ActivationActivity" android:exported="false" />
