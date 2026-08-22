@@ -155,7 +155,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 runOnUiThread(() -> {
                     if (!isCurrent(generation, requestedId)) return;
                     if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
-                        prepareMedia3Direct(directUrl, requestedExtension);
+                        routeSelectedPlayer(directUrl, requestedExtension);
                     }
                 });
             } catch (Exception error) {
@@ -166,6 +166,28 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 });
             }
         });
+    }
+
+    private void routeSelectedPlayer(String url, String mediaExtension) {
+        String selected = getSharedPreferences("blofy_player_settings", MODE_PRIVATE)
+                .getString("player_engine", "auto");
+        String contentMime = mime(mediaExtension);
+        if ("libvlc".equals(selected)) {
+            playbackUrl = url;
+            playbackExtension = mediaExtension;
+            launchVlcFallback();
+            return;
+        }
+        if ("mx_free".equals(selected)) {
+            if (ExternalPlayerLauncher.launch(this, ExternalPlayerLauncher.MX_FREE, url, contentMime, name)) return;
+        } else if ("mx_pro".equals(selected)) {
+            if (ExternalPlayerLauncher.launch(this, ExternalPlayerLauncher.MX_PRO, url, contentMime, name)) return;
+        } else if ("vlc_external".equals(selected)) {
+            if (ExternalPlayerLauncher.launch(this, ExternalPlayerLauncher.VLC, url, contentMime, name)) return;
+        } else if ("external".equals(selected)) {
+            if (ExternalPlayerLauncher.launchChooser(this, url, contentMime, name)) return;
+        }
+        prepareMedia3Direct(url, mediaExtension);
     }
 
     private boolean isCurrent(int generation, String requestedId) {
@@ -493,7 +515,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     @Override protected void onStart() {
         super.onStart();
         if (!initialized || player != null) return;
-        if (playbackUrl != null) prepareMedia3Direct(playbackUrl, playbackExtension == null ? extension : playbackExtension);
+        if (playbackUrl != null) routeSelectedPlayer(playbackUrl, playbackExtension == null ? extension : playbackExtension);
         else if (!resolving) resolveDirect();
     }
 

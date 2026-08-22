@@ -2,6 +2,8 @@ package tv.blofy.commercial.ui.settings;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
@@ -20,6 +22,24 @@ public final class SettingsActivity extends LicensedActivity {
         super.onCreate(savedInstanceState);
         binding = ActivitySettingsBinding.inflate(getLayoutInflater()); setContentView(binding.getRoot());
         prefs = getSharedPreferences("blofy_player_settings", MODE_PRIVATE);
+        String[] playerLabels = {"تلقائي", "Media3", "LibVLC", "MX Player", "MX Player Pro", "VLC", "أي مشغل خارجي"};
+        String[] playerValues = {"auto", "media3", "libvlc", "mx_free", "mx_pro", "vlc_external", "external"};
+        ArrayAdapter<String> playerAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, playerLabels);
+        playerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        binding.playerEngine.setAdapter(playerAdapter);
+        String savedPlayer = prefs.getString("player_engine", "auto");
+        int selectedPlayer = 0;
+        for (int i = 0; i < playerValues.length; i++) if (playerValues[i].equals(savedPlayer)) selectedPlayer = i;
+        binding.playerEngine.setSelection(selectedPlayer, false);
+        renderPlayer(savedPlayer);
+        binding.playerEngine.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                String value = playerValues[Math.max(0, Math.min(position, playerValues.length - 1))];
+                prefs.edit().putString("player_engine", value).apply();
+                renderPlayer(value);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
         String quality = prefs.getString("quality", "auto");
         binding.quality.check("sd".equals(quality) ? R.id.sdQuality : "hd".equals(quality) ? R.id.hdQuality : R.id.autoQuality);
         binding.buffer.check("stable".equals(prefs.getString("buffer", "fast")) ? R.id.stableBuffer : R.id.fastBuffer);
@@ -46,7 +66,7 @@ public final class SettingsActivity extends LicensedActivity {
                 .putExtra("force_form", true)
                 .putExtra("boot_error", "يمكنك تجديد التفعيل أو تحديث بيانات الباقة من هنا.")));
         installFocusFeedback(binding.back, binding.autoQuality, binding.hdQuality, binding.sdQuality,
-                binding.fastBuffer, binding.stableBuffer, binding.subtitles, binding.autoplay,
+                binding.playerEngine, binding.fastBuffer, binding.stableBuffer, binding.subtitles, binding.autoplay,
                 binding.sync, binding.account);
 
         // A TV remote needs a deterministic first target. Material toggle groups
@@ -56,6 +76,20 @@ public final class SettingsActivity extends LicensedActivity {
             View target = checked == View.NO_ID ? binding.autoQuality : binding.getRoot().findViewById(checked);
             if (target != null) target.requestFocus();
         });
+    }
+
+    private void renderPlayer(String value) {
+        String text;
+        switch (value) {
+            case "media3": text = "Media3 داخلي • المحرك الأساسي السريع"; break;
+            case "libvlc": text = "LibVLC داخلي • توافق واسع مع الصيغ"; break;
+            case "mx_free": text = "MX Player خارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;
+            case "mx_pro": text = "MX Player Pro خارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;
+            case "vlc_external": text = "VLC الخارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;
+            case "external": text = "يفتح قائمة المشغلات المثبتة على الجهاز"; break;
+            default: text = "تلقائي • Media3 أولًا ثم LibVLC عند مشاكل الصيغة"; break;
+        }
+        binding.playerEngineDescription.setText(text);
     }
 
     private void renderQuality(String quality) {
