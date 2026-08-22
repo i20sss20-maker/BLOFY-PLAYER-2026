@@ -18,9 +18,15 @@ import okhttp3.Response;
 public final class XtreamClient {
     public interface CatalogConsumer { void accept(JSONObject item) throws Exception; }
 
-    private static final String USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
+    private static final String[] API_USER_AGENTS = new String[] {
+            "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
+            "IPTV Smarters Pro",
+            "okhttp/4.12.0"
+    };
+
     private final ProviderProfile profile;
     private final OkHttpClient http;
+    private volatile String workingUserAgent = API_USER_AGENTS[0];
 
     public XtreamClient(ProviderProfile profile) {
         if (profile == null || !profile.isXtream() || !profile.isValid()) {
@@ -64,8 +70,8 @@ public final class XtreamClient {
 
     /** Streaming parser for very large Xtream libraries. Only one item is materialized at a time. */
     public int streamCatalog(String type, CatalogConsumer consumer) throws Exception {
-        Request request = request(apiUrl("action", action(type, false)));
-        try (Response response = http.newCall(request).execute()) {
+        String url = apiUrl("action", action(type, false));
+        try (Response response = executeCompatible(url)) {
             if (!response.isSuccessful()) throw new Exception("المزوّد رفض المكتبة (HTTP " + response.code() + ").");
             if (response.body() == null) throw new Exception("مكتبة المزوّد فارغة.");
             try (Reader body = response.body().charStream(); JsonReader reader = new JsonReader(body)) {
@@ -108,6 +114,7 @@ public final class XtreamClient {
     }
 
     public String serverName() { return profile.name.isEmpty() ? profile.serverUrl : profile.name; }
+    public String workingUserAgent() { return workingUserAgent; }
 
     private JSONObject readCatalogItem(JsonReader reader, String type) throws Exception {
         String id = "", name = "", image = "", backdrop = "", category = "", rating = "", year = "", ext = "";
@@ -185,11 +192,33 @@ public final class XtreamClient {
         return builder.build().toString();
     }
 
-    private Request request(String url) {
+    private Request request(String url, String userAgent) {
         return new Request.Builder().url(url)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "application/json,*/*")
+                .header("User-Agent", userAgent)
+                .header("Accept", "application/json,text/plain,*/*")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache")
+                .header("Connection", "keep-alive")
                 .build();
+    }
+
+    private Response executeCompatible(String url) throws Exception {
+        String preferred = workingUserAgent;
+        Response response = http.newCall(request(url, preferred)).execute();
+        if (response.code() != 403 && response.code() != 406) return response;
+        response.close();
+
+        for (String userAgent : API_USER_AGENTS) {
+            if (userAgent.equals(preferred)) continue;
+            Response candidate = http.newCall(request(url, userAgent)).execute();
+            if (candidate.code() != 403 && candidate.code() != 406) {
+                workingUserAgent = userAgent;
+                return candidate;
+            }
+            candidate.close();
+        }
+        return http.newCall(request(url, preferred)).execute();
     }
 
     private JSONObject object(String url) throws Exception {
@@ -205,7 +234,7 @@ public final class XtreamClient {
     }
 
     private String requestText(String url) throws Exception {
-        try (Response response = http.newCall(request(url)).execute()) {
+        try (Response response = executeCompatible(url)) {
             if (!response.isSuccessful()) throw new Exception("المزوّد رفض الطلب (HTTP " + response.code() + ").");
             if (response.body() == null) throw new Exception("استجابة المزوّد فارغة.");
             return response.body().string();
