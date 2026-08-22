@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -19,9 +20,16 @@ public final class M3uClient {
     }
 
     private static final Pattern ATTR = Pattern.compile("([A-Za-z0-9_-]+)=\"([^\"]*)\"");
-    private static final String USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
+    private static final String[] USER_AGENTS = new String[] {
+            "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "IPTVSmartersPlayer",
+            "Dalvik/2.1.0 (Linux; U; Android 11; Android TV)",
+            "VLC/3.0.20 LibVLC/3.0.20"
+    };
+
     private final ProviderProfile profile;
     private final OkHttpClient http;
+    private volatile String workingUserAgent = USER_AGENTS[0];
 
     public M3uClient(ProviderProfile profile) {
         if (profile == null || !profile.isM3u() || !profile.isValid()) {
@@ -38,10 +46,16 @@ public final class M3uClient {
     }
 
     public int stream(EntryConsumer consumer) throws Exception {
-        Request request = new Request.Builder().url(profile.playlistUrl)
-                .header("User-Agent", USER_AGENT).header("Accept", "*/*").build();
-        try (Response response = http.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new Exception("المزوّد رفض M3U (HTTP " + response.code() + ").");
+        try (Response response = executeCompatible(profile.playlistUrl)) {
+            if (!response.isSuccessful()) {
+                int status = response.code();
+                if (status == 403) {
+                    throw new Exception("المزوّد رفض M3U (HTTP 403) بعد تجربة هويات Android TV وSmarters وDalvik وVLC. غالبًا يوجد تقييد على الحساب أو IP الجهاز أو رابط get.php نفسه.");
+                }
+                if (status == 401) throw new Exception("المزوّد رفض بيانات M3U (HTTP 401).");
+                if (status == 456) throw new Exception("المزوّد رفض M3U (HTTP 456). غالبًا يوجد تقييد IP/اتصال على الحساب.");
+                throw new Exception("المزوّد رفض M3U (HTTP " + status + ").");
+            }
             if (response.body() == null) throw new Exception("قائمة M3U فارغة.");
             BufferedSource source = response.body().source();
             Pending pending = null;
@@ -67,6 +81,7 @@ public final class M3uClient {
                 consumer.accept(type, category, category, item);
                 count++;
             }
+            if (count == 0) throw new Exception("قائمة M3U تم فتحها لكن لم تحتوِ على روابط تشغيل صالحة.");
             return count;
         } catch (IOException error) {
             throw new Exception("تعذر قراءة M3U مباشرة: " + error.getMessage());
@@ -74,6 +89,46 @@ public final class M3uClient {
     }
 
     public String playbackUrl(String id) { return id == null ? "" : id; }
+    public String workingUserAgent() { return workingUserAgent; }
+
+    private Response executeCompatible(String url) throws IOException {
+        String preferred = workingUserAgent;
+        Response last = http.newCall(request(url, preferred)).execute();
+        if (last.code() != 403 && last.code() != 406) return last;
+
+        for (String userAgent : USER_AGENTS) {
+            if (userAgent.equals(preferred)) continue;
+            last.close();
+            last = http.newCall(request(url, userAgent)).execute();
+            if (last.code() != 403 && last.code() != 406) {
+                workingUserAgent = userAgent;
+                return last;
+            }
+        }
+        return last;
+    }
+
+    private Request request(String url, String userAgent) {
+        Request.Builder builder = new Request.Builder().url(url)
+                .header("User-Agent", userAgent)
+                .header("Accept", "application/x-mpegURL,text/plain,*/*")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache");
+
+        if ("IPTVSmartersPlayer".equals(userAgent)) {
+            builder.header("X-Requested-With", "com.nst.iptvsmarterstvbox");
+        } else if (userAgent.startsWith("Mozilla/")) {
+            HttpUrl target = HttpUrl.parse(url);
+            if (target != null) {
+                String origin = target.scheme() + "://" + target.host()
+                        + ((target.port() == 80 && "http".equals(target.scheme()))
+                        || (target.port() == 443 && "https".equals(target.scheme())) ? "" : ":" + target.port());
+                builder.header("Origin", origin).header("Referer", origin + "/");
+            }
+        }
+        return builder.build();
+    }
 
     private static Pending parseInfo(String line) {
         Pending result = new Pending();
