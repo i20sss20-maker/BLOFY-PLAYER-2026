@@ -219,29 +219,29 @@ public final class XtreamClient {
 
     private Response executeCompatible(String url) throws Exception {
         String preferred = workingUserAgent;
-        Response last = null;
+        Response last = http.newCall(request(url, preferred)).execute();
+        lastApiStatus = last.code();
+        if (last.code() != 403 && last.code() != 406) return last;
 
-        for (int pass = 0; pass < API_USER_AGENTS.length; pass++) {
-            String userAgent = pass == 0 ? preferred : API_USER_AGENTS[pass - (API_USER_AGENTS[0].equals(preferred) ? 0 : 1)];
-            if (pass > 0 && userAgent.equals(preferred)) continue;
+        for (String userAgent : API_USER_AGENTS) {
+            if (userAgent.equals(preferred)) continue;
             Response candidate;
             try {
                 candidate = http.newCall(request(url, userAgent)).execute();
             } catch (IOException error) {
-                if (last != null) last.close();
+                last.close();
                 throw error;
             }
             lastApiStatus = candidate.code();
             if (candidate.code() != 403 && candidate.code() != 406) {
-                if (last != null) last.close();
+                last.close();
                 workingUserAgent = userAgent;
                 return candidate;
             }
-            if (last != null) last.close();
+            last.close();
             last = candidate;
         }
-        if (last != null) return last;
-        return http.newCall(request(url, preferred)).execute();
+        return last;
     }
 
     private JSONObject object(String url) throws Exception {
