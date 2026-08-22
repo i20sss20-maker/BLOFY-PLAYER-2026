@@ -16,6 +16,7 @@ import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
 import tv.blofy.commercial.provider.ServerDiscoveryEngine;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
+import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
 /** Clean 0-100 discovery screen. User-facing diagnostics are intentionally hidden here. */
@@ -56,11 +57,13 @@ public final class DiscoveryActivity extends AppCompatActivity {
             });
         } catch (Exception error) {
             if (destroyed.get()) return;
+            // Keep the saved playlist and return to playlist management instead of throwing the user
+            // back into the legacy credential form. The next attempt can re-run discovery safely.
             runOnUiThread(() -> {
                 if (destroyed.get() || isFinishing() || isDestroyed()) return;
-                startActivity(new Intent(this, ActivationActivity.class)
-                        .putExtra("force_form", true)
-                        .putExtra("boot_error", "تعذر تجهيز قائمة التشغيل. تحقق من بيانات الباقة أو اتصال المزود."));
+                startActivity(new Intent(this, PlaylistsActivity.class)
+                        .putExtra("discovery_failed", true)
+                        .putExtra("playlist_id", playlist.id));
                 finish();
             });
         }
