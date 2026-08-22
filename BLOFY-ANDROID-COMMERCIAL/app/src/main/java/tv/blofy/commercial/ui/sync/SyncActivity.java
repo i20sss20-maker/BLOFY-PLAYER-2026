@@ -34,7 +34,7 @@ import tv.blofy.commercial.provider.XtreamClient;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
 
-/** Provider sync runs directly on-device and is isolated per playlist. */
+/** Phase 2 of one visual loading flow: catalog sync occupies 35-100%. */
 public final class SyncActivity extends AppCompatActivity {
     private static final String TAG = "BlofySync";
     private static final int DB_BATCH = 500;
@@ -42,7 +42,7 @@ public final class SyncActivity extends AppCompatActivity {
     private ActivitySyncBinding binding;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean destroyed = new AtomicBoolean(false);
-    private final AtomicInteger lastProgress = new AtomicInteger(0);
+    private final AtomicInteger lastInternalProgress = new AtomicInteger(0);
     private final Map<String, Integer> formats = new LinkedHashMap<>();
     private CatalogStore store;
 
@@ -51,13 +51,17 @@ public final class SyncActivity extends AppCompatActivity {
         binding = ActivitySyncBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         store = new CatalogStore(this);
+        binding.progress.setProgressCompat(35, false);
+        binding.percent.setText("35%");
+        binding.stage.setText("جلب القنوات");
         binding.retry.setOnClickListener(view -> {
             binding.retry.setVisibility(View.GONE);
             binding.error.setVisibility(View.GONE);
             binding.error.setText("");
-            lastProgress.set(0);
-            binding.progress.setProgressCompat(0, false);
-            binding.percent.setText("0%");
+            lastInternalProgress.set(0);
+            binding.progress.setProgressCompat(35, false);
+            binding.percent.setText("35%");
+            binding.stage.setText("جلب القنوات");
             worker.execute(this::sync);
         });
         worker.execute(this::sync);
@@ -92,24 +96,24 @@ public final class SyncActivity extends AppCompatActivity {
             store.putMeta("server", profile.name.isEmpty()
                     ? (profile.isXtream() ? profile.serverUrl : "M3U") : profile.name);
 
-            if (profile.isXtream()) syncXtream(profile);
-            else syncM3u(profile);
+            if (profile.isXtream()) syncXtream(profile); else syncM3u(profile);
 
             store.putMeta("profile", playbackProfile());
             store.putMeta("last_sync", String.valueOf(System.currentTimeMillis()));
             PlaylistStateStore.markReady(this, activePlaylist.id);
             emit(100);
-            Thread.sleep(250);
+            Thread.sleep(220);
             ensureActive();
             runOnUiThread(() -> {
                 if (destroyed.get() || isFinishing() || isDestroyed()) return;
                 startActivity(new Intent(this, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                overridePendingTransition(0, 0);
                 finish();
             });
         } catch (Exception error) {
             if (destroyed.get() || Thread.currentThread().isInterrupted()) return;
             Log.e(TAG, "Direct provider sync failed", error);
-            emit(lastProgress.get());
+            emit(lastInternalProgress.get());
             String message = error.getMessage();
             if (message == null || message.trim().isEmpty()) message = "تعذر قراءة الباقة مباشرة من المزوّد.";
             final String visibleMessage = message;
@@ -118,6 +122,7 @@ public final class SyncActivity extends AppCompatActivity {
                 binding.error.setText(visibleMessage);
                 binding.error.setVisibility(View.VISIBLE);
                 binding.retry.setVisibility(View.VISIBLE);
+                binding.stage.setText("تعذر إكمال التحميل");
                 binding.retry.requestFocus();
             });
         }
@@ -215,22 +220,27 @@ public final class SyncActivity extends AppCompatActivity {
         return "Media3 + LibVLC • VOD مباشر من المزود";
     }
 
-    private void emit(int percent) {
+    private void emit(int internalPercent) {
         if (destroyed.get()) return;
-        int safePercent = Math.max(0, Math.min(100, percent));
-        if (safePercent < lastProgress.get()) return;
-        lastProgress.set(safePercent);
+        int internal = Math.max(0, Math.min(100, internalPercent));
+        if (internal < lastInternalProgress.get()) return;
+        lastInternalProgress.set(internal);
+        int visible = 35 + Math.round(internal * 0.65f);
+        visible = Math.max(35, Math.min(100, visible));
+        final int finalVisible = visible;
         runOnUiThread(() -> {
             if (destroyed.get() || isFinishing() || isDestroyed() || binding == null) return;
-            binding.progress.setProgressCompat(safePercent, true);
-            binding.percent.setText(safePercent + "%");
+            binding.progress.setProgressCompat(finalVisible, true);
+            binding.percent.setText(finalVisible + "%");
+            if (internal < 42) binding.stage.setText("جلب القنوات");
+            else if (internal < 70) binding.stage.setText("جلب الأفلام");
+            else if (internal < 94) binding.stage.setText("جلب المسلسلات");
+            else binding.stage.setText("تجهيز المكتبة");
         });
     }
 
     private void ensureActive() throws InterruptedException {
-        if (destroyed.get() || Thread.currentThread().isInterrupted()) {
-            throw new InterruptedException("تم إيقاف المزامنة.");
-        }
+        if (destroyed.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("تم إيقاف المزامنة.");
     }
 
     @Override protected void onDestroy() {
