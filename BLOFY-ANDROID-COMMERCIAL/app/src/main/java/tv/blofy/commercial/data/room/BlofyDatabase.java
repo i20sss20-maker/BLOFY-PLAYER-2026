@@ -2,9 +2,12 @@ package tv.blofy.commercial.data.room;
 
 import android.content.Context;
 
+import androidx.annotation.NonNull;
 import androidx.room.Database;
 import androidx.room.Room;
 import androidx.room.RoomDatabase;
+import androidx.room.migration.Migration;
+import androidx.sqlite.db.SupportSQLiteDatabase;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -24,13 +27,15 @@ import java.util.Map;
 public abstract class BlofyDatabase extends RoomDatabase {
     private static final Map<String, BlofyDatabase> INSTANCES = new HashMap<>();
 
+    private static final Migration MIGRATION_1_2 = new Migration(1, 2) {
+        @Override public void migrate(@NonNull SupportSQLiteDatabase database) {
+            database.execSQL("ALTER TABLE media ADD COLUMN direct_source TEXT NOT NULL DEFAULT ''");
+        }
+    };
+
     public abstract CatalogDao catalogDao();
 
-    /**
-     * Each playlist owns its own Room file. This avoids media-id collisions between providers,
-     * keeps favorites/history isolated, and lets playlist switching happen without clearing
-     * another provider's local catalogue.
-     */
+    /** Each playlist owns its own Room file and upgrades without clearing saved catalogue state. */
     public static BlofyDatabase get(Context context, String playlistId) {
         String key = safeKey(playlistId);
         synchronized (BlofyDatabase.class) {
@@ -40,10 +45,7 @@ public abstract class BlofyDatabase extends RoomDatabase {
                                 context.getApplicationContext(),
                                 BlofyDatabase.class,
                                 "blofy_catalog_" + key + ".db")
-                        // Catalogue content is provider-derived and can always be re-synced.
-                        // A destructive migration is safer than keeping a stale schema that
-                        // loses provider direct_source URLs needed for reliable playback.
-                        .fallbackToDestructiveMigration(true)
+                        .addMigrations(MIGRATION_1_2)
                         .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                         .build();
                 INSTANCES.put(key, current);
@@ -52,10 +54,7 @@ public abstract class BlofyDatabase extends RoomDatabase {
         }
     }
 
-    /** Legacy/default database is retained only as a migration bridge. */
-    public static BlofyDatabase get(Context context) {
-        return get(context, "legacy");
-    }
+    public static BlofyDatabase get(Context context) { return get(context, "legacy"); }
 
     private static String safeKey(String value) {
         String raw = value == null ? "legacy" : value.trim();
