@@ -71,6 +71,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private boolean historyRecorded;
     private boolean initialized;
     private boolean vlcAttempted;
+    private boolean alternateAttempted;
     private volatile boolean resolving;
 
     private final ExecutorService worker = Executors.newFixedThreadPool(2);
@@ -90,7 +91,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         int observed = providerHttpStatus.get();
         releasePlayer(true);
         if (observed == 401 || observed == 403 || observed == 456) {
-            showProviderRejected(observed);
+            recoverRejected(observed);
             return;
         }
         PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
@@ -286,6 +287,68 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         handler.postDelayed(timeout, isLive() ? 15_000L : 25_000L);
     }
 
+    private boolean recoverRejected(int status) {
+        if (isLive() && !alternateAttempted) {
+            alternateAttempted = true;
+            final String alternate = "m3u8".equals(playbackExtension) || "m3u8".equals(extension) ? "ts" : "m3u8";
+            final String requestedId = id;
+            final int generation = resolveGeneration.incrementAndGet();
+            resolving = true;
+            showLoading();
+            worker.execute(() -> {
+                try {
+                    ProviderProfile profile = ProviderProfileStore.load(this);
+                    String alternateUrl = null;
+                    if (profile != null && profile.isXtream()
+                            && !requestedId.startsWith("http://") && !requestedId.startsWith("https://")) {
+                        alternateUrl = new XtreamClient(profile).playbackUrl("live", requestedId, alternate);
+                    } else if (isHttpUrl(playbackUrl)) {
+                        alternateUrl = replaceExtension(playbackUrl, alternate);
+                    }
+                    if (!isHttpUrl(alternateUrl)) throw new Exception("No alternate live route");
+                    final String resolvedUrl = alternateUrl;
+                    if (generation != resolveGeneration.get() || !requestedId.equals(id)) return;
+                    playbackUrl = resolvedUrl;
+                    playbackExtension = alternate;
+                    extension = alternate;
+                    resolving = false;
+                    runOnUiThread(() -> {
+                        if (generation != resolveGeneration.get() || !requestedId.equals(id)
+                                || isFinishing() || isDestroyed()) return;
+                        prepareMedia3Direct(resolvedUrl, alternate);
+                    });
+                } catch (Exception ignored) {
+                    resolving = false;
+                    runOnUiThread(() -> fallbackAfterAlternate(status));
+                }
+            });
+            return true;
+        }
+        fallbackAfterAlternate(status);
+        return true;
+    }
+
+    private void fallbackAfterAlternate(int status) {
+        PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
+        if (!vlcAttempted && "libvlc".equals(compatibility.fallbackEngine)
+                && playbackUrl != null && !playbackUrl.isEmpty()) {
+            launchVlcFallback();
+            return;
+        }
+        showProviderRejected(status);
+    }
+
+    private static String replaceExtension(String url, String alternate) {
+        if (url == null || url.isEmpty()) return url;
+        int query = url.indexOf('?');
+        String base = query >= 0 ? url.substring(0, query) : url;
+        String suffix = query >= 0 ? url.substring(query) : "";
+        if (base.matches("(?i).*\\.(ts|m3u8)$")) {
+            base = base.replaceFirst("(?i)\\.(ts|m3u8)$", "." + alternate);
+        }
+        return base + suffix;
+    }
+
     private void launchVlcFallback() {
         if (vlcAttempted || playbackUrl == null || playbackUrl.isEmpty()) return;
         vlcAttempted = true;
@@ -298,6 +361,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private void retryDirect() {
         releasePlayer(true);
         vlcAttempted = false;
+        alternateAttempted = false;
         providerHttpStatus.set(-1);
         extension = originalExtension;
         playbackUrl = null;
@@ -349,6 +413,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         playbackUrl = null;
         playbackExtension = null;
         vlcAttempted = false;
+        alternateAttempted = false;
         providerHttpStatus.set(-1);
         showLoading();
 
@@ -430,7 +495,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         releasePlayer(true);
         if (status == 401 || status == 403 || status == 456
                 || observed == 401 || observed == 403 || observed == 456) {
-            showProviderRejected(status > 0 ? status : observed);
+            recoverRejected(status > 0 ? status : observed);
             return;
         }
         if (status >= 400) {
@@ -545,6 +610,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         playbackUrl = null;
         playbackExtension = null;
         vlcAttempted = false;
+        alternateAttempted = false;
         providerHttpStatus.set(-1);
         extension = originalExtension;
         super.onStop();
