@@ -53,6 +53,7 @@ public final class CatalogActivity extends LicensedActivity {
     private String query = "";
     private boolean favorites;
     private boolean history;
+    private boolean focusSearch;
     private boolean loading;
     private boolean reachedEnd;
     private int offset;
@@ -73,6 +74,7 @@ public final class CatalogActivity extends LicensedActivity {
         activeType = requestedType;
         favorites = getIntent().getBooleanExtra("favorites", false);
         history = getIntent().getBooleanExtra("history", false);
+        focusSearch = getIntent().getBooleanExtra("focus_search", false);
         if (state != null) {
             activeType = state.getString(STATE_CATEGORY_TYPE, requestedType);
             activeCategory = state.getString(STATE_CATEGORY_ID, "");
@@ -139,6 +141,7 @@ public final class CatalogActivity extends LicensedActivity {
         });
 
         loadCategories();
+        if (focusSearch && state == null) binding.search.postDelayed(binding.search::requestFocus, 120);
     }
 
     private void loadCategories() {
@@ -238,6 +241,10 @@ public final class CatalogActivity extends LicensedActivity {
     }
 
     private void restoreGridFocus() {
+        if (focusSearch) {
+            binding.search.post(binding.search::requestFocus);
+            return;
+        }
         if (mediaAdapter.getItemCount() == 0) {
             categoryAdapter.focusSelected(binding.categories);
             return;
@@ -332,6 +339,7 @@ public final class CatalogActivity extends LicensedActivity {
     private String screenTitle() {
         if (favorites) return "المفضلة";
         if (history) return "سجل المشاهدة";
+        if (focusSearch) return "البحث";
         if ("live".equals(requestedType)) return "البث المباشر";
         if ("movies".equals(requestedType)) return "الأفلام";
         if ("series".equals(requestedType)) return "المسلسلات";
@@ -346,6 +354,7 @@ public final class CatalogActivity extends LicensedActivity {
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+
     private void applyCategoryRecord(CategoryRecord category) {
         if (category.id.startsWith("@type:")) {
             activeType = category.id.substring("@type:".length());
@@ -377,6 +386,10 @@ public final class CatalogActivity extends LicensedActivity {
 
     @Override protected void onResume() {
         super.onResume();
+        if (focusSearch && binding != null) {
+            binding.search.postDelayed(binding.search::requestFocus, 80);
+            return;
+        }
         if (binding != null && mediaAdapter != null && mediaAdapter.getItemCount() > 0) {
             binding.list.postDelayed(this::focusCurrentMedia, 80);
         }
