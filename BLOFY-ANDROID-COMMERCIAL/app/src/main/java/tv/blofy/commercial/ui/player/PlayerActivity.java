@@ -41,7 +41,6 @@ import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.util.Date;
-import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -54,15 +53,16 @@ import tv.blofy.commercial.core.LicensedActivity;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivityPlayerBinding;
+import tv.blofy.commercial.provider.PlaybackCompatibility;
+import tv.blofy.commercial.provider.PlaylistProfile;
+import tv.blofy.commercial.provider.PlaylistRepository;
 import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.provider.XtreamClient;
 
-/** Media3 first, direct provider traffic only. LibVLC remains an isolated lazy fallback. */
+/** Media3 first, direct provider traffic only. LibVLC and external players remain optional fallbacks. */
 @OptIn(markerClass = UnstableApi.class)
 public final class PlayerActivity extends LicensedActivity implements Player.Listener {
-    private static final String PROVIDER_USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
-
     private ActivityPlayerBinding binding;
     private CatalogStore store;
     private ExoPlayer player;
@@ -169,8 +169,8 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     }
 
     private void routeSelectedPlayer(String url, String mediaExtension) {
-        String selected = getSharedPreferences("blofy_player_settings", MODE_PRIVATE)
-                .getString("player_engine", "auto");
+        PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
+        String selected = compatibility.selectedEngine(this);
         String contentMime = mime(mediaExtension);
         if ("libvlc".equals(selected)) {
             playbackUrl = url;
@@ -200,6 +200,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         releasePlayer(false);
         providerHttpStatus.set(-1);
 
+        PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
         OkHttpClient client = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(isLive() ? 35 : 60, TimeUnit.SECONDS)
@@ -213,14 +214,9 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 })
                 .build();
 
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("Accept", "*/*");
-        headers.put("Accept-Encoding", "identity");
-        headers.put("Cache-Control", "no-cache");
-        headers.put("Icy-MetaData", "1");
-
+        Map<String, String> headers = compatibility.requestHeaders();
         OkHttpDataSource.Factory http = new OkHttpDataSource.Factory(client)
-                .setUserAgent(PROVIDER_USER_AGENT)
+                .setUserAgent(compatibility.userAgent)
                 .setDefaultRequestProperties(headers);
         DefaultDataSource.Factory source = new DefaultDataSource.Factory(this, http);
 
@@ -430,8 +426,11 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
             return;
         }
         if (observed >= 200 && observed < 300 && media3FormatFailure(error)) {
-            launchVlcFallback();
-            return;
+            PlaybackCompatibility compatibility = PlaybackCompatibility.resolve(this);
+            if ("libvlc".equals(compatibility.fallbackEngine)) {
+                launchVlcFallback();
+                return;
+            }
         }
         showError("تعذر تشغيل المصدر مباشرة: " + error.getErrorCodeName());
     }
@@ -467,7 +466,11 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         return super.dispatchKeyEvent(event);
     }
 
-    private String positionKey() { return "position_" + type + "_" + id; }
+    private String positionKey() {
+        PlaylistProfile playlist = PlaylistRepository.active(this);
+        String playlistId = playlist == null ? "legacy" : playlist.id;
+        return "position_" + playlistId + "_" + type + "_" + id;
+    }
 
     private void releasePlayer(boolean savePosition) {
         handler.removeCallbacks(timeout);
