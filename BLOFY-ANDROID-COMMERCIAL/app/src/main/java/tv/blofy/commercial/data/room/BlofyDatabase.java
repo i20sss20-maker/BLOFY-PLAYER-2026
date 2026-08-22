@@ -19,7 +19,7 @@ import java.util.Map;
                 HistoryEntity.class,
                 MetaEntity.class
         },
-        version = 1,
+        version = 2,
         exportSchema = false)
 public abstract class BlofyDatabase extends RoomDatabase {
     private static final Map<String, BlofyDatabase> INSTANCES = new HashMap<>();
@@ -40,6 +40,10 @@ public abstract class BlofyDatabase extends RoomDatabase {
                                 context.getApplicationContext(),
                                 BlofyDatabase.class,
                                 "blofy_catalog_" + key + ".db")
+                        // Catalogue content is provider-derived and can always be re-synced.
+                        // A destructive migration is safer than keeping a stale schema that
+                        // loses provider direct_source URLs needed for reliable playback.
+                        .fallbackToDestructiveMigration(true)
                         .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                         .build();
                 INSTANCES.put(key, current);
