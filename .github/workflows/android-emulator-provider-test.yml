@@ -77,32 +77,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            mkdir -p emulator-artifacts/screenshots emulator-artifacts/test-results
-            adb logcat -c
-            adb shell settings put system user_rotation 1
-            adb shell settings put system accelerometer_rotation 0
-
-            set +e
-            gradle -p BLOFY-ANDROID-COMMERCIAL --no-daemon connectedDebugAndroidTest \
-              -PBLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app" \
-              -Pandroid.testInstrumentationRunnerArguments.class=tv.blofy.commercial.CommercialEmulatorSmokeTest \
-              -Pandroid.testInstrumentationRunnerArguments.providerKind="xtream" \
-              -Pandroid.testInstrumentationRunnerArguments.serverUrl="$BLOFY_TEST_SERVER_URL" \
-              -Pandroid.testInstrumentationRunnerArguments.username="$BLOFY_TEST_USERNAME" \
-              -Pandroid.testInstrumentationRunnerArguments.password="$BLOFY_TEST_PASSWORD"
-            TEST_EXIT=$?
-            set -e
-
-            adb logcat -d -v threadtime > emulator-artifacts/logcat.txt 2>&1 || true
-            adb shell dumpsys activity activities > emulator-artifacts/activity-dump.txt 2>&1 || true
-            adb shell dumpsys package tv.blofy.player > emulator-artifacts/package-dump.txt 2>&1 || true
-            adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
-            adb pull /sdcard/window.xml emulator-artifacts/window.xml >/dev/null 2>&1 || true
-            adb pull /sdcard/Download/blofy-ci/. emulator-artifacts/screenshots/ >/dev/null 2>&1 || true
-            cp -R BLOFY-ANDROID-COMMERCIAL/app/build/outputs/androidTest-results/connected/. emulator-artifacts/test-results/ 2>/dev/null || true
-            cp -R BLOFY-ANDROID-COMMERCIAL/app/build/reports/androidTests/connected/. emulator-artifacts/test-results/ 2>/dev/null || true
-            echo "$TEST_EXIT" > emulator-artifacts/test-exit-code.txt
-            exit "$TEST_EXIT"
+            bash -lc 'mkdir -p emulator-artifacts/screenshots emulator-artifacts/test-results; adb logcat -c; adb shell settings put system user_rotation 1; adb shell settings put system accelerometer_rotation 0; set +e; gradle -p BLOFY-ANDROID-COMMERCIAL --no-daemon connectedDebugAndroidTest -PBLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app" -Pandroid.testInstrumentationRunnerArguments.class=tv.blofy.commercial.CommercialEmulatorSmokeTest -Pandroid.testInstrumentationRunnerArguments.providerKind=xtream -Pandroid.testInstrumentationRunnerArguments.serverUrl="$BLOFY_TEST_SERVER_URL" -Pandroid.testInstrumentationRunnerArguments.username="$BLOFY_TEST_USERNAME" -Pandroid.testInstrumentationRunnerArguments.password="$BLOFY_TEST_PASSWORD"; TEST_EXIT=$?; adb logcat -d -v threadtime > emulator-artifacts/logcat.txt 2>&1 || true; adb shell dumpsys activity activities > emulator-artifacts/activity-dump.txt 2>&1 || true; adb shell dumpsys package tv.blofy.player > emulator-artifacts/package-dump.txt 2>&1 || true; adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true; adb pull /sdcard/window.xml emulator-artifacts/window.xml >/dev/null 2>&1 || true; adb pull /sdcard/Download/blofy-ci/. emulator-artifacts/screenshots/ >/dev/null 2>&1 || true; cp -R BLOFY-ANDROID-COMMERCIAL/app/build/outputs/androidTest-results/connected/. emulator-artifacts/test-results/ 2>/dev/null || true; cp -R BLOFY-ANDROID-COMMERCIAL/app/build/reports/androidTests/connected/. emulator-artifacts/test-results/ 2>/dev/null || true; echo "$TEST_EXIT" > emulator-artifacts/test-exit-code.txt; exit "$TEST_EXIT"'
 
       - name: Upload emulator evidence
         if: always()
