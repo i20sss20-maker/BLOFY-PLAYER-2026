@@ -60,6 +60,88 @@ jobs:
           test -n "${BLOFY_TEST_SERVER_URL:-}"
           echo "Provider test secrets are configured for host ${{ matrix.host_name }}."
 
+      - name: Probe provider-issued playback routes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.parse, urllib.request, urllib.error
+
+          host = os.environ['BLOFY_TEST_SERVER_URL'].rstrip('/')
+          username = os.environ['BLOFY_TEST_USERNAME']
+          password = os.environ['BLOFY_TEST_PASSWORD']
+          headers = {
+              'User-Agent': 'IPTVSmartersPlayer',
+              'X-Requested-With': 'com.nst.iptvsmarterstvbox',
+              'Accept': '*/*',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache',
+              'Accept-Encoding': 'identity',
+          }
+
+          def request(url, timeout=15, limit=None):
+              h = dict(headers)
+              if limit:
+                  h['Range'] = f'bytes=0-{limit-1}'
+              req = urllib.request.Request(url, headers=h)
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as r:
+                      data = r.read(limit or 2_000_000)
+                      return r.status, r.headers.get('Content-Type',''), data
+              except urllib.error.HTTPError as e:
+                  return e.code, e.headers.get('Content-Type','') if e.headers else '', b''
+              except Exception as e:
+                  return -1, type(e).__name__, b''
+
+          auth_q = urllib.parse.urlencode({'username': username, 'password': password})
+          status, ctype, body = request(f'{host}/player_api.php?{auth_q}')
+          print(f'Xtream auth HTTP={status}')
+          root = json.loads(body.decode('utf-8', 'replace')) if status == 200 and body else {}
+          ui = root.get('user_info') or {}
+          print('Account:', {
+              'auth': ui.get('auth'),
+              'status': ui.get('status'),
+              'active_cons': ui.get('active_cons'),
+              'max_connections': ui.get('max_connections'),
+              'allowed_output_formats': ui.get('allowed_output_formats'),
+          })
+
+          streams_q = urllib.parse.urlencode({'username': username, 'password': password, 'action': 'get_live_streams'})
+          s_status, _, s_body = request(f'{host}/player_api.php?{streams_q}')
+          streams = json.loads(s_body.decode('utf-8', 'replace')) if s_status == 200 and s_body else []
+          first = next((x for x in streams if str(x.get('stream_id','')).strip()), None)
+          if not first:
+              raise SystemExit('No live stream available for probe')
+          stream_id = str(first['stream_id'])
+          ext = str(first.get('container_extension') or 'ts').strip().lower()
+          direct = str(first.get('direct_source') or '').strip()
+
+          candidates = []
+          if direct.startswith(('http://','https://')):
+              candidates.append(('api_direct_source', direct))
+          candidates.append((f'xtream_{ext}', f'{host}/live/{urllib.parse.quote(username)}/{urllib.parse.quote(password)}/{urllib.parse.quote(stream_id)}.{ext}'))
+          if ext != 'ts':
+              candidates.append(('xtream_ts', f'{host}/live/{urllib.parse.quote(username)}/{urllib.parse.quote(password)}/{urllib.parse.quote(stream_id)}.ts'))
+          if ext != 'm3u8':
+              candidates.append(('xtream_m3u8', f'{host}/live/{urllib.parse.quote(username)}/{urllib.parse.quote(password)}/{urllib.parse.quote(stream_id)}.m3u8'))
+
+          for output in ('ts','m3u8'):
+              m3u_q = urllib.parse.urlencode({'username': username, 'password': password, 'type':'m3u_plus', 'output':output})
+              m_status, _, m_body = request(f'{host}/get.php?{m3u_q}', limit=4_000_000)
+              text = m_body.decode('utf-8','replace') if m_body else ''
+              url = next((line.strip() for line in text.splitlines() if line.strip().startswith(('http://','https://'))), '')
+              print(f'get.php output={output} HTTP={m_status} provider_url_found={bool(url)}')
+              if url:
+                  candidates.append((f'provider_m3u_{output}', url))
+
+          seen = set()
+          for label, url in candidates:
+              if url in seen: continue
+              seen.add(url)
+              code, typ, data = request(url, timeout=12, limit=2048)
+              print(f'PROBE {label}: HTTP={code} content_type={typ or "-"} bytes={len(data)}')
+          PY
+
       - name: Enable KVM
         shell: bash
         run: |
