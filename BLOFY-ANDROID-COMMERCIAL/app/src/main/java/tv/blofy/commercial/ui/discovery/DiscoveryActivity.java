@@ -19,7 +19,7 @@ import tv.blofy.commercial.ui.activation.ActivationActivity;
 import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
-/** Clean 0-100 discovery screen. User-facing diagnostics are intentionally hidden here. */
+/** Phase 1 of one visual loading flow: server discovery occupies 0-35%. */
 public final class DiscoveryActivity extends AppCompatActivity {
     private ActivityDiscoveryBinding binding;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -30,18 +30,15 @@ public final class DiscoveryActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         binding = ActivityDiscoveryBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
+        binding.stage.setText("فحص السيرفر والتوافق");
         worker.execute(this::discover);
     }
 
     private void discover() {
         PlaylistProfile selected = PlaylistRepository.active(this);
         if (selected == null) selected = PlaylistRepository.importLegacySingleProfile(this);
-        if (selected == null) {
-            openActivation();
-            return;
-        }
+        if (selected == null) { openActivation(); return; }
         final PlaylistProfile playlist = selected;
-
         try {
             ServerDiscoveryEngine engine = new ServerDiscoveryEngine();
             CompatibilityProfile profile = engine.discover(playlist, this::showProgress);
@@ -53,12 +50,11 @@ public final class DiscoveryActivity extends AppCompatActivity {
                 startActivity(new Intent(this, SyncActivity.class)
                         .putExtra("playlist_id", playlist.id)
                         .putExtra("discovery_ready", true));
+                overridePendingTransition(0, 0);
                 finish();
             });
         } catch (Exception error) {
             if (destroyed.get()) return;
-            // Keep the saved playlist and return to playlist management instead of throwing the user
-            // back into the legacy credential form. The next attempt can re-run discovery safely.
             runOnUiThread(() -> {
                 if (destroyed.get() || isFinishing() || isDestroyed()) return;
                 startActivity(new Intent(this, PlaylistsActivity.class)
@@ -70,13 +66,17 @@ public final class DiscoveryActivity extends AppCompatActivity {
     }
 
     private void showProgress(int percent) {
-        int safe = Math.max(0, Math.min(100, percent));
+        int internal = Math.max(0, Math.min(100, percent));
+        int safe = Math.min(35, Math.round(internal * 0.35f));
         if (safe < shownProgress || destroyed.get()) return;
         shownProgress = safe;
         runOnUiThread(() -> {
             if (binding == null || destroyed.get()) return;
             binding.progress.setProgressCompat(safe, true);
             binding.percent.setText(safe + "%");
+            if (safe < 12) binding.stage.setText("فحص السيرفر");
+            else if (safe < 24) binding.stage.setText("التحقق من التوافق");
+            else binding.stage.setText("تجهيز الاتصال");
         });
     }
 
