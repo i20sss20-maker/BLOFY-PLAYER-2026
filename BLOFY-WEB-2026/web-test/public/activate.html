@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta name="theme-color" content="#08070d" />
-    <title>تفعيل BLOFY PLAYER</title>
+    <title>ربط BLOFY PLAYER</title>
     <link rel="icon" href="/assets/blofy-logo-192.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -12,15 +12,14 @@
     <main class="activation-screen">
       <section class="activation-card">
         <img class="activation-logo" src="/assets/blofy-logo-512.png" alt="BLOFY PLAYER" />
-        <span class="eyebrow">تفعيل الجهاز</span>
-        <h1>فعّل جهازك وأرسل بيانات الباقة</h1>
-        <p class="muted">امسح الباركود من التطبيق، ثم أدخل رمز التفعيل الرقمي وبيانات باقتك. تُحفظ البيانات مشفّرة ويستلمها جهازك مباشرة.</p>
+        <span class="eyebrow">ربط الجهاز</span>
+        <h1>اربط جهازك وأرسل بيانات الباقة</h1>
+        <p class="muted">امسح الباركود من التطبيق، ثم أدخل بيانات باقتك. لا يوجد رمز تفعيل أو PIN؛ الربط يتم بأمان عبر رقم الجهاز ورمز الربط الموجود داخل الباركود.</p>
         <form id="activationForm" class="activation-form">
           <div class="field"><label for="deviceId">رقم الجهاز</label><input id="deviceId" name="deviceId" dir="ltr" autocomplete="off" placeholder="BLOFY-XXXX-XXXX-XXXX-XXXX" required /></div>
-          <div class="field"><label for="activationCode">رمز التفعيل الرقمي</label><input id="activationCode" name="code" dir="ltr" inputmode="numeric" pattern="[0-9]{6,12}" maxlength="12" autocomplete="one-time-code" placeholder="12345678" /></div>
 
           <section id="profileSection" class="activation-profile">
-            <label class="profile-toggle"><input id="saveProfile" type="checkbox" checked /> <span>إرسال بيانات الباقة إلى التطبيق بعد التفعيل</span></label>
+            <label class="profile-toggle"><input id="saveProfile" type="checkbox" checked /> <span>إرسال بيانات الباقة إلى التطبيق</span></label>
             <div id="profileFields">
               <div class="source-tabs activation-tabs" role="tablist">
                 <button id="xtreamTab" class="source-tab active" type="button">Xtream Codes</button>
@@ -38,10 +37,10 @@
             </div>
           </section>
 
-          <button class="primary-button" type="submit">تفعيل وربط الجهاز</button>
+          <button class="primary-button" type="submit">حفظ وربط الجهاز</button>
           <div id="activationMessage" class="activation-message" role="status"></div>
         </form>
-        <small class="muted">BLOFY PLAYER مشغل فقط ولا يوفّر المحتوى أو الاشتراكات.</small>
+        <small class="muted">التفعيل والتجديد مرتبطان بحالة الجهاز، ولا يحتاجان رمزًا يدويًا.</small>
       </section>
     </main>
     <script src="/activate.js"></script>
