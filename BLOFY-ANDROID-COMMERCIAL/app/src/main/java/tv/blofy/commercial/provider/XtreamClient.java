@@ -117,7 +117,6 @@ public final class XtreamClient {
 
     public String serverName() { return profile.name.isEmpty() ? profile.serverUrl : profile.name; }
 
-    /** Standard Xtream M3U endpoint used when a provider blocks player_api.php. */
     public ProviderProfile playlistFallbackProfile() {
         HttpUrl base = HttpUrl.parse(profile.serverUrl + "/get.php");
         if (base == null) throw new IllegalArgumentException("رابط Xtream غير صالح.");
@@ -134,7 +133,7 @@ public final class XtreamClient {
     public int lastApiStatus() { return lastApiStatus; }
 
     private JSONObject readCatalogItem(JsonReader reader, String type) throws Exception {
-        String id = "", name = "", image = "", backdrop = "", category = "", rating = "", year = "", ext = "";
+        String id = "", name = "", image = "", backdrop = "", category = "", rating = "", year = "", ext = "", directSource = "";
         reader.beginObject();
         while (reader.hasNext()) {
             String key = reader.nextName();
@@ -147,6 +146,7 @@ public final class XtreamClient {
                 case "category_id": category = nextString(reader); break;
                 case "rating": rating = nextString(reader); break;
                 case "year": year = nextString(reader); break;
+                case "direct_source": directSource = nextString(reader); break;
                 case "releaseDate":
                 case "release_date": {
                     String release = nextString(reader);
@@ -169,6 +169,7 @@ public final class XtreamClient {
         item.put("rating", rating);
         item.put("year", year);
         item.put("extension", "series".equals(type) ? "" : cleanExtension(ext, "live".equals(type) ? "ts" : "mp4"));
+        item.put("directSource", isHttpUrl(directSource) ? directSource : "");
         return item;
     }
 
@@ -216,7 +217,6 @@ public final class XtreamClient {
                 .header("Accept-Language", "en-US,en;q=0.9")
                 .header("Cache-Control", "no-cache")
                 .header("Pragma", "no-cache");
-
         if ("IPTVSmartersPlayer".equals(userAgent)) {
             builder.header("X-Requested-With", "com.nst.iptvsmarterstvbox");
         } else if (userAgent.startsWith("Mozilla/")) {
@@ -236,7 +236,6 @@ public final class XtreamClient {
         Response last = http.newCall(request(url, preferred)).execute();
         lastApiStatus = last.code();
         if (last.code() != 403 && last.code() != 406) return last;
-
         for (String userAgent : API_USER_AGENTS) {
             if (userAgent.equals(preferred)) continue;
             Response candidate;
@@ -281,11 +280,9 @@ public final class XtreamClient {
     }
 
     private Exception providerHttpError(String area, int status) {
-        if (status == 403) {
-            return new Exception("المزوّد رفض " + area + " (HTTP 403) بعد تجربة هويات API متعددة. غالبًا الحساب أو IP الجهاز أو سياسة مزوّد الخدمة تمنع player_api.php.");
-        }
-        if (status == 401) return new Exception("المزوّد رفض بيانات الدخول (HTTP 401). تحقق من اسم المستخدم وكلمة المرور.");
-        if (status == 456) return new Exception("المزوّد رفض الطلب (HTTP 456). غالبًا يوجد تقييد IP/اتصال على الحساب.");
+        if (status == 403) return new Exception("المزوّد رفض " + area + " (HTTP 403).");
+        if (status == 401) return new Exception("المزوّد رفض بيانات الدخول (HTTP 401).");
+        if (status == 456) return new Exception("المزوّد رفض الطلب (HTTP 456).");
         return new Exception("المزوّد رفض " + area + " (HTTP " + status + ").");
     }
 
@@ -299,6 +296,10 @@ public final class XtreamClient {
     private static String cleanExtension(String value, String fallback) {
         String ext = value == null ? "" : value.toLowerCase().replaceAll("[^a-z0-9]", "");
         return ext.isEmpty() ? fallback : ext;
+    }
+
+    private static boolean isHttpUrl(String value) {
+        return value != null && (value.startsWith("http://") || value.startsWith("https://"));
     }
 
     private static String encodePath(String value) {
