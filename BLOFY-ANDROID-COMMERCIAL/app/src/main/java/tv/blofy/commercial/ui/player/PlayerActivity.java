@@ -67,7 +67,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     private CatalogStore store;
     private ExoPlayer player;
 
-    private String id, name, type, extension, originalExtension, playbackUrl, playbackExtension;
+    private String id, name, type, extension, originalExtension, directSource, playbackUrl, playbackExtension;
     private boolean historyRecorded;
     private boolean initialized;
     private boolean vlcAttempted;
@@ -99,7 +99,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
             launchVlcFallback();
             return;
         }
-        showError("المزوّد لم يرسل فيديو خلال المهلة بعد تجربة المشغل الاحتياطي.");
+        showError("تعذر تشغيل المصدر بعد تجربة المحرك الأساسي والاحتياطي.");
     };
 
     @Override protected void onCreate(@Nullable Bundle state) {
@@ -111,6 +111,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         id = extra("id", "");
         name = extra("name", "BLOFY PLAYER");
         extension = normalize(extra("extension", isLive() ? "ts" : "mp4"));
+        directSource = extra("direct_source", "");
         originalExtension = extension;
 
         binding.title.setText(name);
@@ -133,13 +134,14 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         return value == null || value.isEmpty() ? fallback : value;
     }
 
-    /** Builds the provider URL locally. No BLOFY/Railway media endpoint is involved. */
+    /** Uses the provider supplied source first, then falls back to a standard Xtream URL. */
     private void resolveDirect() {
         resolving = true;
         final int generation = resolveGeneration.incrementAndGet();
         final String requestedType = type;
         final String requestedId = id;
         final String requestedExtension = extension;
+        final String requestedDirectSource = directSource;
         showLoading();
 
         worker.execute(() -> {
@@ -147,16 +149,16 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 ProviderProfile profile = ProviderProfileStore.load(this);
                 if (profile == null) throw new Exception("بيانات الباقة غير موجودة على الجهاز.");
                 final String directUrl;
-                if (requestedId.startsWith("http://") || requestedId.startsWith("https://")) {
+                if (isHttpUrl(requestedDirectSource)) {
+                    directUrl = requestedDirectSource;
+                } else if (requestedId.startsWith("http://") || requestedId.startsWith("https://")) {
                     directUrl = requestedId;
                 } else if (profile.isXtream()) {
                     directUrl = new XtreamClient(profile).playbackUrl(requestedType, requestedId, requestedExtension);
                 } else {
                     directUrl = requestedId;
                 }
-                if (!(directUrl.startsWith("http://") || directUrl.startsWith("https://"))) {
-                    throw new Exception("رابط التشغيل المحلي غير صالح.");
-                }
+                if (!isHttpUrl(directUrl)) throw new Exception("رابط التشغيل المحلي غير صالح.");
                 if (!isCurrent(generation, requestedId)) return;
                 playbackUrl = directUrl;
                 playbackExtension = requestedExtension;
@@ -371,6 +373,7 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                 id = selected.id;
                 name = selected.name;
                 extension = normalize(selected.extension.isEmpty() ? "ts" : selected.extension);
+                directSource = selected.directSource;
                 originalExtension = extension;
                 historyRecorded = false;
                 binding.title.setText(name);
@@ -509,6 +512,10 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         if ("mkv".equals(ext)) return MimeTypes.VIDEO_MATROSKA;
         if ("webm".equals(ext)) return MimeTypes.VIDEO_WEBM;
         return null;
+    }
+
+    private static boolean isHttpUrl(String value) {
+        return value != null && (value.startsWith("http://") || value.startsWith("https://"));
     }
 
     private static String decodeEpg(String value) {
