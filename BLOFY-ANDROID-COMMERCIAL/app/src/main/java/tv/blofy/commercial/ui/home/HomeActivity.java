@@ -22,6 +22,7 @@ import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
 import tv.blofy.commercial.ui.catalog.CatalogActivity;
+import tv.blofy.commercial.ui.library.LibraryActivity;
 import tv.blofy.commercial.ui.live.LiveActivity;
 import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 import tv.blofy.commercial.ui.settings.SettingsActivity;
@@ -100,8 +101,8 @@ public final class HomeActivity extends LicensedActivity {
         addCell(grid, settings, 1, 2);
 
         live.setOnClickListener(v -> open(LiveActivity.class));
-        movies.setOnClickListener(v -> catalog("movies", false, false));
-        series.setOnClickListener(v -> catalog("series", false, false));
+        movies.setOnClickListener(v -> library("movies"));
+        series.setOnClickListener(v -> library("series"));
         favorites.setOnClickListener(v -> catalog("", true, false));
         playlists.setOnClickListener(v -> open(PlaylistsActivity.class));
         settings.setOnClickListener(v -> open(SettingsActivity.class));
@@ -157,6 +158,10 @@ public final class HomeActivity extends LicensedActivity {
                 runOnUiThread(() -> { if (summary != null) summary.setText(text); });
             } catch (Exception ignored) { }
         });
+    }
+
+    private void library(String type) {
+        startActivity(new Intent(this, LibraryActivity.class).putExtra("type", type));
     }
 
     private void catalog(String type, boolean favorites, boolean history) {
