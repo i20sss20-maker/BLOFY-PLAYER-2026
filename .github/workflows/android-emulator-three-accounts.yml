@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   account-test:
-    name: Emulator — ${{ matrix.account }}
+    name: Emulator — ${{ matrix.account }} — VPN
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -38,6 +38,7 @@ jobs:
       BLOFY_TEST_SERVER_URL: ${{ matrix.server_url }}
       BLOFY_TEST_USERNAME: ${{ secrets[matrix.username_secret] }}
       BLOFY_TEST_PASSWORD: ${{ secrets[matrix.password_secret] }}
+      BLOFY_VPN_WG_CONFIG: ${{ secrets.BLOFY_VPN_WG_CONFIG }}
 
     steps:
       - name: Checkout BLOFY
@@ -54,14 +55,51 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Validate masked account
+      - name: Validate masked account and VPN
         shell: bash
         run: |
           set -euo pipefail
           test -n "${BLOFY_TEST_USERNAME:-}"
           test -n "${BLOFY_TEST_PASSWORD:-}"
           test -n "${BLOFY_TEST_SERVER_URL:-}"
-          echo "Masked credentials configured for ${{ matrix.account }}"
+          if [ -z "${BLOFY_VPN_WG_CONFIG:-}" ]; then
+            echo "BLOFY_VPN_WG_CONFIG repository secret is missing"
+            exit 22
+          fi
+          echo "Masked credentials and VPN config are available for ${{ matrix.account }}"
+
+      - name: Capture public IP before VPN
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p emulator-artifacts/network
+          curl -4fsS --max-time 15 https://api.ipify.org | tee emulator-artifacts/network/ip-before.txt
+          echo
+
+      - name: Connect WireGuard VPN
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wireguard-tools resolvconf
+          printf '%s\n' "$BLOFY_VPN_WG_CONFIG" | sudo tee /etc/wireguard/blofy-vpn.conf >/dev/null
+          sudo chmod 600 /etc/wireguard/blofy-vpn.conf
+          sudo wg-quick up blofy-vpn
+          sleep 5
+          sudo wg show
+
+      - name: Verify VPN public IP changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          AFTER="$(curl -4fsS --max-time 20 https://api.ipify.org)"
+          printf '%s\n' "$AFTER" | tee emulator-artifacts/network/ip-after.txt
+          BEFORE="$(cat emulator-artifacts/network/ip-before.txt)"
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "VPN tunnel is up but public IPv4 did not change"
+            exit 23
+          fi
+          echo "VPN egress changed successfully"
 
       - name: Enable KVM
         shell: bash
@@ -70,7 +108,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run BLOFY on Android emulator
+      - name: Run BLOFY on Android emulator through VPN
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -82,10 +120,17 @@ jobs:
           script: |
             bash -lc 'mkdir -p emulator-artifacts/screenshots emulator-artifacts/test-results; adb logcat -c; set +e; gradle -p BLOFY-ANDROID-COMMERCIAL --no-daemon connectedDebugAndroidTest -PBLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app" -Pandroid.testInstrumentationRunnerArguments.class=tv.blofy.commercial.CommercialEmulatorSmokeTest -Pandroid.testInstrumentationRunnerArguments.providerKind=xtream -Pandroid.testInstrumentationRunnerArguments.serverUrl="$BLOFY_TEST_SERVER_URL" -Pandroid.testInstrumentationRunnerArguments.username="$BLOFY_TEST_USERNAME" -Pandroid.testInstrumentationRunnerArguments.password="$BLOFY_TEST_PASSWORD"; TEST_EXIT=$?; adb logcat -d -v threadtime > emulator-artifacts/logcat.txt 2>&1 || true; adb shell dumpsys activity activities > emulator-artifacts/activity-dump.txt 2>&1 || true; adb pull /sdcard/Download/blofy-ci/. emulator-artifacts/screenshots/ >/dev/null 2>&1 || true; cp -R BLOFY-ANDROID-COMMERCIAL/app/build/outputs/androidTest-results/connected/. emulator-artifacts/test-results/ 2>/dev/null || true; cp -R BLOFY-ANDROID-COMMERCIAL/app/build/reports/androidTests/connected/. emulator-artifacts/test-results/ 2>/dev/null || true; echo "$TEST_EXIT" > emulator-artifacts/test-exit-code.txt; exit "$TEST_EXIT"'
 
+      - name: Disconnect WireGuard VPN
+        if: always()
+        shell: bash
+        run: |
+          sudo wg-quick down blofy-vpn 2>/dev/null || true
+          sudo rm -f /etc/wireguard/blofy-vpn.conf
+
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-THREE-ACCOUNT-${{ matrix.account }}
+          name: BLOFY-THREE-ACCOUNT-VPN-${{ matrix.account }}
           path: emulator-artifacts/**
           retention-days: 7
