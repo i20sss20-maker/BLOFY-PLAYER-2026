@@ -3,6 +3,7 @@ package tv.blofy.commercial.ui.sync;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -49,7 +50,12 @@ public final class SyncActivity extends AppCompatActivity {
         setContentView(binding.getRoot());
         store = new CatalogStore(this);
         binding.retry.setOnClickListener(view -> {
-            binding.retry.setVisibility(android.view.View.GONE);
+            binding.retry.setVisibility(View.GONE);
+            binding.error.setVisibility(View.GONE);
+            binding.error.setText("");
+            lastProgress.set(0);
+            binding.progress.setProgressCompat(0, false);
+            binding.percent.setText("0%");
             worker.execute(this::sync);
         });
         worker.execute(this::sync);
@@ -59,6 +65,11 @@ public final class SyncActivity extends AppCompatActivity {
         try {
             ensureActive();
             formats.clear();
+            runOnUiThread(() -> {
+                if (binding == null) return;
+                binding.error.setVisibility(View.GONE);
+                binding.retry.setVisibility(View.GONE);
+            });
             getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
                     .putBoolean("catalog_ready", false).apply();
             emit(4);
@@ -98,9 +109,14 @@ public final class SyncActivity extends AppCompatActivity {
             if (destroyed.get() || Thread.currentThread().isInterrupted()) return;
             Log.e(TAG, "Direct provider sync failed", error);
             emit(lastProgress.get());
+            String message = error.getMessage();
+            if (message == null || message.trim().isEmpty()) message = "تعذر قراءة الباقة مباشرة من المزوّد.";
+            final String visibleMessage = message;
             runOnUiThread(() -> {
-                if (destroyed.get() || isFinishing() || isDestroyed()) return;
-                binding.retry.setVisibility(android.view.View.VISIBLE);
+                if (destroyed.get() || isFinishing() || isDestroyed() || binding == null) return;
+                binding.error.setText(visibleMessage);
+                binding.error.setVisibility(View.VISIBLE);
+                binding.retry.setVisibility(View.VISIBLE);
                 binding.retry.requestFocus();
             });
         }
