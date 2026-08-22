@@ -61,7 +61,6 @@ public final class ActivationActivity extends AppCompatActivity {
             binding.password.setVisibility(xtream ? View.VISIBLE : View.GONE);
             binding.playlistUrl.setVisibility(xtream ? View.GONE : View.VISIBLE);
         });
-        binding.activate.setOnClickListener(view -> activate());
         binding.savePackage.setOnClickListener(view -> savePackage());
         restoreLocalProfile();
         refreshLicense();
@@ -97,19 +96,24 @@ public final class ActivationActivity extends AppCompatActivity {
                 JSONObject data = api.get("/api/license?device_id=" + ApiClient.encode(api.deviceId()));
                 licensed = LicenseGate.isLicensed(data);
                 int days = data.optInt("remainingDays", 0);
+                boolean imported = licensed && pullPairedProfile();
                 boolean configured = licensed && ProviderProfileStore.hasProfile(this);
                 runOnUiThread(() -> {
-                    binding.licenseStatus.setText(licensed ? "مفعّل • متبقي " + days + " أيام" : "الجهاز غير مفعّل");
+                    if (binding == null) return;
+                    binding.licenseStatus.setText(licensed ? "مفعّل • متبقي " + days + " أيام" : "بانتظار التجديد");
                     binding.licenseStatus.setTextColor(getColor(licensed ? R.color.blofy_success : R.color.blofy_error));
+                    if (imported) restoreLocalProfile();
                     if (configured && !forceForm && !isFinishing()) {
                         navigating = true;
                         main.removeCallbacks(poll);
                         boolean ready = getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
                                 .getBoolean("catalog_ready", false)
                                 && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                                .getInt("catalog_schema", 0) >= 3;
+                                .getInt("catalog_schema", 0) >= 4;
                         startActivity(new Intent(this, ready ? HomeActivity.class : SyncActivity.class));
                         finish();
+                    } else if (licensed && !configured) {
+                        showStatus("امسح الباركود وأرسل بيانات الباقة من الموقع، أو أدخلها هنا مباشرة.", false);
                     }
                 });
             } catch (Exception error) {
@@ -120,6 +124,20 @@ public final class ActivationActivity extends AppCompatActivity {
                 if (!navigating && !isFinishing() && !isDestroyed()) main.postDelayed(poll, 5_000);
             }
         });
+    }
+
+    private boolean pullPairedProfile() {
+        try {
+            JSONObject bootstrap = api.get("/api/device/bootstrap?device_id=" + ApiClient.encode(api.deviceId()));
+            boolean imported = ProviderProfileStore.importFromBootstrap(this, bootstrap);
+            if (imported) {
+                getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
+                        .putBoolean("catalog_ready", false).apply();
+            }
+            return imported;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void ensureFreshPairing() {
@@ -144,38 +162,9 @@ public final class ActivationActivity extends AppCompatActivity {
         }
     }
 
-    private void activate() {
-        String code = text(binding.activationCode);
-        binding.activate.setEnabled(false);
-        showStatus("جاري التحقق من رمز التفعيل…", false);
-        worker.execute(() -> {
-            try {
-                if (!code.isEmpty()) {
-                    JSONObject body = new JSONObject();
-                    body.put("deviceId", api.deviceId());
-                    body.put("code", code);
-                    api.post("/api/activate", body);
-                }
-                JSONObject data = api.get("/api/license?device_id=" + ApiClient.encode(api.deviceId()));
-                licensed = LicenseGate.isLicensed(data);
-                if (!licensed) throw new Exception("رمز التفعيل غير صحيح أو انتهت صلاحيته.");
-                runOnUiThread(() -> {
-                    binding.activate.setEnabled(true);
-                    binding.licenseStatus.setText("تم تفعيل الجهاز");
-                    binding.licenseStatus.setTextColor(getColor(R.color.blofy_success));
-                    showStatus("تم التفعيل. أضف بيانات الباقة الآن.", false);
-                    binding.savePackage.requestFocus();
-                });
-            } catch (Exception error) {
-                runOnUiThread(() -> binding.activate.setEnabled(true));
-                showStatus(error.getMessage(), true);
-            }
-        });
-    }
-
     private void savePackage() {
         if (!licensed) {
-            showStatus("فعّل الجهاز أولًا أو امسح الباركود لتفعيله من الجوال.", true);
+            showStatus("الجهاز منتهي. جدّد الاشتراك أولًا ثم أضف بيانات الباقة.", true);
             return;
         }
         boolean xtream = binding.packageType.getCheckedButtonId() == R.id.xtream;
@@ -206,7 +195,7 @@ public final class ActivationActivity extends AppCompatActivity {
                     finish();
                 });
             } catch (Exception error) {
-                runOnUiThread(() -> binding.savePackage.setEnabled(true));
+                runOnUiThread(() -> { if (binding != null) binding.savePackage.setEnabled(true); });
                 showStatus(error.getMessage(), true);
             }
         });
