@@ -18,10 +18,7 @@ import tv.blofy.commercial.data.room.MetaEntity;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
 
-/**
- * Room-backed local catalogue facade scoped to the active playlist.
- * The UI deliberately keeps bounded LIMIT/OFFSET reads through this class.
- */
+/** Room-backed local catalogue facade scoped to the active playlist. */
 public final class CatalogStore {
     private final BlofyDatabase database;
     private final CatalogDao dao;
@@ -54,7 +51,7 @@ public final class CatalogStore {
             entities.add(new MediaEntity(
                     safe(item.type), safe(item.id), safeName(item.name), safe(item.image),
                     safe(item.backdrop), safe(item.categoryId), safe(item.rating), safe(item.year),
-                    safe(item.extension), nextSortOrder++));
+                    safe(item.extension), safe(item.directSource), nextSortOrder++));
         }
         dao.insertMedia(entities);
     }
@@ -84,7 +81,7 @@ public final class CatalogStore {
     public List<MediaRecord> media(String type, String category, String query,
                                    boolean favorites, boolean history, int limit, int offset) {
         StringBuilder sql = new StringBuilder(
-                "SELECT m.type,m.id,m.name,m.image,m.backdrop,m.category_id,m.rating,m.year,m.extension,m.sort_order FROM media m ");
+                "SELECT m.type,m.id,m.name,m.image,m.backdrop,m.category_id,m.rating,m.year,m.extension,m.direct_source,m.sort_order FROM media m ");
         if (favorites) sql.append("INNER JOIN favorite f ON f.type=m.type AND f.id=m.id ");
         if (history) sql.append("INNER JOIN history h ON h.type=m.type AND h.id=m.id ");
 
@@ -107,7 +104,7 @@ public final class CatalogStore {
     }
 
     public List<MediaRecord> recent(String type, int limit) {
-        String sql = "SELECT type,id,name,image,backdrop,category_id,rating,year,extension,sort_order "
+        String sql = "SELECT type,id,name,image,backdrop,category_id,rating,year,extension,direct_source,sort_order "
                 + "FROM media WHERE type=? ORDER BY sort_order DESC LIMIT ?";
         return records(dao.rawMedia(new SimpleSQLiteQuery(
                 sql, new Object[]{safe(type), Math.max(1, limit)})));
@@ -158,7 +155,7 @@ public final class CatalogStore {
     private static MediaRecord record(MediaEntity row) {
         return new MediaRecord(
                 safe(row.type), safe(row.id), safeName(row.name), safe(row.image), safe(row.backdrop),
-                safe(row.categoryId), safe(row.rating), safe(row.year), safe(row.extension));
+                safe(row.categoryId), safe(row.rating), safe(row.year), safe(row.extension), safe(row.directSource));
     }
 
     private static String safe(String value) { return value == null ? "" : value; }
