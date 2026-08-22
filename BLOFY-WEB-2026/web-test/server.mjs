@@ -666,12 +666,9 @@ async function handleApi(req, res, url) {
       return json(res, 403, { error: "انتهت صلاحية ربط الجهاز. حدّث الباركود من التطبيق." }, securityHeaders());
     }
 
-    let license;
-    if (String(body.code || "").trim()) license = await licenses.redeem(deviceId, body.code);
-    else license = await licenses.get(deviceId, { create: false });
-    if (!license || !["trial", "active"].includes(license.plan)) {
-      return json(res, 402, { error: "أدخل رمز تفعيل رقمي صالح أولًا." }, securityHeaders());
-    }
+    // Pairing/configuration no longer uses activation codes.
+    // Payment/license status is managed separately by device id.
+    const license = await licenses.get(deviceId);
 
     const hasProfile = body.kind === "xtream" || body.kind === "m3u";
     let configured = false;
@@ -697,7 +694,10 @@ async function handleApi(req, res, url) {
     });
     const session = unseal(profileToken);
     if (!session || !["xtream", "m3u"].includes(session.kind)) throw new Error("بيانات الباقة المحفوظة غير صالحة. أعد إرسالها من صفحة الربط.");
-    return json(res, 200, { ok: true, configured: true, license, session: publicSession(session) }, {
+    const profile = session.kind === "xtream"
+      ? { kind: "xtream", name: session.name || "Xtream Codes", serverUrl: session.serverUrl || "", username: session.username || "", password: session.password || "" }
+      : { kind: "m3u", name: session.name || "M3U / M3U8", url: session.url || "" };
+    return json(res, 200, { ok: true, configured: true, license, session: publicSession(session), profile }, {
       ...securityHeaders(),
       "set-cookie": [
         licenseCookie(seal({ deviceId, expiresAt: license.expiresAt, plan: license.plan })),
