@@ -15,12 +15,12 @@ import tv.blofy.commercial.data.room.FavoriteEntity;
 import tv.blofy.commercial.data.room.HistoryEntity;
 import tv.blofy.commercial.data.room.MediaEntity;
 import tv.blofy.commercial.data.room.MetaEntity;
+import tv.blofy.commercial.provider.PlaylistProfile;
+import tv.blofy.commercial.provider.PlaylistRepository;
 
 /**
- * Room-backed local catalogue facade.
- *
+ * Room-backed local catalogue facade scoped to the active playlist.
  * The UI deliberately keeps bounded LIMIT/OFFSET reads through this class.
- * That means a 100k+ item provider never becomes a 100k object list in memory.
  */
 public final class CatalogStore {
     private final BlofyDatabase database;
@@ -28,10 +28,10 @@ public final class CatalogStore {
     private long nextSortOrder;
 
     public CatalogStore(Context context) {
-        database = BlofyDatabase.get(context);
+        PlaylistProfile active = PlaylistRepository.active(context);
+        String playlistId = active == null ? "legacy" : active.id;
+        database = BlofyDatabase.get(context, playlistId);
         dao = database.catalogDao();
-        // SyncActivity always clears before a full provider import. Keeping this
-        // constructor query-free also guarantees Activity creation never blocks on Room.
         nextSortOrder = 0L;
     }
 
@@ -59,13 +59,8 @@ public final class CatalogStore {
         dao.insertMedia(entities);
     }
 
-    public int count(String type) {
-        return dao.count(safe(type));
-    }
-
-    public int count(String type, String category) {
-        return dao.count(safe(type), safe(category));
-    }
+    public int count(String type) { return dao.count(safe(type)); }
+    public int count(String type, String category) { return dao.count(safe(type), safe(category)); }
 
     public List<CategoryRecord> categories(String type) {
         List<CategoryRecord> result = new ArrayList<>();
@@ -98,18 +93,9 @@ public final class CatalogStore {
         String safeType = safe(type);
         String safeCategory = safe(category);
         String safeQuery = safe(query);
-        if (!safeType.isEmpty()) {
-            where.add("m.type=?");
-            args.add(safeType);
-        }
-        if (!safeCategory.isEmpty()) {
-            where.add("m.category_id=?");
-            args.add(safeCategory);
-        }
-        if (!safeQuery.isEmpty()) {
-            where.add("m.name LIKE ?");
-            args.add("%" + safeQuery + "%");
-        }
+        if (!safeType.isEmpty()) { where.add("m.type=?"); args.add(safeType); }
+        if (!safeCategory.isEmpty()) { where.add("m.category_id=?"); args.add(safeCategory); }
+        if (!safeQuery.isEmpty()) { where.add("m.name LIKE ?"); args.add("%" + safeQuery + "%"); }
         if (!where.isEmpty()) sql.append("WHERE ").append(String.join(" AND ", where)).append(' ');
         if (history) sql.append("ORDER BY h.watched_at DESC ");
         else if ("live".equals(safeType) && safeQuery.isEmpty()) sql.append("ORDER BY m.sort_order ASC ");
@@ -120,7 +106,6 @@ public final class CatalogStore {
         return records(dao.rawMedia(new SimpleSQLiteQuery(sql.toString(), args.toArray())));
     }
 
-    /** Small home-page slice in provider import order; never scans into app memory. */
     public List<MediaRecord> recent(String type, int limit) {
         String sql = "SELECT type,id,name,image,backdrop,category_id,rating,year,extension,sort_order "
                 + "FROM media WHERE type=? ORDER BY sort_order DESC LIMIT ?";
@@ -161,11 +146,7 @@ public final class CatalogStore {
         dao.insertHistory(new HistoryEntity(safe(type), safe(id), System.currentTimeMillis(), 0L));
     }
 
-    public void putMeta(String key, String value) {
-        dao.putMeta(new MetaEntity(safe(key), safe(value)));
-    }
-
-    /** Room is process-scoped; activity stores do not close the shared database. */
+    public void putMeta(String key, String value) { dao.putMeta(new MetaEntity(safe(key), safe(value))); }
     public void close() { }
 
     private static List<MediaRecord> records(List<MediaEntity> values) {
@@ -180,10 +161,7 @@ public final class CatalogStore {
                 safe(row.categoryId), safe(row.rating), safe(row.year), safe(row.extension));
     }
 
-    private static String safe(String value) {
-        return value == null ? "" : value;
-    }
-
+    private static String safe(String value) { return value == null ? "" : value; }
     private static String safeName(String value) {
         String text = safe(value).trim();
         return text.isEmpty() ? "غير مصنف" : text;
