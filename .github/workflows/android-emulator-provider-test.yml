@@ -1,0 +1,107 @@
+name: BLOFY Android Emulator Provider Test
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: blofy-emulator-provider-test
+  cancel-in-progress: true
+
+jobs:
+  emulator-smoke-test:
+    name: Real Provider Emulator Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      BLOFY_TEST_PROVIDER_KIND: ${{ secrets.BLOFY_TEST_PROVIDER_KIND }}
+      BLOFY_TEST_SERVER_URL: ${{ secrets.BLOFY_TEST_SERVER_URL }}
+      BLOFY_TEST_USERNAME: ${{ secrets.BLOFY_TEST_USERNAME }}
+      BLOFY_TEST_PASSWORD: ${{ secrets.BLOFY_TEST_PASSWORD }}
+      BLOFY_TEST_PLAYLIST_URL: ${{ secrets.BLOFY_TEST_PLAYLIST_URL }}
+
+    steps:
+      - name: Checkout BLOFY
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Validate masked provider secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIND="${BLOFY_TEST_PROVIDER_KIND:-xtream}"
+          if [ "$KIND" = "m3u" ]; then
+            test -n "${BLOFY_TEST_PLAYLIST_URL:-}"
+          else
+            test -n "${BLOFY_TEST_SERVER_URL:-}"
+            test -n "${BLOFY_TEST_USERNAME:-}"
+            test -n "${BLOFY_TEST_PASSWORD:-}"
+          fi
+          echo "Provider test secrets are configured."
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run BLOFY on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set +e
+            mkdir -p emulator-artifacts/screenshots emulator-artifacts/test-results
+            adb logcat -c
+            adb shell settings put system user_rotation 1
+            adb shell settings put system accelerometer_rotation 0
+
+            cd BLOFY-ANDROID-COMMERCIAL
+            gradle --no-daemon connectedDebugAndroidTest \
+              -PBLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app" \
+              -Pandroid.testInstrumentationRunnerArguments.class=tv.blofy.commercial.CommercialEmulatorSmokeTest \
+              -Pandroid.testInstrumentationRunnerArguments.providerKind="${BLOFY_TEST_PROVIDER_KIND:-xtream}" \
+              -Pandroid.testInstrumentationRunnerArguments.serverUrl="$BLOFY_TEST_SERVER_URL" \
+              -Pandroid.testInstrumentationRunnerArguments.username="$BLOFY_TEST_USERNAME" \
+              -Pandroid.testInstrumentationRunnerArguments.password="$BLOFY_TEST_PASSWORD" \
+              -Pandroid.testInstrumentationRunnerArguments.playlistUrl="$BLOFY_TEST_PLAYLIST_URL"
+            TEST_EXIT=$?
+            cd ..
+
+            adb logcat -d -v threadtime > emulator-artifacts/logcat.txt 2>&1
+            adb shell dumpsys activity activities > emulator-artifacts/activity-dump.txt 2>&1
+            adb shell dumpsys package tv.blofy.player > emulator-artifacts/package-dump.txt 2>&1
+            adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1
+            adb pull /sdcard/window.xml emulator-artifacts/window.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/Download/blofy-ci/. emulator-artifacts/screenshots/ >/dev/null 2>&1 || true
+            cp -R BLOFY-ANDROID-COMMERCIAL/app/build/outputs/androidTest-results/connected/. emulator-artifacts/test-results/ 2>/dev/null || true
+            cp -R BLOFY-ANDROID-COMMERCIAL/app/build/reports/androidTests/connected/. emulator-artifacts/test-results/ 2>/dev/null || true
+            echo "$TEST_EXIT" > emulator-artifacts/test-exit-code.txt
+            exit "$TEST_EXIT"
+
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOFY-EMULATOR-REAL-PROVIDER-EVIDENCE
+          path: emulator-artifacts/**
+          if-no-files-found: warn
+          retention-days: 7
