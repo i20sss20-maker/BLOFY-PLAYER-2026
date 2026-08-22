@@ -7,6 +7,8 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -35,7 +37,7 @@ import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.provider.XtreamClient;
 import tv.blofy.commercial.ui.player.PlayerActivity;
 
-/** Three-pane live browser: categories, channels, and lightweight preview/EPG. */
+/** IBO/7up-style live TV: category rail -> channel list -> preview/EPG -> fullscreen player. */
 public final class LiveActivity extends LicensedActivity {
     private final ExecutorService worker = Executors.newFixedThreadPool(2);
     private final AtomicInteger generation = new AtomicInteger();
@@ -44,8 +46,9 @@ public final class LiveActivity extends LicensedActivity {
     private CategoryAdapter categoryAdapter;
     private ChannelAdapter channelAdapter;
     private ImageView previewLogo;
-    private TextView previewName, previewEpg, count;
-    private String activeCategory = "";
+    private TextView previewName, previewEpg, previewMeta, count;
+    private EditText search;
+    private String activeCategory = "", query = "";
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -58,75 +61,117 @@ public final class LiveActivity extends LicensedActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundResource(R.drawable.bg_blofy);
-        root.setPadding(dp(28), dp(22), dp(28), dp(24));
+        root.setPadding(dp(24), dp(18), dp(24), dp(22));
+        root.setFocusable(true);
+        root.setFocusableInTouchMode(true);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        top.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
 
-        TextView title = text("البث المباشر", 27, true);
+        TextView title = text("LIVE TV", 28, true);
         top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
         count = text("", 13, false);
         count.setTextColor(getColor(R.color.blofy_muted));
-        top.addView(count);
+        top.addView(count, new LinearLayout.LayoutParams(dp(125), ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        search = new EditText(this);
+        search.setHint("⌕  بحث في القنوات");
+        search.setSingleLine(true);
+        search.setTextColor(getColor(R.color.blofy_text));
+        search.setHintTextColor(getColor(R.color.blofy_muted));
+        search.setBackgroundResource(R.drawable.bg_home_status);
+        search.setPadding(dp(16), 0, dp(16), 0);
+        search.setShowSoftInputOnFocus(false);
+        search.setFocusable(true);
+        search.setFocusableInTouchMode(false);
+        top.addView(search, new LinearLayout.LayoutParams(dp(280), dp(48)));
+        search.setOnEditorActionListener((v, actionId, event) -> {
+            query = v.getText() == null ? "" : v.getText().toString().trim();
+            hideKeyboard();
+            loadChannels(activeCategory);
+            return true;
+        });
+        search.setOnClickListener(v -> showKeyboard());
+        search.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                showKeyboard(); return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (channelAdapter != null && channelAdapter.getItemCount() > 0) focus(channels, 0);
+                else focus(categories, 0);
+                return true;
+            }
+            return false;
+        });
 
         LinearLayout panes = new LinearLayout(this);
         panes.setOrientation(LinearLayout.HORIZONTAL);
         panes.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         LinearLayout.LayoutParams panesLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        panesLp.topMargin = dp(12);
+        panesLp.topMargin = dp(10);
         root.addView(panes, panesLp);
 
         categories = list();
         categories.setLayoutManager(new LinearLayoutManager(this));
-        LinearLayout.LayoutParams catLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.24f);
-        panes.addView(categories, catLp);
+        panes.addView(categories, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, .22f));
 
         channels = list();
         channels.setLayoutManager(new LinearLayoutManager(this));
-        LinearLayout.LayoutParams chLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.34f);
-        chLp.setMarginStart(dp(12));
+        LinearLayout.LayoutParams chLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, .34f);
+        chLp.setMarginStart(dp(10));
         panes.addView(channels, chLp);
 
         LinearLayout preview = new LinearLayout(this);
         preview.setOrientation(LinearLayout.VERTICAL);
         preview.setGravity(Gravity.CENTER_HORIZONTAL);
-        preview.setPadding(dp(24), dp(22), dp(24), dp(22));
+        preview.setPadding(dp(24), dp(24), dp(24), dp(20));
         preview.setBackgroundResource(R.drawable.bg_panel);
-        LinearLayout.LayoutParams prevLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.42f);
-        prevLp.setMarginStart(dp(14));
+        LinearLayout.LayoutParams prevLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, .44f);
+        prevLp.setMarginStart(dp(12));
         panes.addView(preview, prevLp);
+
+        TextView now = text("NOW PLAYING", 12, true);
+        now.setTextColor(getColor(R.color.blofy_muted));
+        now.setGravity(Gravity.CENTER);
+        preview.addView(now, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
 
         previewLogo = new ImageView(this);
         previewLogo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        preview.addView(previewLogo, new LinearLayout.LayoutParams(dp(190), dp(190)));
+        preview.addView(previewLogo, new LinearLayout.LayoutParams(dp(185), dp(170)));
 
         previewName = text("اختر قناة", 23, true);
         previewName.setGravity(Gravity.CENTER);
+        previewName.setMaxLines(2);
         LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        nameLp.topMargin = dp(18);
+        nameLp.topMargin = dp(14);
         preview.addView(previewName, nameLp);
 
+        previewMeta = text("", 13, false);
+        previewMeta.setTextColor(getColor(R.color.blofy_muted));
+        previewMeta.setGravity(Gravity.CENTER);
+        preview.addView(previewMeta, wrapTop(8));
+
         previewEpg = text("", 15, false);
-        previewEpg.setTextColor(getColor(R.color.blofy_muted));
+        previewEpg.setTextColor(getColor(R.color.blofy_text));
         previewEpg.setGravity(Gravity.CENTER);
         previewEpg.setMaxLines(4);
-        LinearLayout.LayoutParams epgLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        epgLp.topMargin = dp(14);
-        preview.addView(previewEpg, epgLp);
+        preview.addView(previewEpg, wrapTop(14));
 
-        TextView hint = text("OK للتشغيل  •  CH+ / CH- داخل المشغل", 12, false);
+        TextView hint = text("OK  تشغيل ملء الشاشة   •   ← رجوع للتصنيفات", 12, false);
         hint.setTextColor(getColor(R.color.blofy_muted));
         hint.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hintLp.topMargin = dp(24);
-        preview.addView(hint, hintLp);
+        preview.addView(hint, wrapTop(24));
 
         categoryAdapter = new CategoryAdapter();
         channelAdapter = new ChannelAdapter();
         categories.setAdapter(categoryAdapter);
         channels.setAdapter(channelAdapter);
+        root.requestFocus();
         return root;
     }
 
@@ -134,7 +179,8 @@ public final class LiveActivity extends LicensedActivity {
         RecyclerView view = new RecyclerView(this);
         view.setHasFixedSize(true);
         view.setItemAnimator(null);
-        view.setItemViewCacheSize(16);
+        view.setItemViewCacheSize(20);
+        view.setFocusable(false);
         return view;
     }
 
@@ -148,7 +194,7 @@ public final class LiveActivity extends LicensedActivity {
                 if (!rows.isEmpty()) {
                     activeCategory = rows.get(0).id;
                     loadChannels(activeCategory);
-                    categories.post(() -> focus(categories, 0));
+                    categories.postDelayed(() -> focus(categories, 0), 80);
                 }
             });
         });
@@ -157,13 +203,20 @@ public final class LiveActivity extends LicensedActivity {
     private void loadChannels(String categoryId) {
         activeCategory = categoryId == null ? "" : categoryId;
         int request = generation.incrementAndGet();
+        final String c = activeCategory;
+        final String q = query;
         worker.execute(() -> {
-            List<MediaRecord> rows = store.media("live", activeCategory, "", false, false, 500, 0);
+            List<MediaRecord> rows = store.media("live", c, q, false, false, 700, 0);
             runOnUiThread(() -> {
                 if (request != generation.get()) return;
                 channelAdapter.submit(rows);
                 count.setText(rows.size() + " قناة");
                 if (!rows.isEmpty()) showPreview(rows.get(0));
+                else {
+                    previewName.setText("لا توجد نتائج");
+                    previewMeta.setText("");
+                    previewEpg.setText("");
+                }
             });
         });
     }
@@ -171,6 +224,8 @@ public final class LiveActivity extends LicensedActivity {
     private void showPreview(MediaRecord item) {
         if (item == null) return;
         previewName.setText(item.name);
+        previewMeta.setText((item.extension == null || item.extension.isEmpty() ? "LIVE" : item.extension.toUpperCase())
+                + (item.directSource == null || item.directSource.isEmpty() ? "" : "  •  DIRECT"));
         previewEpg.setText("جلب دليل البرنامج…");
         BlofyImageLoader.poster(this, previewLogo, item.image);
         loadEpg(item);
@@ -179,21 +234,21 @@ public final class LiveActivity extends LicensedActivity {
     private void loadEpg(MediaRecord item) {
         final String requestedId = item.id;
         worker.execute(() -> {
-            String text = "البث المباشر";
+            String value = "البث المباشر";
             try {
                 ProviderProfile profile = ProviderProfileStore.load(this);
                 if (profile != null && profile.isXtream()) {
-                    JSONObject data = new XtreamClient(profile).epg(requestedId, 2);
+                    JSONObject data = new XtreamClient(profile).epg(requestedId, 3);
                     JSONArray rows = data.optJSONArray("epg_listings");
                     if (rows != null && rows.length() > 0) {
                         JSONObject current = rows.optJSONObject(0);
-                        if (current != null) text = current.optString("title", "البث المباشر");
+                        if (current != null) value = current.optString("title", "البث المباشر");
                     }
                 }
             } catch (Exception ignored) { }
-            final String value = text;
+            final String text = value;
             runOnUiThread(() -> {
-                if (channelAdapter.focusedId.equals(requestedId)) previewEpg.setText(value);
+                if (channelAdapter != null && requestedId.equals(channelAdapter.focusedId)) previewEpg.setText(text);
             });
         });
     }
@@ -204,7 +259,8 @@ public final class LiveActivity extends LicensedActivity {
                 .putExtra("type", "live")
                 .putExtra("id", item.id)
                 .putExtra("name", item.name)
-                .putExtra("extension", item.extension));
+                .putExtra("extension", item.extension)
+                .putExtra("direct_source", item.directSource));
     }
 
     private TextView rowText(ViewGroup parent) {
@@ -220,6 +276,7 @@ public final class LiveActivity extends LicensedActivity {
     }
 
     private void focus(RecyclerView list, int position) {
+        if (list == null || position < 0) return;
         list.scrollToPosition(position);
         list.post(() -> {
             RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(position);
@@ -232,6 +289,24 @@ public final class LiveActivity extends LicensedActivity {
         view.setText(value); view.setTextColor(getColor(R.color.blofy_text)); view.setTextSize(sp);
         if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return view;
+    }
+
+    private LinearLayout.LayoutParams wrapTop(int top) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(top); return lp;
+    }
+
+    private void showKeyboard() {
+        search.setShowSoftInputOnFocus(true);
+        search.requestFocus();
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    private void hideKeyboard() {
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(search.getWindowToken(), 0);
+        search.setShowSoftInputOnFocus(false);
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -248,14 +323,17 @@ public final class LiveActivity extends LicensedActivity {
             CategoryRecord row = rows.get(position);
             holder.text.setText(row.name + (row.count > 0 ? "  " + row.count : ""));
             holder.text.setOnFocusChangeListener((v, focused) -> {
-                v.animate().scaleX(focused ? 1.02f : 1f).scaleY(focused ? 1.02f : 1f).setDuration(60).start();
+                v.animate().scaleX(focused ? 1.025f : 1f).scaleY(focused ? 1.025f : 1f).setDuration(65).start();
                 if (focused && !row.id.equals(activeCategory)) loadChannels(row.id);
             });
             holder.text.setOnClickListener(v -> focus(channels, 0));
-            holder.text.setOnKeyListener((v, keyCode, event) -> event.getAction() == KeyEvent.ACTION_DOWN
-                    && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && focusChannels());
+            holder.text.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && channelAdapter.getItemCount() > 0) { focus(channels, 0); return true; }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP && holder.getBindingAdapterPosition() == 0) { search.requestFocus(); return true; }
+                return false;
+            });
         }
-        private boolean focusChannels() { if (channelAdapter.getItemCount() == 0) return false; focus(channels, 0); return true; }
         @Override public int getItemCount() { return rows.size(); }
         final class Holder extends RecyclerView.ViewHolder { final TextView text; Holder(TextView v) { super(v); text = v; } }
     }
@@ -271,15 +349,16 @@ public final class LiveActivity extends LicensedActivity {
         }
         @Override public void onBindViewHolder(@NonNull Holder holder, int position) {
             MediaRecord row = rows.get(position);
-            holder.text.setText((position + 1) + "   " + row.name);
+            holder.text.setText(String.format(java.util.Locale.US, "%03d   %s", position + 1, row.name));
             holder.text.setOnFocusChangeListener((v, focused) -> {
-                v.animate().scaleX(focused ? 1.018f : 1f).scaleY(focused ? 1.018f : 1f).setDuration(60).start();
+                v.animate().scaleX(focused ? 1.02f : 1f).scaleY(focused ? 1.02f : 1f).setDuration(65).start();
                 if (focused) { focusedId = row.id; showPreview(row); }
             });
             holder.text.setOnClickListener(v -> play(row));
             holder.text.setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { categories.requestFocus(); focus(categories, 0); return true; }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { focus(categories, 0); return true; }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP && holder.getBindingAdapterPosition() == 0) { search.requestFocus(); return true; }
                 return false;
             });
         }
@@ -290,7 +369,7 @@ public final class LiveActivity extends LicensedActivity {
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
-            finish(); return true;
+            hideKeyboard(); finish(); return true;
         }
         return super.dispatchKeyEvent(event);
     }
