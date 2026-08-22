@@ -43,7 +43,7 @@ public final class HomeActivity extends LicensedActivity {
     private View buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(42), dp(28), dp(42), dp(30));
+        root.setPadding(dp(42), dp(26), dp(42), dp(28));
         root.setBackgroundResource(R.drawable.bg_blofy);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
 
@@ -52,12 +52,12 @@ public final class HomeActivity extends LicensedActivity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         root.addView(header, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(86)));
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(82)));
 
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.blofy_brand);
         logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        header.addView(logo, new LinearLayout.LayoutParams(dp(76), dp(76)));
+        header.addView(logo, new LinearLayout.LayoutParams(dp(72), dp(72)));
 
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
@@ -74,36 +74,42 @@ public final class HomeActivity extends LicensedActivity {
 
         MaterialButton playlistsTop = tile("قوائم التشغيل");
         playlistsTop.setOnClickListener(v -> open(PlaylistsActivity.class));
-        header.addView(playlistsTop, new LinearLayout.LayoutParams(dp(176), dp(54)));
+        header.addView(playlistsTop, new LinearLayout.LayoutParams(dp(176), dp(52)));
 
         GridLayout grid = new GridLayout(this);
-        grid.setColumnCount(3);
+        grid.setColumnCount(4);
         grid.setRowCount(2);
         grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
         grid.setUseDefaultMargins(false);
         LinearLayout.LayoutParams gridLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-        gridLp.topMargin = dp(24);
+        gridLp.topMargin = dp(20);
         root.addView(grid, gridLp);
 
         MaterialButton live = tile("◉\nالبث المباشر");
         MaterialButton movies = tile("▶\nالأفلام");
         MaterialButton series = tile("▣\nالمسلسلات");
         MaterialButton favorites = tile("★\nالمفضلة");
+        MaterialButton history = tile("↶\nالسجل");
+        MaterialButton search = tile("⌕\nالبحث");
         MaterialButton playlists = tile("☰\nقوائم التشغيل");
         MaterialButton settings = tile("⚙\nالإعدادات");
 
         addCell(grid, live, 0, 0);
         addCell(grid, movies, 0, 1);
         addCell(grid, series, 0, 2);
-        addCell(grid, favorites, 1, 0);
-        addCell(grid, playlists, 1, 1);
-        addCell(grid, settings, 1, 2);
+        addCell(grid, favorites, 0, 3);
+        addCell(grid, history, 1, 0);
+        addCell(grid, search, 1, 1);
+        addCell(grid, playlists, 1, 2);
+        addCell(grid, settings, 1, 3);
 
         live.setOnClickListener(v -> open(LiveActivity.class));
         movies.setOnClickListener(v -> library("movies"));
         series.setOnClickListener(v -> library("series"));
-        favorites.setOnClickListener(v -> catalog("", true, false));
+        favorites.setOnClickListener(v -> catalog("", true, false, false));
+        history.setOnClickListener(v -> catalog("", false, true, false));
+        search.setOnClickListener(v -> catalog("", false, false, true));
         playlists.setOnClickListener(v -> open(PlaylistsActivity.class));
         settings.setOnClickListener(v -> open(SettingsActivity.class));
         live.post(live::requestFocus);
@@ -116,7 +122,7 @@ public final class HomeActivity extends LicensedActivity {
         GridLayout.LayoutParams lp = new GridLayout.LayoutParams(rowSpec, colSpec);
         lp.width = 0;
         lp.height = 0;
-        lp.setMargins(dp(9), dp(9), dp(9), dp(9));
+        lp.setMargins(dp(8), dp(8), dp(8), dp(8));
         grid.addView(view, lp);
     }
 
@@ -124,11 +130,11 @@ public final class HomeActivity extends LicensedActivity {
         MaterialButton button = new MaterialButton(this);
         button.setText(text);
         button.setTextColor(getColor(R.color.blofy_text));
-        button.setTextSize(19);
+        button.setTextSize(18);
         button.setGravity(Gravity.CENTER);
         button.setFocusable(true);
         button.setBackgroundResource(R.drawable.bg_home_status);
-        button.setPadding(dp(18), dp(16), dp(18), dp(16));
+        button.setPadding(dp(14), dp(14), dp(14), dp(14));
         button.setOnFocusChangeListener((v, focused) -> v.animate()
                 .scaleX(focused ? 1.035f : 1f)
                 .scaleY(focused ? 1.035f : 1f)
@@ -164,11 +170,12 @@ public final class HomeActivity extends LicensedActivity {
         startActivity(new Intent(this, LibraryActivity.class).putExtra("type", type));
     }
 
-    private void catalog(String type, boolean favorites, boolean history) {
+    private void catalog(String type, boolean favorites, boolean history, boolean focusSearch) {
         startActivity(new Intent(this, CatalogActivity.class)
                 .putExtra("type", type)
                 .putExtra("favorites", favorites)
-                .putExtra("history", history));
+                .putExtra("history", history)
+                .putExtra("focus_search", focusSearch));
     }
 
     private void open(Class<?> target) { startActivity(new Intent(this, target)); }
