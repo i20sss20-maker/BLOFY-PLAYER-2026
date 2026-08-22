@@ -40,10 +40,17 @@ jobs:
         env:
           BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
         run: gradle --no-daemon clean testReleaseUnitTest lintRelease assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+      - name: Upload unsigned release for offline signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOFY-PLAYER-UNSIGNED-COMMERCIAL-RELEASE
+          path: BLOFY-ANDROID-COMMERCIAL/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
       - name: Note production signing policy
         run: |
-          echo "Production signing key is intentionally NOT generated in CI."
-          echo "All future production updates must use the existing BLOFY production keystore backup."
+          echo "Production signing key is intentionally NOT stored in CI."
+          echo "Offline signing must use the existing BLOFY production keystore backup."
       - name: Upload reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
