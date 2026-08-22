@@ -12,6 +12,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.button.MaterialButton;
@@ -33,7 +34,7 @@ import tv.blofy.commercial.ui.discovery.DiscoveryActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
-/** Fast TV-first playlist manager with per-playlist readiness. */
+/** IBO/7up-style TV playlist manager: cards left, pairing/device info right. */
 public final class PlaylistsActivity extends AppCompatActivity {
     private LinearLayout playlistColumn;
     private TextView empty;
@@ -63,13 +64,13 @@ public final class PlaylistsActivity extends AppCompatActivity {
         left.setOrientation(LinearLayout.VERTICAL);
         left.setPadding(dp(24), dp(20), dp(24), dp(20));
         left.setBackgroundResource(R.drawable.bg_panel);
-        root.addView(left, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.67f));
+        root.addView(left, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.64f));
 
         TextView title = text("قوائم التشغيل", 30, true);
         title.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         left.addView(title, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
-        TextView subtitle = text("اختر قائمتك أو أضف قائمة جديدة", 14, false);
+        TextView subtitle = text("اختر القائمة • ضغط مطوّل للإدارة", 14, false);
         subtitle.setTextColor(getColor(R.color.blofy_muted));
         left.addView(subtitle, wrapTop(4));
 
@@ -94,47 +95,55 @@ public final class PlaylistsActivity extends AppCompatActivity {
         LinearLayout right = new LinearLayout(this);
         right.setOrientation(LinearLayout.VERTICAL);
         right.setGravity(Gravity.CENTER_HORIZONTAL);
-        right.setPadding(dp(28), dp(24), dp(28), dp(24));
-        LinearLayout.LayoutParams rightLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.33f);
+        right.setPadding(dp(28), dp(20), dp(28), dp(20));
+        right.setBackgroundResource(R.drawable.bg_panel);
+        LinearLayout.LayoutParams rightLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.36f);
         rightLp.setMarginStart(dp(20));
         root.addView(right, rightLp);
 
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.blofy_brand);
         logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        right.addView(logo, new LinearLayout.LayoutParams(dp(124), dp(124)));
+        right.addView(logo, new LinearLayout.LayoutParams(dp(100), dp(100)));
 
         ImageView qr = new ImageView(this);
         qr.setBackgroundColor(Color.WHITE);
         qr.setPadding(dp(8), dp(8), dp(8), dp(8));
         Bitmap qrBitmap = qr(pairingUrl(), 320);
         if (qrBitmap != null) qr.setImageBitmap(qrBitmap);
-        LinearLayout.LayoutParams qrLp = new LinearLayout.LayoutParams(dp(218), dp(218));
-        qrLp.topMargin = dp(12);
+        LinearLayout.LayoutParams qrLp = new LinearLayout.LayoutParams(dp(190), dp(190));
+        qrLp.topMargin = dp(8);
         right.addView(qr, qrLp);
 
-        TextView renew = text("إضافة / إدارة / تجديد", 17, true);
+        TextView renew = text("إضافة • إدارة • تجديد", 16, true);
         renew.setGravity(Gravity.CENTER);
-        right.addView(renew, wrapTop(14));
+        right.addView(renew, wrapTop(10));
 
-        TextView deviceLabel = text("رقم الجهاز", 13, false);
+        TextView deviceLabel = text("Device ID", 12, false);
         deviceLabel.setTextColor(getColor(R.color.blofy_muted));
         deviceLabel.setGravity(Gravity.CENTER);
-        right.addView(deviceLabel, wrapTop(20));
+        right.addView(deviceLabel, wrapTop(14));
 
-        TextView device = text(api.deviceId(), 18, true);
+        TextView device = text(api.deviceId(), 16, true);
         device.setGravity(Gravity.CENTER);
         device.setTextIsSelectable(true);
-        right.addView(device, wrapTop(4));
+        right.addView(device, wrapTop(2));
 
-        TextView hint = text("امسح QR من الجوال لإضافة قائمة جديدة أو تحديث بيانات جهازك.", 13, false);
+        TextView keyLabel = text("Device Key", 12, false);
+        keyLabel.setTextColor(getColor(R.color.blofy_muted));
+        keyLabel.setGravity(Gravity.CENTER);
+        right.addView(keyLabel, wrapTop(10));
+
+        TextView key = text(DeviceIdentity.key(this), 16, true);
+        key.setGravity(Gravity.CENTER);
+        key.setTextIsSelectable(true);
+        right.addView(key, wrapTop(2));
+
+        TextView hint = text("امسح QR من الجوال لإضافة أو تحديث القائمة لهذا الجهاز.", 12, false);
         hint.setTextColor(getColor(R.color.blofy_muted));
         hint.setGravity(Gravity.CENTER);
         hint.setMaxLines(3);
-        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        hintLp.topMargin = dp(22);
-        right.addView(hint, hintLp);
+        right.addView(hint, wrapTop(14));
         return root;
     }
 
@@ -156,19 +165,42 @@ public final class PlaylistsActivity extends AppCompatActivity {
             card.setSelected(active != null && active.id.equals(playlist.id));
             card.setOnClickListener(v -> activate(playlist));
             card.setOnLongClickListener(v -> {
-                PlaylistStateStore.clear(this, playlist.id);
-                CompatibilityProfileStore.remove(this, playlist.id);
-                PlaylistRepository.remove(this, playlist.id);
-                renderPlaylists();
+                showManageDialog(playlist);
                 return true;
             });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(82));
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(86));
             lp.bottomMargin = dp(10);
             playlistColumn.addView(card, lp);
             if (focusTarget == null || card.isSelected()) focusTarget = card;
         }
         if (focusTarget != null) focusTarget.post(focusTarget::requestFocus);
+    }
+
+    private void showManageDialog(PlaylistProfile playlist) {
+        new AlertDialog.Builder(this)
+                .setTitle("إدارة القائمة")
+                .setItems(new String[]{"تحديث القائمة", "حذف القائمة", "إلغاء"}, (dialog, which) -> {
+                    if (which == 0) {
+                        PlaylistRepository.setActive(this, playlist.id);
+                        startActivity(new Intent(this, SyncActivity.class).putExtra("playlist_id", playlist.id));
+                    } else if (which == 1) {
+                        confirmDelete(playlist);
+                    }
+                }).show();
+    }
+
+    private void confirmDelete(PlaylistProfile playlist) {
+        new AlertDialog.Builder(this)
+                .setTitle("حذف قائمة التشغيل؟")
+                .setMessage("سيتم حذف هذه القائمة وبيانات توافقها المحلية فقط.")
+                .setNegativeButton("إلغاء", null)
+                .setPositiveButton("حذف", (dialog, which) -> {
+                    PlaylistStateStore.clear(this, playlist.id);
+                    CompatibilityProfileStore.remove(this, playlist.id);
+                    PlaylistRepository.remove(this, playlist.id);
+                    renderPlaylists();
+                }).show();
     }
 
     private String label(PlaylistProfile playlist) {
@@ -210,8 +242,8 @@ public final class PlaylistsActivity extends AppCompatActivity {
         button.setBackgroundResource(R.drawable.bg_home_status);
         button.setPadding(dp(22), dp(10), dp(22), dp(10));
         button.setOnFocusChangeListener((v, focused) -> v.animate()
-                .scaleX(focused ? 1.015f : 1f)
-                .scaleY(focused ? 1.015f : 1f)
+                .scaleX(focused ? 1.02f : 1f)
+                .scaleY(focused ? 1.02f : 1f)
                 .setDuration(70).start());
         return button;
     }
@@ -222,7 +254,6 @@ public final class PlaylistsActivity extends AppCompatActivity {
         view.setTextColor(getColor(R.color.blofy_text));
         view.setTextSize(sp);
         if (bold) view.setTypeface(view.getTypeface(), android.graphics.Typeface.BOLD);
-        view.setTextDirection(View.TEXT_DIRECTION_RTL);
         return view;
     }
 
