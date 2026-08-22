@@ -27,14 +27,13 @@ import tv.blofy.commercial.core.DeviceIdentity;
 import tv.blofy.commercial.provider.CompatibilityProfileStore;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.PlaylistStateStore;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
 import tv.blofy.commercial.ui.discovery.DiscoveryActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
+import tv.blofy.commercial.ui.sync.SyncActivity;
 
-/**
- * TV-first playlist manager inspired by the practical flow of commercial IPTV players.
- * It deliberately keeps artwork and animations minimal so remote navigation stays fast.
- */
+/** Fast TV-first playlist manager with per-playlist readiness. */
 public final class PlaylistsActivity extends AppCompatActivity {
     private LinearLayout playlistColumn;
     private TextView empty;
@@ -116,8 +115,7 @@ public final class PlaylistsActivity extends AppCompatActivity {
 
         TextView renew = text("إضافة / إدارة / تجديد", 17, true);
         renew.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams renewLp = wrapTop(14);
-        right.addView(renew, renewLp);
+        right.addView(renew, wrapTop(14));
 
         TextView deviceLabel = text("رقم الجهاز", 13, false);
         deviceLabel.setTextColor(getColor(R.color.blofy_muted));
@@ -133,10 +131,10 @@ public final class PlaylistsActivity extends AppCompatActivity {
         hint.setTextColor(getColor(R.color.blofy_muted));
         hint.setGravity(Gravity.CENTER);
         hint.setMaxLines(3);
-        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         hintLp.topMargin = dp(22);
         right.addView(hint, hintLp);
-
         return root;
     }
 
@@ -150,7 +148,7 @@ public final class PlaylistsActivity extends AppCompatActivity {
             return;
         }
 
-        MaterialButton first = null;
+        MaterialButton focusTarget = null;
         for (PlaylistProfile playlist : rows) {
             MaterialButton card = actionButton(label(playlist));
             card.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
@@ -158,17 +156,19 @@ public final class PlaylistsActivity extends AppCompatActivity {
             card.setSelected(active != null && active.id.equals(playlist.id));
             card.setOnClickListener(v -> activate(playlist));
             card.setOnLongClickListener(v -> {
+                PlaylistStateStore.clear(this, playlist.id);
+                CompatibilityProfileStore.remove(this, playlist.id);
                 PlaylistRepository.remove(this, playlist.id);
                 renderPlaylists();
                 return true;
             });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(78));
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(82));
             lp.bottomMargin = dp(10);
             playlistColumn.addView(card, lp);
-            if (first == null || card.isSelected()) first = card;
+            if (focusTarget == null || card.isSelected()) focusTarget = card;
         }
-        if (first != null) first.post(first::requestFocus);
+        if (focusTarget != null) focusTarget.post(focusTarget::requestFocus);
     }
 
     private String label(PlaylistProfile playlist) {
@@ -177,15 +177,20 @@ public final class PlaylistsActivity extends AppCompatActivity {
             name = playlist.provider.isXtream() ? playlist.provider.serverUrl : "M3U Playlist";
         }
         boolean selected = active != null && active.id.equals(playlist.id);
+        boolean ready = PlaylistStateStore.isReady(this, playlist.id);
+        boolean discovered = CompatibilityProfileStore.load(this, playlist.id) != null;
         String type = playlist.provider.isXtream() ? "Xtream" : "M3U";
-        return (selected ? "●  " : "") + name + "\n" + type + (selected ? "  •  نشطة" : "");
+        String state = ready ? "جاهزة" : discovered ? "تحتاج تحديث" : "جديدة";
+        return (selected ? "●  " : "") + name + "\n" + type + "  •  " + state;
     }
 
     private void activate(PlaylistProfile playlist) {
         PlaylistRepository.setActive(this, playlist.id);
-        getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                .putBoolean("catalog_ready", false).apply();
-        startActivity(new Intent(this, DiscoveryActivity.class).putExtra("playlist_id", playlist.id));
+        Class<?> target;
+        if (PlaylistStateStore.isReady(this, playlist.id)) target = HomeActivity.class;
+        else if (CompatibilityProfileStore.load(this, playlist.id) != null) target = SyncActivity.class;
+        else target = DiscoveryActivity.class;
+        startActivity(new Intent(this, target).putExtra("playlist_id", playlist.id));
     }
 
     private String pairingUrl() {
@@ -228,9 +233,7 @@ public final class PlaylistsActivity extends AppCompatActivity {
         return lp;
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     private static Bitmap qr(String value, int size) {
         try {
@@ -242,20 +245,14 @@ public final class PlaylistsActivity extends AppCompatActivity {
             Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565);
             bitmap.setPixels(pixels, 0, size, 0, 0, size, size);
             return bitmap;
-        } catch (Exception ignored) {
-            return null;
-        }
+        } catch (Exception ignored) { return null; }
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN
-                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
-                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
-            if (PlaylistRepository.active(this) != null) {
-                startActivity(new Intent(this, HomeActivity.class));
-            }
-            finish();
-            return true;
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            if (PlaylistRepository.active(this) != null) startActivity(new Intent(this, HomeActivity.class));
+            finish(); return true;
         }
         return super.dispatchKeyEvent(event);
     }
