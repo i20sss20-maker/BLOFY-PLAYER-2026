@@ -16,6 +16,7 @@ import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.databinding.ActivityBootBinding;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.PlaylistStateStore;
 import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
@@ -44,7 +45,6 @@ public final class BootActivity extends AppCompatActivity {
     private void boot() {
         worker.execute(() -> {
             ApiClient api = new ApiClient(this);
-            boolean hasCatalog = hasLocalCatalog();
             try {
                 stage(14, "فحص خدمة التفعيل…");
                 api.get("/api/health");
@@ -71,12 +71,9 @@ public final class BootActivity extends AppCompatActivity {
                     if (ProviderProfileStore.importFromBootstrap(this, bootstrap)) {
                         ProviderProfile imported = ProviderProfileStore.load(this);
                         if (imported != null) ensurePlaylist(imported);
-                        getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                                .putBoolean("catalog_ready", false).apply();
-                        hasCatalog = false;
                     }
                 } catch (Exception ignored) {
-                    // Keep local playlists when the control plane is temporarily unavailable.
+                    // Local playlists remain usable while the control plane is temporarily unavailable.
                 }
 
                 stage(82, "فحص قوائم التشغيل…");
@@ -91,7 +88,7 @@ public final class BootActivity extends AppCompatActivity {
                 open(PlaylistsActivity.class);
             } catch (Exception error) {
                 PlaylistProfile playlist = PlaylistRepository.active(this);
-                if (hasCatalog && playlist != null) {
+                if (playlist != null && PlaylistStateStore.isReady(this, playlist.id)) {
                     stage(100, "فتح المكتبة المحلية");
                     open(HomeActivity.class);
                     return;
@@ -110,6 +107,7 @@ public final class BootActivity extends AppCompatActivity {
         if (active != null && sameProvider(active.provider, provider)) return active;
         PlaylistProfile created = PlaylistProfile.create(provider);
         PlaylistRepository.upsert(this, created, true);
+        PlaylistStateStore.markSyncing(this, created.id);
         return created;
     }
 
@@ -118,13 +116,6 @@ public final class BootActivity extends AppCompatActivity {
         return a.kind.equals(b.kind) && a.serverUrl.equals(b.serverUrl)
                 && a.username.equals(b.username) && a.password.equals(b.password)
                 && a.playlistUrl.equals(b.playlistUrl);
-    }
-
-    private boolean hasLocalCatalog() {
-        return getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                .getBoolean("catalog_ready", false)
-                && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                .getInt("catalog_schema", 0) >= 4;
     }
 
     private void openActivation(String message) {
