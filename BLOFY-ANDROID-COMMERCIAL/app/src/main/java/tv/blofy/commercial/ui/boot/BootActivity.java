@@ -14,15 +14,13 @@ import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.DeviceIdentity;
 import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.databinding.ActivityBootBinding;
-import tv.blofy.commercial.provider.CompatibilityProfileStore;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
 import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
-import tv.blofy.commercial.ui.discovery.DiscoveryActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
-import tv.blofy.commercial.ui.sync.SyncActivity;
+import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 
 public final class BootActivity extends AppCompatActivity {
     private ActivityBootBinding binding;
@@ -81,7 +79,7 @@ public final class BootActivity extends AppCompatActivity {
                     // Keep local playlists when the control plane is temporarily unavailable.
                 }
 
-                stage(80, "فحص بيانات الباقة…");
+                stage(82, "فحص قوائم التشغيل…");
                 PlaylistProfile playlist = PlaylistRepository.active(this);
                 if (playlist == null) playlist = PlaylistRepository.importLegacySingleProfile(this);
                 if (playlist == null) {
@@ -89,16 +87,17 @@ public final class BootActivity extends AppCompatActivity {
                     return;
                 }
 
-                boolean compatible = CompatibilityProfileStore.load(this, playlist.id) != null;
-                stage(94, "فحص الكتالوج المحلي…");
                 stage(100, "جاهز");
-                if (!compatible) open(DiscoveryActivity.class);
-                else open(hasCatalog ? HomeActivity.class : SyncActivity.class);
+                open(PlaylistsActivity.class);
             } catch (Exception error) {
                 PlaylistProfile playlist = PlaylistRepository.active(this);
                 if (hasCatalog && playlist != null) {
                     stage(100, "فتح المكتبة المحلية");
                     open(HomeActivity.class);
+                    return;
+                }
+                if (playlist != null) {
+                    open(PlaylistsActivity.class);
                     return;
                 }
                 openActivation(error.getMessage());
