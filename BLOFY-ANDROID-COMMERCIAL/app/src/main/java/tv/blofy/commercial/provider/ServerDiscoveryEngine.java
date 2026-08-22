@@ -110,7 +110,8 @@ public final class ServerDiscoveryEngine {
         Probe m3u = probe(get, "application/x-mpegURL,text/plain,*/*", true);
         progress(listener, 70);
         if (!m3u.ok || !looksLikeM3u(m3u.preview)) {
-            throw new DiscoveryException(auth.status > 0 ? auth.status : m3u.status,
+            int status = auth.status > 0 ? auth.status : m3u.status;
+            throw new DiscoveryException(status,
                     "Provider rejected both Xtream API and M3U compatibility probes.");
         }
         progress(listener, 90);
@@ -159,7 +160,11 @@ public final class ServerDiscoveryEngine {
                 System.currentTimeMillis());
     }
 
-    private Probe probe(HttpUrl url, String accept, boolean playlist) throws IOException {
+    /**
+     * Compatibility probe that never aborts the whole discovery because one identity timed out
+     * or had its connection reset. Every identity gets a chance before we return failure.
+     */
+    private Probe probe(HttpUrl url, String accept, boolean playlist) {
         Probe last = new Probe();
         for (String ua : USER_AGENTS) {
             Request.Builder request = new Request.Builder().url(url)
@@ -178,18 +183,25 @@ public final class ServerDiscoveryEngine {
             }
             if (playlist) request.header("Range", "bytes=0-49151");
 
+            Probe current = new Probe();
+            current.userAgent = ua;
+            current.origin = ua.startsWith("Mozilla/") ? origin : "";
+            current.referer = ua.startsWith("Mozilla/") ? referer : "";
             try (Response response = http.newCall(request.build()).execute()) {
-                Probe current = new Probe();
                 current.status = response.code();
-                current.userAgent = ua;
-                current.origin = ua.startsWith("Mozilla/") ? origin : "";
-                current.referer = ua.startsWith("Mozilla/") ? referer : "";
                 current.finalHost = response.request().url().host();
                 current.ok = response.isSuccessful();
                 if (response.body() != null) current.preview = readPreview(response.body().source());
                 last = current;
                 if (current.ok) return current;
                 if (current.status != 403 && current.status != 406) return current;
+            } catch (IOException networkError) {
+                current.status = -1;
+                current.ok = false;
+                current.finalHost = url.host();
+                current.networkError = networkError.getClass().getSimpleName();
+                last = current;
+                // Continue to the next identity instead of aborting discovery.
             }
         }
         return last;
@@ -247,6 +259,7 @@ public final class ServerDiscoveryEngine {
         String referer = "";
         String finalHost = "";
         String preview = "";
+        String networkError = "";
     }
 
     public static final class DiscoveryException extends Exception {
