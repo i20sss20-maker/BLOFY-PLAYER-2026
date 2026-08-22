@@ -22,6 +22,7 @@ import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
 import tv.blofy.commercial.ui.catalog.CatalogActivity;
+import tv.blofy.commercial.ui.live.LiveActivity;
 import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 import tv.blofy.commercial.ui.settings.SettingsActivity;
 
@@ -98,7 +99,7 @@ public final class HomeActivity extends LicensedActivity {
         addCell(grid, playlists, 1, 1);
         addCell(grid, settings, 1, 2);
 
-        live.setOnClickListener(v -> catalog("live", false, false));
+        live.setOnClickListener(v -> open(LiveActivity.class));
         movies.setOnClickListener(v -> catalog("movies", false, false));
         series.setOnClickListener(v -> catalog("series", false, false));
         favorites.setOnClickListener(v -> catalog("", true, false));
