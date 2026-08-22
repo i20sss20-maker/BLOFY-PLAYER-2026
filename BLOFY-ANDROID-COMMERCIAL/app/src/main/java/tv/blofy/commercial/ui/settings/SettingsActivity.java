@@ -2,129 +2,180 @@ package tv.blofy.commercial.ui.settings;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.widget.ArrayAdapter;
-import android.widget.AdapterView;
+import android.graphics.Typeface;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.widget.GridLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import androidx.appcompat.app.AlertDialog;
+
+import com.google.android.material.button.MaterialButton;
 
 import tv.blofy.commercial.R;
 import tv.blofy.commercial.core.LicensedActivity;
-import tv.blofy.commercial.databinding.ActivitySettingsBinding;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
+import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
+/** Fast TV settings grid inspired by practical commercial IPTV players. */
 public final class SettingsActivity extends LicensedActivity {
-    private ActivitySettingsBinding binding;
     private SharedPreferences prefs;
+    private MaterialButton playerButton, qualityButton, bufferButton, subtitlesButton, autoplayButton;
 
-    @Override protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        binding = ActivitySettingsBinding.inflate(getLayoutInflater()); setContentView(binding.getRoot());
+    private static final String[] PLAYER_LABELS = {
+            "تلقائي", "Media3", "LibVLC", "MX Player", "MX Player Pro", "VLC", "أي مشغل خارجي"
+    };
+    private static final String[] PLAYER_VALUES = {
+            "auto", "media3", "libvlc", "mx_free", "mx_pro", "vlc_external", "external"
+    };
+
+    @Override protected void onCreate(Bundle state) {
+        super.onCreate(state);
         prefs = getSharedPreferences("blofy_player_settings", MODE_PRIVATE);
-        String[] playerLabels = {"تلقائي", "Media3", "LibVLC", "MX Player", "MX Player Pro", "VLC", "أي مشغل خارجي"};
-        String[] playerValues = {"auto", "media3", "libvlc", "mx_free", "mx_pro", "vlc_external", "external"};
-        ArrayAdapter<String> playerAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, playerLabels);
-        playerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        binding.playerEngine.setAdapter(playerAdapter);
-        String savedPlayer = prefs.getString("player_engine", "auto");
-        int selectedPlayer = 0;
-        for (int i = 0; i < playerValues.length; i++) if (playerValues[i].equals(savedPlayer)) selectedPlayer = i;
-        binding.playerEngine.setSelection(selectedPlayer, false);
-        renderPlayer(savedPlayer);
-        binding.playerEngine.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
-                String value = playerValues[Math.max(0, Math.min(position, playerValues.length - 1))];
-                prefs.edit().putString("player_engine", value).apply();
-                renderPlayer(value);
-            }
-            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        setContentView(buildUi());
+        refreshLabels();
+        playerButton.post(playerButton::requestFocus);
+    }
+
+    private View buildUi() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(40), dp(28), dp(40), dp(30));
+        root.setBackgroundResource(R.drawable.bg_blofy);
+
+        TextView title = new TextView(this);
+        title.setText("الإعدادات");
+        title.setTextColor(getColor(R.color.blofy_text));
+        title.setTextSize(29);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.addView(title, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58)));
+
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(3);
+        grid.setRowCount(3);
+        LinearLayout.LayoutParams gridLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        gridLp.topMargin = dp(14);
+        root.addView(grid, gridLp);
+
+        playerButton = tile("");
+        qualityButton = tile("");
+        bufferButton = tile("");
+        subtitlesButton = tile("");
+        autoplayButton = tile("");
+        MaterialButton sync = tile("↻\nتحديث القائمة");
+        MaterialButton playlists = tile("☰\nقوائم التشغيل");
+        MaterialButton account = tile("◇\nالجهاز والتفعيل");
+        MaterialButton back = tile("←\nرجوع");
+
+        add(grid, playerButton, 0, 0); add(grid, qualityButton, 0, 1); add(grid, bufferButton, 0, 2);
+        add(grid, subtitlesButton, 1, 0); add(grid, autoplayButton, 1, 1); add(grid, sync, 1, 2);
+        add(grid, playlists, 2, 0); add(grid, account, 2, 1); add(grid, back, 2, 2);
+
+        playerButton.setOnClickListener(v -> choosePlayer());
+        qualityButton.setOnClickListener(v -> chooseQuality());
+        bufferButton.setOnClickListener(v -> chooseBuffer());
+        subtitlesButton.setOnClickListener(v -> {
+            prefs.edit().putBoolean("subtitles", !prefs.getBoolean("subtitles", true)).apply();
+            refreshLabels();
         });
+        autoplayButton.setOnClickListener(v -> {
+            prefs.edit().putBoolean("autoplay", !prefs.getBoolean("autoplay", true)).apply();
+            refreshLabels();
+        });
+        sync.setOnClickListener(v -> startActivity(new Intent(this, SyncActivity.class)));
+        playlists.setOnClickListener(v -> startActivity(new Intent(this, PlaylistsActivity.class)));
+        account.setOnClickListener(v -> startActivity(new Intent(this, ActivationActivity.class)
+                .putExtra("force_form", true)));
+        back.setOnClickListener(v -> finish());
+        return root;
+    }
+
+    private void choosePlayer() {
+        String saved = prefs.getString("player_engine", "auto");
+        int checked = indexOf(PLAYER_VALUES, saved);
+        new AlertDialog.Builder(this)
+                .setTitle("مشغل الفيديو")
+                .setSingleChoiceItems(PLAYER_LABELS, checked, (dialog, which) -> {
+                    prefs.edit().putString("player_engine", PLAYER_VALUES[which]).apply();
+                    refreshLabels();
+                    dialog.dismiss();
+                }).show();
+    }
+
+    private void chooseQuality() {
+        String[] labels = {"تلقائي", "HD حتى 1080p", "SD حتى 480p"};
+        String[] values = {"auto", "hd", "sd"};
+        int checked = indexOf(values, prefs.getString("quality", "auto"));
+        new AlertDialog.Builder(this).setTitle("الجودة القصوى")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    prefs.edit().putString("quality", values[which]).apply();
+                    refreshLabels(); dialog.dismiss();
+                }).show();
+    }
+
+    private void chooseBuffer() {
+        String[] labels = {"بدء سريع", "أكثر ثباتًا"};
+        String[] values = {"fast", "stable"};
+        int checked = indexOf(values, prefs.getString("buffer", "fast"));
+        new AlertDialog.Builder(this).setTitle("التخزين المؤقت")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    prefs.edit().putString("buffer", values[which]).apply();
+                    refreshLabels(); dialog.dismiss();
+                }).show();
+    }
+
+    private void refreshLabels() {
+        if (playerButton == null) return;
+        String engine = prefs.getString("player_engine", "auto");
+        int engineIndex = indexOf(PLAYER_VALUES, engine);
+        playerButton.setText("▶\nالمشغل\n" + PLAYER_LABELS[engineIndex]);
         String quality = prefs.getString("quality", "auto");
-        binding.quality.check("sd".equals(quality) ? R.id.sdQuality : "hd".equals(quality) ? R.id.hdQuality : R.id.autoQuality);
-        binding.buffer.check("stable".equals(prefs.getString("buffer", "fast")) ? R.id.stableBuffer : R.id.fastBuffer);
-        binding.subtitles.setChecked(prefs.getBoolean("subtitles", true)); binding.autoplay.setChecked(prefs.getBoolean("autoplay", true));
-        renderQuality(quality);
-        renderBuffer(prefs.getString("buffer", "fast"));
-        binding.quality.addOnButtonCheckedListener((g,id,checked)->{
-            if (!checked) return;
-            String selected = id == R.id.sdQuality ? "sd" : id == R.id.hdQuality ? "hd" : "auto";
-            prefs.edit().putString("quality", selected).apply();
-            renderQuality(selected);
-        });
-        binding.buffer.addOnButtonCheckedListener((g,id,checked)->{
-            if (!checked) return;
-            String selected = id == R.id.stableBuffer ? "stable" : "fast";
-            prefs.edit().putString("buffer", selected).apply();
-            renderBuffer(selected);
-        });
-        binding.subtitles.setOnCheckedChangeListener((v,c)->prefs.edit().putBoolean("subtitles",c).apply());
-        binding.autoplay.setOnCheckedChangeListener((v,c)->prefs.edit().putBoolean("autoplay",c).apply());
-        binding.back.setOnClickListener(v -> finish());
-        binding.sync.setOnClickListener(v->startActivity(new Intent(this, SyncActivity.class)));
-        binding.account.setOnClickListener(v -> startActivity(new Intent(this, ActivationActivity.class)
-                .putExtra("force_form", true)
-                .putExtra("boot_error", "يمكنك تجديد التفعيل أو تحديث بيانات الباقة من هنا.")));
-        installFocusFeedback(binding.back, binding.autoQuality, binding.hdQuality, binding.sdQuality,
-                binding.playerEngine, binding.fastBuffer, binding.stableBuffer, binding.subtitles, binding.autoplay,
-                binding.sync, binding.account);
-
-        // A TV remote needs a deterministic first target. Material toggle groups
-        // do not consistently choose the checked child on every Android TV OEM.
-        binding.getRoot().post(() -> {
-            int checked = binding.quality.getCheckedButtonId();
-            View target = checked == View.NO_ID ? binding.autoQuality : binding.getRoot().findViewById(checked);
-            if (target != null) target.requestFocus();
-        });
+        qualityButton.setText("▣\nالجودة\n" + ("hd".equals(quality) ? "HD" : "sd".equals(quality) ? "SD" : "تلقائي"));
+        bufferButton.setText("≈\nBuffer\n" + ("stable".equals(prefs.getString("buffer", "fast")) ? "ثابت" : "سريع"));
+        subtitlesButton.setText("CC\nالترجمة\n" + (prefs.getBoolean("subtitles", true) ? "تشغيل" : "إيقاف"));
+        autoplayButton.setText("▷\nتشغيل تلقائي\n" + (prefs.getBoolean("autoplay", true) ? "تشغيل" : "إيقاف"));
     }
 
-    private void renderPlayer(String value) {
-        String text;
-        switch (value) {
-            case "media3": text = "Media3 داخلي • المحرك الأساسي السريع"; break;
-            case "libvlc": text = "LibVLC داخلي • توافق واسع مع الصيغ"; break;
-            case "mx_free": text = "MX Player خارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;
-            case "mx_pro": text = "MX Player Pro خارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;
-            case "vlc_external": text = "VLC الخارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;
-            case "external": text = "يفتح قائمة المشغلات المثبتة على الجهاز"; break;
-            default: text = "تلقائي • Media3 أولًا ثم LibVLC عند مشاكل الصيغة"; break;
-        }
-        binding.playerEngineDescription.setText(text);
+    private MaterialButton tile(String text) {
+        MaterialButton button = new MaterialButton(this);
+        button.setText(text);
+        button.setTextColor(getColor(R.color.blofy_text));
+        button.setTextSize(16);
+        button.setGravity(Gravity.CENTER);
+        button.setFocusable(true);
+        button.setBackgroundResource(R.drawable.bg_home_status);
+        button.setPadding(dp(14), dp(12), dp(14), dp(12));
+        button.setOnFocusChangeListener((v, focused) -> v.animate()
+                .scaleX(focused ? 1.03f : 1f).scaleY(focused ? 1.03f : 1f)
+                .setDuration(70).start());
+        return button;
     }
 
-    private void renderQuality(String quality) {
-        if ("sd".equals(quality)) {
-            binding.qualityDescription.setText("SD • حد أقصى 480p لتقليل استهلاك الشبكة");
-        } else if ("hd".equals(quality)) {
-            binding.qualityDescription.setText("HD • حد أقصى 1080p عند توفره من الباقة");
-        } else {
-            binding.qualityDescription.setText("تلقائي • يختار Media3 أفضل جودة مناسبة للشبكة");
-        }
+    private void add(GridLayout grid, View view, int row, int col) {
+        GridLayout.LayoutParams lp = new GridLayout.LayoutParams(GridLayout.spec(row, 1f), GridLayout.spec(col, 1f));
+        lp.width = 0; lp.height = 0;
+        lp.setMargins(dp(8), dp(8), dp(8), dp(8));
+        grid.addView(view, lp);
     }
 
-    private void renderBuffer(String buffer) {
-        binding.bufferDescription.setText("stable".equals(buffer)
-                ? "أكثر ثباتًا • مخزن أكبر للشبكات المتذبذبة"
-                : "بدء سريع • مخزن قصير لفتح القناة بأسرع وقت");
+    private static int indexOf(String[] values, String target) {
+        for (int i = 0; i < values.length; i++) if (values[i].equals(target)) return i;
+        return 0;
     }
 
-    private static void installFocusFeedback(View... controls) {
-        for (View control : controls) {
-            control.setOnFocusChangeListener((view, focused) -> view.animate()
-                    .scaleX(focused ? 1.025f : 1f)
-                    .scaleY(focused ? 1.025f : 1f)
-                    .translationZ(focused ? 10f : 0f)
-                    .setDuration(110)
-                    .start());
-        }
-    }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN
-                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
-                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
-            finish();
-            return true;
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            finish(); return true;
         }
         return super.dispatchKeyEvent(event);
     }
