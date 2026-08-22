@@ -1,4 +1,4 @@
-name: Build BLOFY Commercial Release
+name: Validate BLOFY Commercial Release
 
 on:
   workflow_dispatch:
@@ -12,8 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  commercial-release:
-    name: Signed Commercial Release APK
+  commercial-release-validation:
+    name: Commercial Release Validation
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -25,81 +25,25 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
-
       - name: Test BLOFY service contracts
         working-directory: BLOFY-WEB-2026/web-test
         run: |
           node --check server.mjs
           node --test --test-concurrency=1 test/*.test.mjs
-
       - name: Verify commercial source
         run: |
           test -f BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player/PlayerActivity.java
           ! grep -R "android.webkit.WebView" BLOFY-ANDROID-COMMERCIAL/app/src/main/java
           grep -R "androidx.media3" BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player
-
-      - name: Test and build release
+      - name: Validate release build
         working-directory: BLOFY-ANDROID-COMMERCIAL
         env:
           BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
         run: gradle --no-daemon clean testReleaseUnitTest lintRelease assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
-
-      - name: Generate one-time production signing key and sign release
-        shell: bash
+      - name: Note production signing policy
         run: |
-          set -euo pipefail
-          mkdir -p release-output
-          PASS="$(openssl rand -hex 24)"
-          echo "::add-mask::$PASS"
-          ALIAS="blofy_release"
-          KEYSTORE="release-output/BLOFY-PLAYER-PRODUCTION.keystore"
-          keytool -genkeypair -v \
-            -keystore "$KEYSTORE" \
-            -alias "$ALIAS" \
-            -keyalg RSA \
-            -keysize 4096 \
-            -validity 10000 \
-            -storepass "$PASS" \
-            -keypass "$PASS" \
-            -dname "CN=BLOFY PLAYER, OU=BLOFY, O=BLOFY, L=Al Madinah, ST=Al Madinah, C=SA"
-
-          BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          ZIPALIGN="$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign"
-          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          UNSIGNED="BLOFY-ANDROID-COMMERCIAL/app/build/outputs/apk/release/app-release-unsigned.apk"
-          ALIGNED="release-output/BLOFY-PLAYER-COMMERCIAL-RELEASE-aligned.apk"
-          SIGNED="release-output/BLOFY-PLAYER-COMMERCIAL-RELEASE.apk"
-
-          test -f "$UNSIGNED"
-          "$ZIPALIGN" -f -p 4 "$UNSIGNED" "$ALIGNED"
-          "$APKSIGNER" sign \
-            --ks "$KEYSTORE" \
-            --ks-key-alias "$ALIAS" \
-            --ks-pass "pass:$PASS" \
-            --key-pass "pass:$PASS" \
-            --out "$SIGNED" \
-            "$ALIGNED"
-          "$APKSIGNER" verify --verbose --print-certs "$SIGNED" | tee release-output/signing-info.txt
-          keytool -list -v -keystore "$KEYSTORE" -alias "$ALIAS" -storepass "$PASS" >> release-output/signing-info.txt
-          printf '%s\n' "$PASS" > release-output/keystore-password.txt
-          printf '%s\n' "$ALIAS" > release-output/keystore-alias.txt
-          sha256sum "$SIGNED" > release-output/BLOFY-PLAYER-COMMERCIAL-RELEASE.sha256
-          rm -f "$ALIGNED"
-
-      - name: Upload signed commercial release
-        uses: actions/upload-artifact@v4
-        with:
-          name: BLOFY-PLAYER-SIGNED-COMMERCIAL-RELEASE
-          path: |
-            release-output/BLOFY-PLAYER-COMMERCIAL-RELEASE.apk
-            release-output/BLOFY-PLAYER-COMMERCIAL-RELEASE.sha256
-            release-output/signing-info.txt
-            release-output/BLOFY-PLAYER-PRODUCTION.keystore
-            release-output/keystore-password.txt
-            release-output/keystore-alias.txt
-          if-no-files-found: error
-          retention-days: 30
-
+          echo "Production signing key is intentionally NOT generated in CI."
+          echo "All future production updates must use the existing BLOFY production keystore backup."
       - name: Upload reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
