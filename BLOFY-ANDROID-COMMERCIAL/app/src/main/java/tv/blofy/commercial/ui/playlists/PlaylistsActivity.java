@@ -185,9 +185,7 @@ public final class PlaylistsActivity extends AppCompatActivity {
         PlaylistRepository.setActive(this, playlist.id);
         getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
                 .putBoolean("catalog_ready", false).apply();
-        Class<?> target = CompatibilityProfileStore.load(this, playlist.id) == null
-                ? DiscoveryActivity.class : DiscoveryActivity.class;
-        startActivity(new Intent(this, target).putExtra("playlist_id", playlist.id));
+        startActivity(new Intent(this, DiscoveryActivity.class).putExtra("playlist_id", playlist.id));
     }
 
     private String pairingUrl() {
@@ -202,7 +200,6 @@ public final class PlaylistsActivity extends AppCompatActivity {
         button.setText(value);
         button.setTextColor(getColor(R.color.blofy_text));
         button.setTextSize(16);
-        button.setTextAllCaps(false);
         button.setFocusable(true);
         button.setFocusableInTouchMode(false);
         button.setBackgroundResource(R.drawable.bg_home_status);
