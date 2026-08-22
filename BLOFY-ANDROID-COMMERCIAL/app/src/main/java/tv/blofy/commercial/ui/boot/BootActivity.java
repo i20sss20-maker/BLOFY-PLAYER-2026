@@ -43,10 +43,10 @@ public final class BootActivity extends AppCompatActivity {
             ApiClient api = new ApiClient(this);
             boolean hasCatalog = hasLocalCatalog();
             try {
-                stage(16, "فحص خدمة التفعيل…");
+                stage(14, "فحص خدمة التفعيل…");
                 api.get("/api/health");
 
-                stage(34, "تعريف الجهاز…");
+                stage(30, "تعريف الجهاز…");
                 JSONObject registration = new JSONObject();
                 registration.put("deviceId", api.deviceId());
                 registration.put("deviceKey", DeviceIdentity.secret(this));
@@ -55,20 +55,32 @@ public final class BootActivity extends AppCompatActivity {
                     DeviceIdentity.pairToken(this, result.optString("pairToken", ""));
                 } catch (Exception ignored) { }
 
-                stage(58, "التحقق من التفعيل…");
+                stage(50, "التحقق من التفعيل…");
                 JSONObject license = api.get("/api/license?device_id=" + ApiClient.encode(api.deviceId()));
                 if (!LicenseGate.isLicensed(license)) {
-                    openActivation("الجهاز غير مفعّل أو انتهت مدة التفعيل.");
+                    openActivation("انتهت مدة التفعيل. جدّد الاشتراك ثم افتح التطبيق من جديد.");
                     return;
                 }
 
-                stage(76, "فحص بيانات الباقة المحلية…");
+                stage(68, "استلام بيانات الباقة المرتبطة…");
+                try {
+                    JSONObject bootstrap = api.get("/api/device/bootstrap?device_id=" + ApiClient.encode(api.deviceId()));
+                    if (ProviderProfileStore.importFromBootstrap(this, bootstrap)) {
+                        getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
+                                .putBoolean("catalog_ready", false).apply();
+                        hasCatalog = false;
+                    }
+                } catch (Exception ignored) {
+                    // Keep an existing local profile during temporary activation-service outages.
+                }
+
+                stage(80, "فحص بيانات الباقة…");
                 if (!ProviderProfileStore.hasProfile(this)) {
-                    openActivation("أدخل بيانات Xtream أو M3U على هذا الجهاز.");
+                    openActivation("امسح الباركود وأرسل بيانات Xtream أو M3U من صفحة الربط.");
                     return;
                 }
 
-                stage(92, "فحص الكتالوج المحلي…");
+                stage(94, "فحص الكتالوج المحلي…");
                 stage(100, "جاهز");
                 open(hasCatalog ? HomeActivity.class : SyncActivity.class);
             } catch (Exception error) {
