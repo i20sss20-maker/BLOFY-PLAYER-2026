@@ -14,8 +14,13 @@ import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.DeviceIdentity;
 import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.databinding.ActivityBootBinding;
+import tv.blofy.commercial.provider.CompatibilityProfileStore;
+import tv.blofy.commercial.provider.PlaylistProfile;
+import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
+import tv.blofy.commercial.ui.discovery.DiscoveryActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
@@ -66,32 +71,54 @@ public final class BootActivity extends AppCompatActivity {
                 try {
                     JSONObject bootstrap = api.get("/api/device/bootstrap?device_id=" + ApiClient.encode(api.deviceId()));
                     if (ProviderProfileStore.importFromBootstrap(this, bootstrap)) {
+                        ProviderProfile imported = ProviderProfileStore.load(this);
+                        if (imported != null) ensurePlaylist(imported);
                         getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
                                 .putBoolean("catalog_ready", false).apply();
                         hasCatalog = false;
                     }
                 } catch (Exception ignored) {
-                    // Keep an existing local profile during temporary activation-service outages.
+                    // Keep local playlists when the control plane is temporarily unavailable.
                 }
 
                 stage(80, "فحص بيانات الباقة…");
-                if (!ProviderProfileStore.hasProfile(this)) {
+                PlaylistProfile playlist = PlaylistRepository.active(this);
+                if (playlist == null) playlist = PlaylistRepository.importLegacySingleProfile(this);
+                if (playlist == null) {
                     openActivation("امسح الباركود وأرسل بيانات Xtream أو M3U من صفحة الربط.");
                     return;
                 }
 
+                boolean compatible = CompatibilityProfileStore.load(this, playlist.id) != null;
                 stage(94, "فحص الكتالوج المحلي…");
                 stage(100, "جاهز");
-                open(hasCatalog ? HomeActivity.class : SyncActivity.class);
+                if (!compatible) open(DiscoveryActivity.class);
+                else open(hasCatalog ? HomeActivity.class : SyncActivity.class);
             } catch (Exception error) {
-                if (hasCatalog && ProviderProfileStore.hasProfile(this)) {
-                    stage(100, "خدمة التفعيل غير متاحة مؤقتًا — فتح المكتبة المحلية");
+                PlaylistProfile playlist = PlaylistRepository.active(this);
+                if (hasCatalog && playlist != null) {
+                    stage(100, "فتح المكتبة المحلية");
                     open(HomeActivity.class);
                     return;
                 }
                 openActivation(error.getMessage());
             }
         });
+    }
+
+    private PlaylistProfile ensurePlaylist(ProviderProfile provider) {
+        PlaylistProfile active = PlaylistRepository.active(this);
+        if (active != null && sameProvider(active.provider, provider)) return active;
+        PlaylistProfile created = PlaylistProfile.create(provider);
+        PlaylistRepository.upsert(this, created, true);
+        return created;
+    }
+
+    private static boolean sameProvider(ProviderProfile a, ProviderProfile b) {
+        if (a == null || b == null) return false;
+        return a.kind.equals(b.kind) && a.serverUrl.equals(b.serverUrl)
+                && a.username.equals(b.username) && a.password.equals(b.password)
+                && a.playlistUrl.equals(b.playlistUrl);
     }
 
     private boolean hasLocalCatalog() {
