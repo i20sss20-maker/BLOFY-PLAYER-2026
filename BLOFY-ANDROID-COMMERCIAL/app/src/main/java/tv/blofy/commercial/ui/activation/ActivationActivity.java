@@ -27,6 +27,7 @@ import tv.blofy.commercial.databinding.ActivityActivationBinding;
 import tv.blofy.commercial.provider.CompatibilityProfileStore;
 import tv.blofy.commercial.provider.PlaylistProfile;
 import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.PlaylistStateStore;
 import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.ui.discovery.DiscoveryActivity;
@@ -104,6 +105,7 @@ public final class ActivationActivity extends AppCompatActivity {
                 boolean configured = licensed && local != null;
                 PlaylistProfile playlist = configured ? ensurePlaylist(local) : null;
                 boolean compatible = playlist != null && CompatibilityProfileStore.load(this, playlist.id) != null;
+                boolean ready = playlist != null && PlaylistStateStore.isReady(this, playlist.id);
                 runOnUiThread(() -> {
                     if (binding == null) return;
                     binding.licenseStatus.setText(licensed ? "مفعّل • متبقي " + days + " أيام" : "بانتظار التجديد");
@@ -112,10 +114,6 @@ public final class ActivationActivity extends AppCompatActivity {
                     if (configured && !forceForm && !isFinishing()) {
                         navigating = true;
                         main.removeCallbacks(poll);
-                        boolean ready = getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                                .getBoolean("catalog_ready", false)
-                                && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                                .getInt("catalog_schema", 0) >= 4;
                         Class<?> target = compatible ? (ready ? HomeActivity.class : SyncActivity.class) : DiscoveryActivity.class;
                         startActivity(new Intent(this, target));
                         finish();
@@ -140,8 +138,6 @@ public final class ActivationActivity extends AppCompatActivity {
             if (imported) {
                 ProviderProfile local = ProviderProfileStore.load(this);
                 if (local != null) ensurePlaylist(local);
-                getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                        .putBoolean("catalog_ready", false).apply();
             }
             return imported;
         } catch (Exception ignored) {
@@ -157,6 +153,7 @@ public final class ActivationActivity extends AppCompatActivity {
         }
         PlaylistProfile created = PlaylistProfile.create(provider);
         PlaylistRepository.upsert(this, created, true);
+        PlaylistStateStore.markSyncing(this, created.id);
         return created;
     }
 
@@ -213,8 +210,7 @@ public final class ActivationActivity extends AppCompatActivity {
                 ProviderProfileStore.save(this, profile);
                 PlaylistProfile playlist = PlaylistProfile.create(profile);
                 PlaylistRepository.upsert(this, playlist, true);
-                getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                        .putBoolean("catalog_ready", false).apply();
+                PlaylistStateStore.markSyncing(this, playlist.id);
                 runOnUiThread(() -> {
                     navigating = true;
                     main.removeCallbacks(poll);
