@@ -6,7 +6,7 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
-import android.widget.GridLayout;
+import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -27,7 +27,7 @@ import tv.blofy.commercial.ui.live.LiveActivity;
 import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 import tv.blofy.commercial.ui.settings.SettingsActivity;
 
-/** Lightweight 10-foot dashboard: no hero artwork and no network work during remote navigation. */
+/** 10-foot dashboard following the familiar Live/Movies/Series IPTV home flow. */
 public final class HomeActivity extends LicensedActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private TextView summary;
@@ -43,66 +43,97 @@ public final class HomeActivity extends LicensedActivity {
     private View buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(42), dp(26), dp(42), dp(28));
+        root.setPadding(dp(36), dp(22), dp(36), dp(24));
         root.setBackgroundResource(R.drawable.bg_blofy);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setFocusable(true);
+        root.setFocusableInTouchMode(true);
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        root.addView(header, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(82)));
+        root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(74)));
 
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.blofy_brand);
         logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        header.addView(logo, new LinearLayout.LayoutParams(dp(72), dp(72)));
+        header.addView(logo, new LinearLayout.LayoutParams(dp(66), dp(66)));
 
-        LinearLayout titles = new LinearLayout(this);
-        titles.setOrientation(LinearLayout.VERTICAL);
-        titles.setPadding(dp(14), 0, 0, 0);
-        header.addView(titles, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView title = label("BLOFY PLAYER", 27, true);
-        title.setTextDirection(View.TEXT_DIRECTION_LTR);
-        titles.addView(title);
-        summary = label("جاهز", 13, false);
+        LinearLayout titleBox = new LinearLayout(this);
+        titleBox.setOrientation(LinearLayout.VERTICAL);
+        titleBox.setPadding(dp(14), 0, 0, 0);
+        header.addView(titleBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        titleBox.addView(label("BLOFY PLAYER", 26, true));
+        summary = label("جاري تجهيز المكتبة…", 13, false);
         summary.setTextColor(getColor(R.color.blofy_muted));
-        titles.addView(summary);
+        titleBox.addView(summary);
 
-        MaterialButton playlistsTop = tile("قوائم التشغيل");
-        playlistsTop.setOnClickListener(v -> open(PlaylistsActivity.class));
-        header.addView(playlistsTop, new LinearLayout.LayoutParams(dp(176), dp(52)));
+        TextView hint = label("OK فتح  •  الأسهم للتنقل", 12, false);
+        hint.setTextColor(getColor(R.color.blofy_muted));
+        hint.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        header.addView(hint, new LinearLayout.LayoutParams(dp(240), ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        GridLayout grid = new GridLayout(this);
-        grid.setColumnCount(4);
-        grid.setRowCount(2);
-        grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
-        grid.setUseDefaultMargins(false);
-        LinearLayout.LayoutParams gridLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-        gridLp.topMargin = dp(20);
-        root.addView(grid, gridLp);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.HORIZONTAL);
+        body.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        LinearLayout.LayoutParams bodyLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        bodyLp.topMargin = dp(18);
+        root.addView(body, bodyLp);
 
-        MaterialButton live = tile("◉\nالبث المباشر");
-        MaterialButton movies = tile("▶\nالأفلام");
-        MaterialButton series = tile("▣\nالمسلسلات");
-        MaterialButton favorites = tile("★\nالمفضلة");
-        MaterialButton history = tile("↶\nالسجل");
-        MaterialButton search = tile("⌕\nالبحث");
-        MaterialButton playlists = tile("☰\nقوائم التشغيل");
-        MaterialButton settings = tile("⚙\nالإعدادات");
+        LinearLayout main = new LinearLayout(this);
+        main.setOrientation(LinearLayout.VERTICAL);
+        body.addView(main, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.82f));
 
-        addCell(grid, live, 0, 0);
-        addCell(grid, movies, 0, 1);
-        addCell(grid, series, 0, 2);
-        addCell(grid, favorites, 0, 3);
-        addCell(grid, history, 1, 0);
-        addCell(grid, search, 1, 1);
-        addCell(grid, playlists, 1, 2);
-        addCell(grid, settings, 1, 3);
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        main.addView(topRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.62f));
+
+        MaterialButton live = tile("◉\nLIVE TV\nالبث المباشر", 23);
+        LinearLayout.LayoutParams liveLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.18f);
+        liveLp.setMarginEnd(dp(12));
+        topRow.addView(live, liveLp);
+
+        LinearLayout mediaColumn = new LinearLayout(this);
+        mediaColumn.setOrientation(LinearLayout.VERTICAL);
+        topRow.addView(mediaColumn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        MaterialButton movies = tile("▶  MOVIES\nالأفلام", 20);
+        LinearLayout.LayoutParams moviesLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        moviesLp.bottomMargin = dp(10);
+        mediaColumn.addView(movies, moviesLp);
+
+        MaterialButton series = tile("▣  SERIES\nالمسلسلات", 20);
+        mediaColumn.addView(series, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout bottomRow = new LinearLayout(this);
+        bottomRow.setOrientation(LinearLayout.HORIZONTAL);
+        bottomRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        LinearLayout.LayoutParams bottomLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.38f);
+        bottomLp.topMargin = dp(12);
+        main.addView(bottomRow, bottomLp);
+
+        MaterialButton favorites = tile("★\nالمفضلة", 16);
+        MaterialButton history = tile("↶\nالسجل", 16);
+        MaterialButton search = tile("⌕\nالبحث", 16);
+        MaterialButton playlists = tile("☰\nتغيير القائمة", 16);
+        addBottom(bottomRow, favorites, false);
+        addBottom(bottomRow, history, false);
+        addBottom(bottomRow, search, false);
+        addBottom(bottomRow, playlists, true);
+
+        LinearLayout rail = new LinearLayout(this);
+        rail.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams railLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.18f);
+        railLp.setMarginStart(dp(14));
+        body.addView(rail, railLp);
+
+        MaterialButton settings = railTile("⚙\nالإعدادات");
+        MaterialButton reload = railTile("↻\nتحديث القائمة");
+        MaterialButton exit = railTile("⏻\nخروج");
+        rail.addView(settings, railItem(false));
+        rail.addView(reload, railItem(false));
+        rail.addView(exit, railItem(true));
 
         live.setOnClickListener(v -> open(LiveActivity.class));
         movies.setOnClickListener(v -> library("movies"));
@@ -112,34 +143,50 @@ public final class HomeActivity extends LicensedActivity {
         search.setOnClickListener(v -> catalog("", false, false, true));
         playlists.setOnClickListener(v -> open(PlaylistsActivity.class));
         settings.setOnClickListener(v -> open(SettingsActivity.class));
+        reload.setOnClickListener(v -> open(PlaylistsActivity.class));
+        exit.setOnClickListener(v -> finishAffinity());
+
         live.post(live::requestFocus);
         return root;
     }
 
-    private void addCell(GridLayout grid, View view, int row, int column) {
-        GridLayout.Spec rowSpec = GridLayout.spec(row, 1f);
-        GridLayout.Spec colSpec = GridLayout.spec(column, 1f);
-        GridLayout.LayoutParams lp = new GridLayout.LayoutParams(rowSpec, colSpec);
-        lp.width = 0;
-        lp.height = 0;
-        lp.setMargins(dp(8), dp(8), dp(8), dp(8));
-        grid.addView(view, lp);
+    private void addBottom(LinearLayout row, MaterialButton button, boolean last) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+        if (!last) lp.setMarginEnd(dp(10));
+        row.addView(button, lp);
     }
 
-    private MaterialButton tile(String text) {
+    private LinearLayout.LayoutParams railItem(boolean last) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        if (!last) lp.bottomMargin = dp(10);
+        return lp;
+    }
+
+    private MaterialButton tile(String text, int size) {
         MaterialButton button = new MaterialButton(this);
         button.setText(text);
         button.setTextColor(getColor(R.color.blofy_text));
-        button.setTextSize(18);
+        button.setTextSize(size);
         button.setGravity(Gravity.CENTER);
         button.setFocusable(true);
+        button.setAllCaps(false);
         button.setBackgroundResource(R.drawable.bg_home_status);
-        button.setPadding(dp(14), dp(14), dp(14), dp(14));
-        button.setOnFocusChangeListener((v, focused) -> v.animate()
-                .scaleX(focused ? 1.035f : 1f)
-                .scaleY(focused ? 1.035f : 1f)
-                .setDuration(75).start());
+        button.setPadding(dp(16), dp(14), dp(16), dp(14));
+        focusEffect(button, 1.035f);
         return button;
+    }
+
+    private MaterialButton railTile(String text) {
+        MaterialButton button = tile(text, 15);
+        button.setGravity(Gravity.CENTER);
+        return button;
+    }
+
+    private void focusEffect(View view, float scale) {
+        view.setOnFocusChangeListener((v, focused) -> {
+            v.setSelected(focused);
+            v.animate().scaleX(focused ? scale : 1f).scaleY(focused ? scale : 1f).setDuration(70).start();
+        });
     }
 
     private TextView label(String text, int size, boolean bold) {
@@ -183,8 +230,7 @@ public final class HomeActivity extends LicensedActivity {
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN
-                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
-                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
             finish();
             return true;
         }
