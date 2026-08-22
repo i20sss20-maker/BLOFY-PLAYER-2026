@@ -179,15 +179,20 @@ public final class LibraryActivity extends LicensedActivity {
 
     private void open(MediaRecord item) {
         if (item == null || item.id == null || item.id.trim().isEmpty()) return;
-        boolean directM3u = "m3u".equalsIgnoreCase(store.getMeta("kind"));
-        Class<?> target = directM3u ? PlayerActivity.class : DetailsActivity.class;
-        startActivity(new Intent(this, target)
-                .putExtra("type", item.type)
-                .putExtra("id", item.id)
-                .putExtra("name", item.name)
-                .putExtra("extension", item.extension)
-                .putExtra("image", item.image)
-                .putExtra("direct_source", item.directSource));
+        worker.execute(() -> {
+            boolean directM3u = "m3u".equalsIgnoreCase(store.getMeta("kind"));
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                Class<?> target = directM3u ? PlayerActivity.class : DetailsActivity.class;
+                startActivity(new Intent(this, target)
+                        .putExtra("type", item.type)
+                        .putExtra("id", item.id)
+                        .putExtra("name", item.name)
+                        .putExtra("extension", item.extension)
+                        .putExtra("image", item.image)
+                        .putExtra("direct_source", item.directSource));
+            });
+        });
     }
 
     private TextView categoryRow(ViewGroup parent) {
