@@ -13,9 +13,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Revalidates both the BLOFY device license and the provider subscription when
- * a protected screen returns to the foreground. Network outages do not sign a
- * user out; only an explicit inactive/expired response does.
+ * Protected BLOFY screen gate.
+ *
+ * Railway is intentionally used for the BLOFY device license only. IPTV account/session
+ * validation is not performed here, so opening Live/Movies/Series/Player can never bounce
+ * back to Home because of a Railway provider-session check.
  */
 public abstract class LicensedActivity extends AppCompatActivity {
     private final ExecutorService licenseWorker = Executors.newSingleThreadExecutor();
@@ -40,22 +42,14 @@ public abstract class LicensedActivity extends AppCompatActivity {
                 ApiClient api = new ApiClient(this);
                 JSONObject license = api.get("/api/license?device_id=" + ApiClient.encode(api.deviceId()));
                 if (!LicenseGate.isLicensed(license)) {
-                    reason = "انتهى تفعيل الجهاز. جدّد التفعيل ثم سجّل الدخول من هذه الشاشة.";
-                } else {
-                    // Revalidate the provider account (server-side cached for
-                    // one minute) so an expired package returns to the renewal
-                    // form instead of failing only after the user presses Play.
-                    JSONObject session = api.get("/api/session?refresh=1").optJSONObject("session");
-                    if (!LicenseGate.isPackageUsable(session)) {
-                        reason = "انتهى اشتراك الباقة أو توقف. أدخل بيانات الاشتراك المجددة ثم سجّل الدخول.";
-                    }
+                    reason = "انتهى تفعيل الجهاز. جدّد التفعيل ثم أعد فتح التطبيق.";
                 }
             } catch (Exception error) {
                 if (LicenseGate.isAuthorizationError(error)) {
-                    reason = "انتهت صلاحية الجلسة. جدّد التفعيل أو بيانات الباقة ثم سجّل الدخول.";
+                    reason = "انتهت صلاحية تفعيل الجهاز. جدّد التفعيل ثم أعد فتح التطبيق.";
                 }
-                // A timeout/offline error is intentionally ignored here so a
-                // temporary network interruption never traps the user.
+                // Network/offline failures are intentionally ignored. Railway is not allowed
+                // to block access to already-synced IPTV content because of a temporary outage.
             } finally {
                 checkingLicense.set(false);
             }

@@ -1,8 +1,10 @@
 package tv.blofy.commercial.ui.player;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowInsets;
@@ -21,8 +23,8 @@ import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultDataSource;
-import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.HttpDataSource;
+import androidx.media3.datasource.okhttp.OkHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -36,71 +38,77 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.text.DateFormat;
 import java.nio.charset.StandardCharsets;
+import java.text.DateFormat;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.Locale;
-import java.util.Collections;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import tv.blofy.commercial.core.ApiClient;
-import tv.blofy.commercial.core.LicenseGate;
+import okhttp3.OkHttpClient;
 import tv.blofy.commercial.core.LicensedActivity;
-import tv.blofy.commercial.core.PlaybackRoutePolicy;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivityPlayerBinding;
+import tv.blofy.commercial.provider.ProviderProfile;
+import tv.blofy.commercial.provider.ProviderProfileStore;
+import tv.blofy.commercial.provider.XtreamClient;
 
+/** Media3 first, direct provider traffic only. LibVLC remains an isolated lazy fallback. */
 @OptIn(markerClass = UnstableApi.class)
 public final class PlayerActivity extends LicensedActivity implements Player.Listener {
+    private static final String PROVIDER_USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
+
     private ActivityPlayerBinding binding;
-    private ApiClient api;
     private CatalogStore store;
     private ExoPlayer player;
+
     private String id, name, type, extension, originalExtension, playbackUrl, playbackExtension;
-    private String relayUrl;
-    private int fallbackStage;
-    private boolean relayAttempted;
     private boolean historyRecorded;
     private boolean initialized;
+    private boolean vlcAttempted;
     private volatile boolean resolving;
+
     private final ExecutorService worker = Executors.newFixedThreadPool(2);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AtomicInteger resolveGeneration = new AtomicInteger();
+    private final AtomicInteger providerHttpStatus = new AtomicInteger(-1);
+
     private final Runnable hideChrome = () -> {
         if (binding != null) {
             binding.topBar.setVisibility(View.GONE);
             binding.hint.setVisibility(View.GONE);
         }
     };
+
     private final Runnable timeout = () -> {
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
-        releasePlayer();
-        if (!advanceAfterFailure()) {
-            showError("المصدر لم يرسل فيديو خلال المهلة. جرّب إعادة الاتصال أو محتوى آخر.");
-        }
+        int observed = providerHttpStatus.get();
+        releasePlayer(true);
+        if (observed == 401 || observed == 403 || observed == 456) showProviderRejected(observed);
+        else showError("المزوّد لم يرسل فيديو خلال المهلة. التشغيل مباشر من الجهاز.");
     };
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
         binding = ActivityPlayerBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
-        api = new ApiClient(this);
         store = new CatalogStore(this);
         type = extra("type", "live");
         id = extra("id", "");
         name = extra("name", "BLOFY PLAYER");
         extension = normalize(extra("extension", isLive() ? "ts" : "mp4"));
         originalExtension = extension;
+
         binding.title.setText(name);
         binding.close.setOnClickListener(v -> finish());
-        binding.retry.setOnClickListener(v -> retryFromStart());
+        binding.retry.setOnClickListener(v -> retryDirect());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override public void handleOnBackPressed() {
-                finish();
-            }
+            @Override public void handleOnBackPressed() { finish(); }
         });
         if (!isLive()) binding.epg.setVisibility(View.GONE);
         hideSystemUi();
@@ -110,11 +118,13 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     }
 
     private boolean isLive() { return "live".equals(type); }
+
     private String extra(String key, String fallback) {
         String value = getIntent().getStringExtra(key);
         return value == null || value.isEmpty() ? fallback : value;
     }
 
+    /** Builds the provider URL locally. No BLOFY/Railway media endpoint is involved. */
     private void resolveDirect() {
         resolving = true;
         final int generation = resolveGeneration.incrementAndGet();
@@ -122,123 +132,96 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         final String requestedId = id;
         final String requestedExtension = extension;
         showLoading();
+
         worker.execute(() -> {
             try {
-                String apiType = "series".equals(requestedType) || "episode".equals(requestedType) ? "episode" : requestedType;
-                JSONObject data = api.get("/api/native-link/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
-                        + "?ext=" + ApiClient.encode(requestedExtension));
-                String path = data.optString("url");
-                String relayPath = data.optString("relayUrl");
-                final String signedRelay = PlaybackRoutePolicy.isSignedRelayPath(relayPath)
-                        ? api.absoluteUrl(relayPath) : "";
-                final String resolvedUrl;
-                if (path.startsWith("/api/native-play")) {
-                    resolvedUrl = api.resolveMediaRedirect(path);
-                } else if (path.startsWith("/api/proxy")) {
-                    resolvedUrl = api.absoluteUrl(path);
+                ProviderProfile profile = ProviderProfileStore.load(this);
+                if (profile == null) throw new Exception("بيانات الباقة غير موجودة على الجهاز.");
+                final String directUrl;
+                if (profile.isXtream()) {
+                    directUrl = new XtreamClient(profile).playbackUrl(requestedType, requestedId, requestedExtension);
                 } else {
-                    throw new Exception("تعذر إصدار رابط Media3 آمن.");
+                    directUrl = requestedId;
                 }
-                final String mediaExtension = normalize(data.optString("extension", requestedExtension));
-                // Never hand a provider's cleartext URL to Media3. New servers
-                // always return a signed /api/proxy relayUrl; the legacy raw
-                // route keeps v10 deployments usable during a rolling update.
-                final boolean legacyCleartext = PlaybackRoutePolicy.isCleartextHttp(resolvedUrl);
-                final String effectiveRelay = !signedRelay.isEmpty()
-                        ? signedRelay : secureRelayUrl(requestedType, requestedId, requestedExtension);
-                final String mediaUrl = legacyCleartext ? effectiveRelay : resolvedUrl;
+                if (!(directUrl.startsWith("http://") || directUrl.startsWith("https://"))) {
+                    throw new Exception("رابط التشغيل المحلي غير صالح.");
+                }
                 if (!isCurrent(generation, requestedId)) return;
-                relayUrl = effectiveRelay;
-                relayAttempted = legacyCleartext || path.startsWith("/api/proxy");
-                playbackUrl = mediaUrl;
-                playbackExtension = mediaExtension;
+                playbackUrl = directUrl;
+                playbackExtension = requestedExtension;
                 resolving = false;
                 runOnUiThread(() -> {
                     if (!isCurrent(generation, requestedId)) return;
-                    if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) preparePlayer(mediaUrl, mediaExtension);
+                    if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
+                        prepareMedia3Direct(directUrl, requestedExtension);
+                    }
                 });
             } catch (Exception error) {
                 if (!isCurrent(generation, requestedId)) return;
                 resolving = false;
                 runOnUiThread(() -> {
-                    if (!isCurrent(generation, requestedId)) return;
-                    if (LicenseGate.isAuthorizationError(error)) {
-                        LicenseGate.openActivation(this, "انتهى الاشتراك. جدّد التفعيل أو بيانات الباقة ثم سجّل الدخول.");
-                    } else if (!advanceFallback()) {
-                        showError(error.getMessage());
-                    }
+                    if (isCurrent(generation, requestedId)) showError(error.getMessage());
                 });
             }
         });
-    }
-
-    private String secureRelayUrl(String requestedType, String requestedId, String requestedExtension) {
-        String apiType = "series".equals(requestedType) || "episode".equals(requestedType)
-                ? "episode" : requestedType;
-        return api.absoluteUrl("/api/play/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(requestedId)
-                + "?ext=" + ApiClient.encode(requestedExtension) + "&raw=1");
     }
 
     private boolean isCurrent(int generation, String requestedId) {
         return generation == resolveGeneration.get() && requestedId.equals(id) && !isFinishing() && !isDestroyed();
     }
 
-    private void prepareCompatibility(boolean transcodeVideo) {
-        String apiType = "series".equals(type) || "episode".equals(type) ? "episode" : type;
-        String url = api.absoluteUrl("/api/play/" + ApiClient.encode(apiType) + "/" + ApiClient.encode(id)
-                + "?ext=" + ApiClient.encode(extension) + "&compat=" + (transcodeVideo ? "2" : "1"));
-        playbackUrl = url;
-        playbackExtension = "m3u8";
-        preparePlayer(url, "m3u8");
-    }
+    private void prepareMedia3Direct(String url, String mediaExtension) {
+        if (isFinishing() || isDestroyed()
+                || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
+        releasePlayer(false);
+        providerHttpStatus.set(-1);
 
-    private boolean advanceAfterFailure() {
-        if (PlaybackRoutePolicy.canTryRelay(relayUrl, relayAttempted)) {
-            relayAttempted = true;
-            extension = originalExtension;
-            playbackUrl = relayUrl;
-            playbackExtension = originalExtension;
-            showLoading();
-            preparePlayer(relayUrl, originalExtension);
-            return true;
-        }
-        return advanceFallback();
-    }
+        OkHttpClient client = new OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(isLive() ? 35 : 60, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .addNetworkInterceptor(chain -> {
+                    okhttp3.Response response = chain.proceed(chain.request());
+                    providerHttpStatus.set(response.code());
+                    return response;
+                })
+                .build();
 
-    private void preparePlayer(String url, String mediaExtension) {
-        if (isFinishing() || isDestroyed() || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) return;
-        releasePlayer();
-        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setConnectTimeoutMs(12_000)
-                .setReadTimeoutMs(isLive() ? 35_000 : 55_000)
-                .setAllowCrossProtocolRedirects(true)
-                // Widely accepted by Xtream/CDN sources that reject generic
-                // app user agents while still keeping BLOFY credentials away
-                // from third-party hosts.
-                .setUserAgent("VLC/3.0.20 LibVLC/3.0.20");
-        // Compatibility streams remain on Railway and need the protected
-        // session. Direct provider playback must never receive those secrets.
-        if (url.startsWith(api.baseUrl() + "/")) http.setDefaultRequestProperties(api.authenticatedHeaders());
-        else http.setDefaultRequestProperties(Collections.emptyMap());
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Accept", "*/*");
+        headers.put("Accept-Encoding", "identity");
+        headers.put("Cache-Control", "no-cache");
+        headers.put("Icy-MetaData", "1");
+
+        OkHttpDataSource.Factory http = new OkHttpDataSource.Factory(client)
+                .setUserAgent(PROVIDER_USER_AGENT)
+                .setDefaultRequestProperties(headers);
         DefaultDataSource.Factory source = new DefaultDataSource.Factory(this, http);
+
         int flags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
                 | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
         DefaultExtractorsFactory extractors = new DefaultExtractorsFactory().setTsExtractorFlags(flags);
         DefaultMediaSourceFactory mediaFactory = new DefaultMediaSourceFactory(source, extractors);
-        boolean stable = "stable".equals(getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getString("buffer", "fast"));
-        int minimum = stable ? (isLive() ? 5_000 : 12_000) : (isLive() ? 1_500 : 4_000);
-        int maximum = stable ? (isLive() ? 24_000 : 55_000) : (isLive() ? 10_000 : 28_000);
+
+        boolean stable = "stable".equals(getSharedPreferences("blofy_player_settings", MODE_PRIVATE)
+                .getString("buffer", "fast"));
+        int minimum = stable ? (isLive() ? 4_000 : 10_000) : (isLive() ? 1_200 : 3_000);
+        int maximum = stable ? (isLive() ? 20_000 : 45_000) : (isLive() ? 8_000 : 24_000);
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(minimum, maximum, isLive() ? 500 : 900, 1_100)
+                .setBufferDurationsMs(minimum, maximum, isLive() ? 400 : 800, 1_000)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
-        player = new ExoPlayer.Builder(this, new DefaultRenderersFactory(this).setEnableDecoderFallback(true))
+
+        player = new ExoPlayer.Builder(this,
+                new DefaultRenderersFactory(this).setEnableDecoderFallback(true))
                 .setMediaSourceFactory(mediaFactory)
                 .setLoadControl(loadControl)
                 .build();
         player.addListener(this);
-        player.setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
+        player.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
         player.setWakeMode(C.WAKE_MODE_NETWORK);
         binding.player.setPlayer(player);
 
@@ -259,75 +242,66 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
                     .setExtractorFactory(new DefaultHlsExtractorFactory(flags, true))
                     .createMediaSource(item.build())
                 : mediaFactory.createMediaSource(item.build());
-        if (isLive()) {
-            // Let Media3 select the live edge. Passing position zero starts at
-            // the beginning of a DVR window and can request expired segments.
-            player.setMediaSource(media);
-        } else {
-            long position = getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
-            player.setMediaSource(media, Math.max(0, position));
+
+        if (isLive()) player.setMediaSource(media);
+        else {
+            long position = getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0L);
+            player.setMediaSource(media, Math.max(0L, position));
         }
         player.prepare();
         if (getSharedPreferences("blofy_player_settings", MODE_PRIVATE).getBoolean("autoplay", true)) player.play();
         binding.player.requestFocus();
         handler.removeCallbacks(timeout);
-        handler.postDelayed(timeout, isLive() ? 18_000L : 32_000L);
+        handler.postDelayed(timeout, isLive() ? 15_000L : 25_000L);
     }
 
-    private boolean advanceFallback() {
-        if (isFinishing() || isDestroyed()) return false;
-        if (isLive() && fallbackStage == 0) {
-            fallbackStage = 1;
-            extension = "m3u8".equals(extension) ? "ts" : "m3u8";
-            resolveDirect();
-            return true;
-        }
-        int maximum = isLive() ? 3 : 2;
-        if (fallbackStage >= maximum) return false;
-        fallbackStage++;
-        // The alternate extension above is only a direct-play probe. Relay
-        // and transcoding must start from the provider's original extension;
-        // otherwise a valid TS source can accidentally be requested as m3u8.
-        extension = originalExtension;
-        showLoading();
-        prepareCompatibility(fallbackStage == maximum);
-        return true;
+    private void launchVlcFallback() {
+        if (vlcAttempted || playbackUrl == null || playbackUrl.isEmpty()) return;
+        vlcAttempted = true;
+        startActivity(new Intent(this, VlcFallbackActivity.class)
+                .putExtra("url", playbackUrl)
+                .putExtra("live", isLive())
+                .putExtra("name", name));
     }
 
-    private void showLoading() {
-        if (binding == null) return;
-        binding.progress.setVisibility(View.VISIBLE);
-        binding.errorPanel.setVisibility(View.GONE);
-        binding.topBar.setVisibility(View.VISIBLE);
-    }
-
-    private void retryFromStart() {
-        fallbackStage = 0;
+    private void retryDirect() {
+        releasePlayer(true);
+        vlcAttempted = false;
+        providerHttpStatus.set(-1);
         extension = originalExtension;
         playbackUrl = null;
         playbackExtension = null;
-        relayUrl = null;
-        relayAttempted = false;
         resolveDirect();
     }
 
     private void loadEpg(String requestedId) {
         worker.execute(() -> {
             try {
-                JSONArray values = api.get("/api/epg/" + ApiClient.encode(requestedId)).optJSONArray("entries");
+                ProviderProfile profile = ProviderProfileStore.load(this);
+                if (profile == null || !profile.isXtream()) throw new Exception("No Xtream EPG");
+                JSONObject payload = new XtreamClient(profile).epg(requestedId, 8);
+                JSONArray values = payload.optJSONArray("epg_listings");
                 JSONObject selected = null;
                 long now = System.currentTimeMillis();
                 if (values != null) for (int i = 0; i < values.length(); i++) {
                     JSONObject row = values.optJSONObject(i);
                     if (row == null) continue;
+                    long start = row.optLong("start_timestamp", 0L) * 1000L;
+                    long end = row.optLong("stop_timestamp", 0L) * 1000L;
                     if (selected == null) selected = row;
-                    if (row.optLong("start") <= now && now < row.optLong("end", Long.MAX_VALUE)) { selected = row; break; }
+                    if (start <= now && now < end) { selected = row; break; }
                 }
                 JSONObject current = selected;
                 runOnUiThread(() -> {
                     if (!requestedId.equals(id) || binding == null) return;
-                    binding.epg.setText(current == null ? "لا توجد بيانات برنامج حاليًا"
-                            : "الآن: " + current.optString("title") + " • " + time(current.optLong("start")) + " – " + time(current.optLong("end")));
+                    if (current == null) {
+                        binding.epg.setText("لا توجد بيانات برنامج حاليًا");
+                        return;
+                    }
+                    long start = current.optLong("start_timestamp", 0L) * 1000L;
+                    long end = current.optLong("stop_timestamp", 0L) * 1000L;
+                    binding.epg.setText("الآن: " + decodeEpg(current.optString("title")) + " • "
+                            + time(start) + " – " + time(end));
                 });
             } catch (Exception ignored) {
                 runOnUiThread(() -> { if (requestedId.equals(id) && binding != null) binding.epg.setText("البث المباشر"); });
@@ -339,56 +313,54 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         if (!isLive()) return;
         final int generation = resolveGeneration.incrementAndGet();
         final String currentId = id;
-        // Stop the previous channel before looking up the next one. Otherwise
-        // its timeout/error callback can start a fallback and invalidate the
-        // pending channel switch.
         resolving = true;
-        releasePlayer();
+        releasePlayer(true);
         playbackUrl = null;
         playbackExtension = null;
+        vlcAttempted = false;
+        providerHttpStatus.set(-1);
         showLoading();
+
         worker.execute(() -> {
-            final MediaRecord item;
-            try {
-                item = store.adjacentLive(currentId, direction);
-            } catch (Exception error) {
+            MediaRecord item;
+            try { item = store.adjacentLive(currentId, direction); }
+            catch (Exception error) {
                 if (generation != resolveGeneration.get()) return;
                 resolving = false;
-                runOnUiThread(() -> {
-                    if (generation != resolveGeneration.get() || isFinishing() || isDestroyed()) return;
-                    showError(error.getMessage() == null
-                            ? "تعذر قراءة القناة التالية من الكتالوج المحلي."
-                            : error.getMessage());
-                });
+                runOnUiThread(() -> showError("تعذر قراءة القناة التالية من الكتالوج المحلي."));
                 return;
             }
             if (generation != resolveGeneration.get()) return;
             if (item == null) {
                 resolving = false;
-                runOnUiThread(() -> {
-                    if (generation != resolveGeneration.get() || isFinishing() || isDestroyed()) return;
-                    showError("لا توجد قناة أخرى في هذه القائمة.");
-                });
+                runOnUiThread(() -> showError("لا توجد قناة أخرى في هذه القائمة."));
                 return;
             }
+            MediaRecord selected = item;
             runOnUiThread(() -> {
                 if (generation != resolveGeneration.get() || isFinishing() || isDestroyed()) return;
-                id = item.id;
-                name = item.name;
-                extension = normalize(item.extension.isEmpty() ? "ts" : item.extension);
+                id = selected.id;
+                name = selected.name;
+                extension = normalize(selected.extension.isEmpty() ? "ts" : selected.extension);
                 originalExtension = extension;
-                fallbackStage = 0;
                 historyRecorded = false;
-                playbackUrl = null;
-                playbackExtension = null;
-                relayUrl = null;
-                relayAttempted = false;
                 binding.title.setText(name);
                 binding.epg.setText("جلب دليل البرنامج…");
                 resolveDirect();
                 loadEpg(id);
             });
         });
+    }
+
+    private void showLoading() {
+        if (binding == null) return;
+        binding.progress.setVisibility(View.VISIBLE);
+        binding.errorPanel.setVisibility(View.GONE);
+        binding.topBar.setVisibility(View.VISIBLE);
+    }
+
+    private void showProviderRejected(int status) {
+        showError("المزوّد رفض رابط التشغيل المباشر (HTTP " + status + "). راجع الحساب أو IP أو Headers.");
     }
 
     private void showError(String message) {
@@ -399,38 +371,50 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         binding.retry.requestFocus();
     }
 
-    @Override public void onPlaybackStateChanged(int state) {
-        if (binding == null) return;
-        binding.progress.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
-        if (state == Player.STATE_READY) {
-            handler.removeCallbacks(timeout);
-            handler.removeCallbacks(hideChrome);
-            handler.postDelayed(hideChrome, 4_500L);
-            if (!historyRecorded) {
-                historyRecorded = true;
-                final String readyType = type;
-                final String readyId = id;
-                worker.execute(() -> store.addHistory(readyType, readyId));
-            }
+    private void onEngineReady() {
+        handler.removeCallbacks(timeout);
+        if (binding != null) binding.progress.setVisibility(View.GONE);
+        handler.removeCallbacks(hideChrome);
+        handler.postDelayed(hideChrome, 4_500L);
+        if (!historyRecorded) {
+            historyRecorded = true;
+            String readyType = type;
+            String readyId = id;
+            worker.execute(() -> store.addHistory(readyType, readyId));
         }
+    }
+
+    @Override public void onPlaybackStateChanged(int state) {
+        if (binding == null || player == null) return;
+        binding.progress.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
+        if (state == Player.STATE_READY) onEngineReady();
     }
 
     @Override public void onPlayerError(PlaybackException error) {
         handler.removeCallbacks(timeout);
-        final String failedUrl = playbackUrl;
-        final int httpStatus = httpStatus(error);
-        final int providerStatus = providerStatus(error);
-        releasePlayer();
-        if (PlaybackRoutePolicy.isBlofyUrl(api.baseUrl(), failedUrl)
-                && PlaybackRoutePolicy.isBackendAuthorizationStatus(httpStatus, providerStatus)) {
-            LicenseGate.openActivation(this, "انتهت جلسة التشغيل أو الاشتراك. حدّث التفعيل ثم سجّل الدخول.");
+        int status = httpStatus(error);
+        if (status > 0) providerHttpStatus.set(status);
+        int observed = providerHttpStatus.get();
+        releasePlayer(true);
+        if (status == 401 || status == 403 || status == 456
+                || observed == 401 || observed == 403 || observed == 456) {
+            showProviderRejected(status > 0 ? status : observed);
             return;
         }
-        if (!advanceAfterFailure()) {
-            String status = httpStatus > 0 ? " (HTTP " + httpStatus + ")" : "";
-            showError("تعذر تشغيل المصدر بعد تجربة الوضع المباشر والوسيط والتوافق.\n"
-                    + error.getErrorCodeName() + status);
+        if (status >= 400) {
+            showError("المزوّد أعاد HTTP " + status + " أثناء التشغيل المباشر.");
+            return;
         }
+        if (observed >= 200 && observed < 300 && media3FormatFailure(error)) {
+            launchVlcFallback();
+            return;
+        }
+        showError("تعذر تشغيل المصدر مباشرة: " + error.getErrorCodeName());
+    }
+
+    private static boolean media3FormatFailure(PlaybackException error) {
+        int code = error.errorCode;
+        return code >= 3000 && code < 6000;
     }
 
     private static int httpStatus(Throwable error) {
@@ -443,27 +427,10 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         return -1;
     }
 
-    private static int providerStatus(Throwable error) {
-        Throwable current = error;
-        for (int depth = 0; current != null && depth < 8; depth++, current = current.getCause()) {
-            if (!(current instanceof HttpDataSource.InvalidResponseCodeException)) continue;
-            byte[] body = ((HttpDataSource.InvalidResponseCodeException) current).responseBody;
-            if (body == null || body.length == 0) return -1;
-            try {
-                return new JSONObject(new String(body, StandardCharsets.UTF_8)).optInt("providerStatus", -1);
-            } catch (Exception ignored) {
-                return -1;
-            }
-        }
-        return -1;
-    }
-
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
-                    || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B) {
-                finish();
-                return true;
+            if (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B) {
+                finish(); return true;
             }
             if (event.getKeyCode() == KeyEvent.KEYCODE_CHANNEL_UP) { switchChannel(1); return true; }
             if (event.getKeyCode() == KeyEvent.KEYCODE_CHANNEL_DOWN) { switchChannel(-1); return true; }
@@ -478,11 +445,10 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
 
     private String positionKey() { return "position_" + type + "_" + id; }
 
-    private void releasePlayer() {
+    private void releasePlayer(boolean savePosition) {
         handler.removeCallbacks(timeout);
-        handler.removeCallbacks(hideChrome);
         if (player == null) return;
-        if (!isLive()) {
+        if (savePosition && !isLive()) {
             long position = player.getCurrentPosition();
             long duration = player.getDuration();
             if (duration > 0 && position > duration - 30_000) position = 0;
@@ -509,6 +475,15 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
         return null;
     }
 
+    private static String decodeEpg(String value) {
+        if (value == null || value.isEmpty()) return "برنامج مباشر";
+        try {
+            byte[] raw = Base64.decode(value, Base64.DEFAULT);
+            String decoded = new String(raw, StandardCharsets.UTF_8).trim();
+            return decoded.isEmpty() ? value : decoded;
+        } catch (Exception ignored) { return value; }
+    }
+
     private static String time(long value) {
         return value <= 0 ? "" : DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(value));
     }
@@ -516,27 +491,25 @@ public final class PlayerActivity extends LicensedActivity implements Player.Lis
     @Override protected void onStart() {
         super.onStart();
         if (!initialized || player != null) return;
-        if (playbackUrl != null) preparePlayer(playbackUrl, playbackExtension == null ? extension : playbackExtension);
+        if (playbackUrl != null) prepareMedia3Direct(playbackUrl, playbackExtension == null ? extension : playbackExtension);
         else if (!resolving) resolveDirect();
     }
 
     @Override protected void onStop() {
         resolveGeneration.incrementAndGet();
         resolving = false;
-        releasePlayer();
-        // Provider URLs can expire or be tied to one connection. Always ask
-        // BLOFY for a fresh link when this screen returns to the foreground.
+        releasePlayer(true);
         playbackUrl = null;
         playbackExtension = null;
-        relayUrl = null;
-        relayAttempted = false;
+        vlcAttempted = false;
+        providerHttpStatus.set(-1);
         extension = originalExtension;
-        fallbackStage = 0;
         super.onStop();
     }
 
     @Override protected void onDestroy() {
         resolveGeneration.incrementAndGet();
+        releasePlayer(false);
         worker.shutdownNow();
         if (store != null) store.close();
         binding = null;

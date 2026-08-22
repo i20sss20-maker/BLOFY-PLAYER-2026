@@ -1,84 +1,78 @@
 package tv.blofy.commercial.data;
 
-import android.content.ContentValues;
 import android.content.Context;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
+
+import androidx.sqlite.db.SimpleSQLiteQuery;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public final class CatalogStore extends SQLiteOpenHelper {
-    public CatalogStore(Context context) { super(context.getApplicationContext(), "blofy_commercial.db", null, 2); }
+import tv.blofy.commercial.data.room.BlofyDatabase;
+import tv.blofy.commercial.data.room.CatalogDao;
+import tv.blofy.commercial.data.room.CategoryCountRow;
+import tv.blofy.commercial.data.room.CategoryEntity;
+import tv.blofy.commercial.data.room.FavoriteEntity;
+import tv.blofy.commercial.data.room.HistoryEntity;
+import tv.blofy.commercial.data.room.MediaEntity;
+import tv.blofy.commercial.data.room.MetaEntity;
 
-    @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE category(type TEXT,id TEXT,name TEXT,PRIMARY KEY(type,id))");
-        db.execSQL("CREATE TABLE media(type TEXT,id TEXT,name TEXT,image TEXT,backdrop TEXT,category_id TEXT,rating TEXT,year TEXT,extension TEXT,PRIMARY KEY(type,id))");
-        db.execSQL("CREATE INDEX media_filter ON media(type,category_id,name)");
-        db.execSQL("CREATE INDEX media_type_name ON media(type,name COLLATE NOCASE)");
-        db.execSQL("CREATE TABLE favorite(type TEXT,id TEXT,created_at INTEGER,PRIMARY KEY(type,id))");
-        db.execSQL("CREATE TABLE history(type TEXT,id TEXT,watched_at INTEGER,position INTEGER DEFAULT 0,PRIMARY KEY(type,id))");
-        db.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)");
+/**
+ * Room-backed local catalogue facade.
+ *
+ * The UI deliberately keeps bounded LIMIT/OFFSET reads through this class.
+ * That means a 100k+ item provider never becomes a 100k object list in memory.
+ */
+public final class CatalogStore {
+    private final BlofyDatabase database;
+    private final CatalogDao dao;
+    private long nextSortOrder;
+
+    public CatalogStore(Context context) {
+        database = BlofyDatabase.get(context);
+        dao = database.catalogDao();
+        // SyncActivity always clears before a full provider import. Keeping this
+        // constructor query-free also guarantees Activity creation never blocks on Room.
+        nextSortOrder = 0L;
     }
 
-    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion < 2) db.execSQL("CREATE INDEX IF NOT EXISTS media_type_name ON media(type,name COLLATE NOCASE)");
-    }
-
-    public void clearCatalog() {
-        SQLiteDatabase db = getWritableDatabase();
-        db.beginTransaction();
-        try { db.delete("category", null, null); db.delete("media", null, null); db.setTransactionSuccessful(); }
-        finally { db.endTransaction(); }
+    public synchronized void clearCatalog() {
+        database.runInTransaction(() -> {
+            dao.clearCategories();
+            dao.clearMedia();
+        });
+        nextSortOrder = 0L;
     }
 
     public void saveCategory(String type, String id, String name) {
-        ContentValues values = new ContentValues();
-        values.put("type", type); values.put("id", id); values.put("name", name);
-        getWritableDatabase().insertWithOnConflict("category", null, values, SQLiteDatabase.CONFLICT_REPLACE);
+        dao.insertCategory(new CategoryEntity(safe(type), safe(id), safeName(name)));
     }
 
-    public void saveMedia(List<MediaRecord> rows) {
-        SQLiteDatabase db = getWritableDatabase();
-        db.beginTransaction();
-        try {
-            for (MediaRecord item : rows) {
-                ContentValues value = new ContentValues();
-                value.put("type", item.type); value.put("id", item.id); value.put("name", item.name);
-                value.put("image", item.image); value.put("backdrop", item.backdrop); value.put("category_id", item.categoryId);
-                value.put("rating", item.rating); value.put("year", item.year); value.put("extension", item.extension);
-                db.insertWithOnConflict("media", null, value, SQLiteDatabase.CONFLICT_REPLACE);
-            }
-            db.setTransactionSuccessful();
-        } finally { db.endTransaction(); }
+    public synchronized void saveMedia(List<MediaRecord> rows) {
+        if (rows == null || rows.isEmpty()) return;
+        List<MediaEntity> entities = new ArrayList<>(rows.size());
+        for (MediaRecord item : rows) {
+            entities.add(new MediaEntity(
+                    safe(item.type), safe(item.id), safeName(item.name), safe(item.image),
+                    safe(item.backdrop), safe(item.categoryId), safe(item.rating), safe(item.year),
+                    safe(item.extension), nextSortOrder++));
+        }
+        dao.insertMedia(entities);
     }
 
     public int count(String type) {
-        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM media WHERE type=?", new String[]{type})) {
-            return cursor.moveToFirst() ? cursor.getInt(0) : 0;
-        }
+        return dao.count(safe(type));
     }
 
     public int count(String type, String category) {
-        String selection = "type=?" + (category == null || category.isEmpty() ? "" : " AND category_id=?");
-        String[] args = category == null || category.isEmpty()
-                ? new String[]{type} : new String[]{type, category};
-        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM media WHERE " + selection, args)) {
-            return cursor.moveToFirst() ? cursor.getInt(0) : 0;
-        }
+        return dao.count(safe(type), safe(category));
     }
 
     public List<CategoryRecord> categories(String type) {
         List<CategoryRecord> result = new ArrayList<>();
-        String sql = "SELECT c.id,c.name,COUNT(m.id) FROM category c " +
-                "LEFT JOIN media m ON m.type=c.type AND m.category_id=c.id " +
-                "WHERE c.type=? GROUP BY c.id,c.name HAVING COUNT(m.id)>0 " +
-                "ORDER BY c.name COLLATE NOCASE";
-        try (Cursor cursor = getReadableDatabase().rawQuery(sql, new String[]{type})) {
-            while (cursor.moveToNext()) {
-                result.add(new CategoryRecord(value(cursor, 0), value(cursor, 1), cursor.getInt(2)));
-            }
+        List<CategoryCountRow> rows = dao.categories(safe(type));
+        if (rows == null) return result;
+        for (CategoryCountRow row : rows) {
+            result.add(new CategoryRecord(safe(row.id), safeName(row.name), Math.max(0, row.count)));
         }
         return result;
     }
@@ -87,88 +81,111 @@ public final class CatalogStore extends SQLiteOpenHelper {
         return media(type, category, query, false, false, limit);
     }
 
-    public List<MediaRecord> media(String type, String category, String query, boolean favorites, boolean history, int limit) {
+    public List<MediaRecord> media(String type, String category, String query,
+                                   boolean favorites, boolean history, int limit) {
         return media(type, category, query, favorites, history, limit, 0);
     }
 
-    public List<MediaRecord> media(String type, String category, String query, boolean favorites, boolean history, int limit, int offset) {
-        StringBuilder sql = new StringBuilder("SELECT m.type,m.id,m.name,m.image,m.backdrop,m.category_id,m.rating,m.year,m.extension FROM media m ");
+    public List<MediaRecord> media(String type, String category, String query,
+                                   boolean favorites, boolean history, int limit, int offset) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT m.type,m.id,m.name,m.image,m.backdrop,m.category_id,m.rating,m.year,m.extension,m.sort_order FROM media m ");
         if (favorites) sql.append("INNER JOIN favorite f ON f.type=m.type AND f.id=m.id ");
         if (history) sql.append("INNER JOIN history h ON h.type=m.type AND h.id=m.id ");
-        StringBuilder where = new StringBuilder();
-        List<String> args = new ArrayList<>();
-        if (type != null && !type.isEmpty()) { where.append("m.type=?"); args.add(type); }
-        if (category != null && !category.isEmpty()) { where.append(" AND category_id=?"); args.add(category); }
-        if (query != null && !query.trim().isEmpty()) { where.append(" AND name LIKE ?"); args.add("%" + query.trim() + "%"); }
-        args.add(String.valueOf(Math.max(1, limit)));
-        args.add(String.valueOf(Math.max(0, offset)));
-        List<MediaRecord> result = new ArrayList<>();
-        if (where.length() > 0) sql.append("WHERE ").append(where.toString().replaceFirst("^ AND ", ""));
-        sql.append(history ? " ORDER BY h.watched_at DESC" : " ORDER BY m.name COLLATE NOCASE").append(" LIMIT ? OFFSET ?");
-        try (Cursor c = getReadableDatabase().rawQuery(sql.toString(), args.toArray(new String[0]))) {
-            while (c.moveToNext()) result.add(new MediaRecord(c.getString(0), c.getString(1), c.getString(2), value(c,3), value(c,4), value(c,5), value(c,6), value(c,7), value(c,8)));
+
+        List<Object> args = new ArrayList<>();
+        List<String> where = new ArrayList<>();
+        String safeType = safe(type);
+        String safeCategory = safe(category);
+        String safeQuery = safe(query);
+        if (!safeType.isEmpty()) {
+            where.add("m.type=?");
+            args.add(safeType);
         }
-        return result;
+        if (!safeCategory.isEmpty()) {
+            where.add("m.category_id=?");
+            args.add(safeCategory);
+        }
+        if (!safeQuery.isEmpty()) {
+            where.add("m.name LIKE ?");
+            args.add("%" + safeQuery + "%");
+        }
+        if (!where.isEmpty()) sql.append("WHERE ").append(String.join(" AND ", where)).append(' ');
+        if (history) sql.append("ORDER BY h.watched_at DESC ");
+        else if ("live".equals(safeType) && safeQuery.isEmpty()) sql.append("ORDER BY m.sort_order ASC ");
+        else sql.append("ORDER BY m.name COLLATE NOCASE ");
+        sql.append("LIMIT ? OFFSET ?");
+        args.add(Math.max(1, limit));
+        args.add(Math.max(0, offset));
+        return records(dao.rawMedia(new SimpleSQLiteQuery(sql.toString(), args.toArray())));
+    }
+
+    /** Small home-page slice in provider import order; never scans into app memory. */
+    public List<MediaRecord> recent(String type, int limit) {
+        String sql = "SELECT type,id,name,image,backdrop,category_id,rating,year,extension,sort_order "
+                + "FROM media WHERE type=? ORDER BY sort_order DESC LIMIT ?";
+        return records(dao.rawMedia(new SimpleSQLiteQuery(
+                sql, new Object[]{safe(type), Math.max(1, limit)})));
     }
 
     public MediaRecord mediaById(String type, String id) {
-        String sql = "SELECT type,id,name,image,backdrop,category_id,rating,year,extension FROM media WHERE type=? AND id=? LIMIT 1";
-        try (Cursor cursor = getReadableDatabase().rawQuery(sql, new String[]{type, id})) {
-            return cursor.moveToFirst() ? record(cursor) : null;
-        }
+        MediaEntity row = dao.mediaById(safe(type), safe(id));
+        return row == null ? null : record(row);
     }
 
     public MediaRecord adjacentLive(String id, int direction) {
-        SQLiteDatabase db = getReadableDatabase();
-        long rowId = -1L;
-        try (Cursor cursor = db.rawQuery("SELECT rowid FROM media WHERE type='live' AND id=? LIMIT 1", new String[]{id})) {
-            if (cursor.moveToFirst()) rowId = cursor.getLong(0);
-        }
-        String comparator = direction >= 0 ? ">" : "<";
-        String ordering = direction >= 0 ? "ASC" : "DESC";
-        if (rowId >= 0L) {
-            try (Cursor cursor = db.rawQuery(
-                    "SELECT type,id,name,image,backdrop,category_id,rating,year,extension FROM media WHERE type='live' AND rowid" + comparator + "? ORDER BY rowid " + ordering + " LIMIT 1",
-                    new String[]{String.valueOf(rowId)})) {
-                if (cursor.moveToFirst()) return record(cursor);
-            }
-        }
-        try (Cursor cursor = db.rawQuery(
-                "SELECT type,id,name,image,backdrop,category_id,rating,year,extension FROM media WHERE type='live' ORDER BY rowid " + ordering + " LIMIT 1", null)) {
-            return cursor.moveToFirst() ? record(cursor) : null;
-        }
+        Long order = dao.liveOrder(safe(id));
+        MediaEntity row = null;
+        if (order != null) row = direction >= 0 ? dao.nextLive(order) : dao.previousLive(order);
+        if (row == null) row = direction >= 0 ? dao.firstLive() : dao.lastLive();
+        return row == null ? null : record(row);
     }
 
     public String getMeta(String key) {
-        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT value FROM meta WHERE key=?", new String[]{key})) {
-            return cursor.moveToFirst() ? value(cursor, 0) : "";
-        }
+        String value = dao.getMeta(safe(key));
+        return value == null ? "" : value;
     }
 
     public boolean toggleFavorite(String type, String id) {
-        SQLiteDatabase db = getWritableDatabase();
-        try (Cursor cursor = db.rawQuery("SELECT 1 FROM favorite WHERE type=? AND id=?", new String[]{type,id})) {
-            if (cursor.moveToFirst()) { db.delete("favorite", "type=? AND id=?", new String[]{type,id}); return false; }
+        String safeType = safe(type);
+        String safeId = safe(id);
+        if (dao.favoriteCount(safeType, safeId) > 0) {
+            dao.deleteFavorite(safeType, safeId);
+            return false;
         }
-        ContentValues row = new ContentValues(); row.put("type", type); row.put("id", id); row.put("created_at", System.currentTimeMillis());
-        db.insertWithOnConflict("favorite", null, row, SQLiteDatabase.CONFLICT_REPLACE); return true;
+        dao.insertFavorite(new FavoriteEntity(safeType, safeId, System.currentTimeMillis()));
+        return true;
     }
 
     public void addHistory(String type, String id) {
-        SQLiteDatabase db = getWritableDatabase();
-        ContentValues initial = new ContentValues(); initial.put("type", type); initial.put("id", id); initial.put("watched_at", System.currentTimeMillis());
-        db.insertWithOnConflict("history", null, initial, SQLiteDatabase.CONFLICT_IGNORE);
-        ContentValues update = new ContentValues(); update.put("watched_at", System.currentTimeMillis());
-        db.update("history", update, "type=? AND id=?", new String[]{type, id});
+        dao.insertHistory(new HistoryEntity(safe(type), safe(id), System.currentTimeMillis(), 0L));
     }
 
     public void putMeta(String key, String value) {
-        ContentValues row = new ContentValues(); row.put("key", key); row.put("value", value == null ? "" : value);
-        getWritableDatabase().insertWithOnConflict("meta", null, row, SQLiteDatabase.CONFLICT_REPLACE);
+        dao.putMeta(new MetaEntity(safe(key), safe(value)));
     }
 
-    private static String value(Cursor cursor, int index) { return cursor.isNull(index) ? "" : cursor.getString(index); }
-    private static MediaRecord record(Cursor cursor) {
-        return new MediaRecord(value(cursor,0), value(cursor,1), value(cursor,2), value(cursor,3), value(cursor,4), value(cursor,5), value(cursor,6), value(cursor,7), value(cursor,8));
+    /** Room is process-scoped; activity stores do not close the shared database. */
+    public void close() { }
+
+    private static List<MediaRecord> records(List<MediaEntity> values) {
+        List<MediaRecord> result = new ArrayList<>(values == null ? 0 : values.size());
+        if (values != null) for (MediaEntity row : values) result.add(record(row));
+        return result;
+    }
+
+    private static MediaRecord record(MediaEntity row) {
+        return new MediaRecord(
+                safe(row.type), safe(row.id), safeName(row.name), safe(row.image), safe(row.backdrop),
+                safe(row.categoryId), safe(row.rating), safe(row.year), safe(row.extension));
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String safeName(String value) {
+        String text = safe(value).trim();
+        return text.isEmpty() ? "غير مصنف" : text;
     }
 }
