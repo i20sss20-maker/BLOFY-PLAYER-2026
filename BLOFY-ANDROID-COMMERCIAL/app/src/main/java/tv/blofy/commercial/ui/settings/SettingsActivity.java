@@ -2,95 +2,209 @@ package tv.blofy.commercial.ui.settings;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Typeface;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.widget.GridLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import androidx.appcompat.app.AlertDialog;
+
+import com.google.android.material.button.MaterialButton;
 
 import tv.blofy.commercial.R;
+import tv.blofy.commercial.core.DeviceIdentity;
 import tv.blofy.commercial.core.LicensedActivity;
-import tv.blofy.commercial.databinding.ActivitySettingsBinding;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
+import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
+/** 7up-style settings grid for ten-foot TV navigation. */
 public final class SettingsActivity extends LicensedActivity {
-    private ActivitySettingsBinding binding;
     private SharedPreferences prefs;
+    private MaterialButton playerButton, qualityButton, bufferButton, subtitlesButton, autoplayButton,
+            timeButton, liveFormatButton;
 
-    @Override protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        binding = ActivitySettingsBinding.inflate(getLayoutInflater()); setContentView(binding.getRoot());
+    private static final String[] PLAYER_LABELS = {
+            "تلقائي", "Media3", "LibVLC", "MX Player", "MX Player Pro", "VLC", "أي مشغل خارجي"
+    };
+    private static final String[] PLAYER_VALUES = {
+            "auto", "media3", "libvlc", "mx_free", "mx_pro", "vlc_external", "external"
+    };
+
+    @Override protected void onCreate(Bundle state) {
+        super.onCreate(state);
         prefs = getSharedPreferences("blofy_player_settings", MODE_PRIVATE);
+        setContentView(buildUi());
+        refreshLabels();
+        playerButton.post(playerButton::requestFocus);
+    }
+
+    private View buildUi() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(34), dp(22), dp(34), dp(24));
+        root.setBackgroundResource(R.drawable.bg_blofy);
+
+        TextView title = new TextView(this);
+        title.setText("الإعدادات");
+        title.setTextColor(getColor(R.color.blofy_text));
+        title.setTextSize(29);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.addView(title, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)));
+
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(4);
+        grid.setRowCount(3);
+        LinearLayout.LayoutParams gridLp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        gridLp.topMargin = dp(8);
+        root.addView(grid, gridLp);
+
+        playerButton = tile("");
+        qualityButton = tile("");
+        bufferButton = tile("");
+        liveFormatButton = tile("");
+        subtitlesButton = tile("");
+        autoplayButton = tile("");
+        timeButton = tile("");
+        MaterialButton language = tile("AR\nاللغة\nالعربية");
+        MaterialButton sync = tile("↻\nتحديث القائمة");
+        MaterialButton playlists = tile("☰\nقوائم التشغيل");
+        MaterialButton account = tile("◇\nالجهاز والتفعيل");
+        MaterialButton back = tile("←\nرجوع");
+
+        add(grid, playerButton, 0, 0); add(grid, qualityButton, 0, 1); add(grid, bufferButton, 0, 2); add(grid, liveFormatButton, 0, 3);
+        add(grid, subtitlesButton, 1, 0); add(grid, autoplayButton, 1, 1); add(grid, timeButton, 1, 2); add(grid, language, 1, 3);
+        add(grid, sync, 2, 0); add(grid, playlists, 2, 1); add(grid, account, 2, 2); add(grid, back, 2, 3);
+
+        playerButton.setOnClickListener(v -> choosePlayer());
+        qualityButton.setOnClickListener(v -> chooseQuality());
+        bufferButton.setOnClickListener(v -> chooseBuffer());
+        liveFormatButton.setOnClickListener(v -> chooseLiveFormat());
+        subtitlesButton.setOnClickListener(v -> toggle("subtitles", true));
+        autoplayButton.setOnClickListener(v -> toggle("autoplay", true));
+        timeButton.setOnClickListener(v -> {
+            boolean next = !prefs.getBoolean("time_24h", true);
+            prefs.edit().putBoolean("time_24h", next).apply();
+            refreshLabels();
+        });
+        language.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle("اللغة")
+                .setMessage("العربية هي لغة واجهة BLOFY الحالية.")
+                .setPositiveButton("حسنًا", null).show());
+        sync.setOnClickListener(v -> startActivity(new Intent(this, SyncActivity.class)));
+        playlists.setOnClickListener(v -> startActivity(new Intent(this, PlaylistsActivity.class)));
+        account.setOnClickListener(v -> startActivity(new Intent(this, ActivationActivity.class).putExtra("force_form", true)));
+        back.setOnClickListener(v -> finish());
+
+        TextView device = new TextView(this);
+        device.setText("Device ID / Key  •  " + DeviceIdentity.id(this) + "  •  " + DeviceIdentity.key(this));
+        device.setTextColor(getColor(R.color.blofy_muted));
+        device.setTextSize(12);
+        device.setGravity(Gravity.CENTER);
+        root.addView(device, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(28)));
+        return root;
+    }
+
+    private void toggle(String key, boolean fallback) {
+        prefs.edit().putBoolean(key, !prefs.getBoolean(key, fallback)).apply();
+        refreshLabels();
+    }
+
+    private void choosePlayer() {
+        String saved = prefs.getString("player_engine", "auto");
+        int checked = indexOf(PLAYER_VALUES, saved);
+        new AlertDialog.Builder(this).setTitle("مشغل الفيديو")
+                .setSingleChoiceItems(PLAYER_LABELS, checked, (dialog, which) -> {
+                    prefs.edit().putString("player_engine", PLAYER_VALUES[which]).apply();
+                    refreshLabels(); dialog.dismiss();
+                }).show();
+    }
+
+    private void chooseQuality() {
+        String[] labels = {"تلقائي", "HD حتى 1080p", "SD حتى 480p"};
+        String[] values = {"auto", "hd", "sd"};
+        int checked = indexOf(values, prefs.getString("quality", "auto"));
+        new AlertDialog.Builder(this).setTitle("الجودة القصوى")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    prefs.edit().putString("quality", values[which]).apply();
+                    refreshLabels(); dialog.dismiss();
+                }).show();
+    }
+
+    private void chooseBuffer() {
+        String[] labels = {"بدء سريع", "أكثر ثباتًا"};
+        String[] values = {"fast", "stable"};
+        int checked = indexOf(values, prefs.getString("buffer", "fast"));
+        new AlertDialog.Builder(this).setTitle("التخزين المؤقت")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    prefs.edit().putString("buffer", values[which]).apply();
+                    refreshLabels(); dialog.dismiss();
+                }).show();
+    }
+
+    private void chooseLiveFormat() {
+        String[] labels = {"تلقائي", "MPEG-TS", "HLS / M3U8"};
+        String[] values = {"auto", "ts", "m3u8"};
+        int checked = indexOf(values, prefs.getString("live_format", "auto"));
+        new AlertDialog.Builder(this).setTitle("صيغة البث المباشر")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    prefs.edit().putString("live_format", values[which]).apply();
+                    refreshLabels(); dialog.dismiss();
+                }).show();
+    }
+
+    private void refreshLabels() {
+        if (playerButton == null) return;
+        int engineIndex = indexOf(PLAYER_VALUES, prefs.getString("player_engine", "auto"));
+        playerButton.setText("▶\nالمشغل\n" + PLAYER_LABELS[engineIndex]);
         String quality = prefs.getString("quality", "auto");
-        binding.quality.check("sd".equals(quality) ? R.id.sdQuality : "hd".equals(quality) ? R.id.hdQuality : R.id.autoQuality);
-        binding.buffer.check("stable".equals(prefs.getString("buffer", "fast")) ? R.id.stableBuffer : R.id.fastBuffer);
-        binding.subtitles.setChecked(prefs.getBoolean("subtitles", true)); binding.autoplay.setChecked(prefs.getBoolean("autoplay", true));
-        renderQuality(quality);
-        renderBuffer(prefs.getString("buffer", "fast"));
-        binding.quality.addOnButtonCheckedListener((g,id,checked)->{
-            if (!checked) return;
-            String selected = id == R.id.sdQuality ? "sd" : id == R.id.hdQuality ? "hd" : "auto";
-            prefs.edit().putString("quality", selected).apply();
-            renderQuality(selected);
-        });
-        binding.buffer.addOnButtonCheckedListener((g,id,checked)->{
-            if (!checked) return;
-            String selected = id == R.id.stableBuffer ? "stable" : "fast";
-            prefs.edit().putString("buffer", selected).apply();
-            renderBuffer(selected);
-        });
-        binding.subtitles.setOnCheckedChangeListener((v,c)->prefs.edit().putBoolean("subtitles",c).apply());
-        binding.autoplay.setOnCheckedChangeListener((v,c)->prefs.edit().putBoolean("autoplay",c).apply());
-        binding.back.setOnClickListener(v -> finish());
-        binding.sync.setOnClickListener(v->startActivity(new Intent(this, SyncActivity.class)));
-        binding.account.setOnClickListener(v -> startActivity(new Intent(this, ActivationActivity.class)
-                .putExtra("force_form", true)
-                .putExtra("boot_error", "يمكنك تجديد التفعيل أو تحديث بيانات الباقة من هنا.")));
-        installFocusFeedback(binding.back, binding.autoQuality, binding.hdQuality, binding.sdQuality,
-                binding.fastBuffer, binding.stableBuffer, binding.subtitles, binding.autoplay,
-                binding.sync, binding.account);
-
-        // A TV remote needs a deterministic first target. Material toggle groups
-        // do not consistently choose the checked child on every Android TV OEM.
-        binding.getRoot().post(() -> {
-            int checked = binding.quality.getCheckedButtonId();
-            View target = checked == View.NO_ID ? binding.autoQuality : binding.getRoot().findViewById(checked);
-            if (target != null) target.requestFocus();
-        });
+        qualityButton.setText("▣\nالجودة\n" + ("hd".equals(quality) ? "HD" : "sd".equals(quality) ? "SD" : "تلقائي"));
+        bufferButton.setText("≈\nBuffer\n" + ("stable".equals(prefs.getString("buffer", "fast")) ? "ثابت" : "سريع"));
+        String liveFormat = prefs.getString("live_format", "auto");
+        liveFormatButton.setText("LIVE\nصيغة البث\n" + ("ts".equals(liveFormat) ? "TS" : "m3u8".equals(liveFormat) ? "HLS" : "تلقائي"));
+        subtitlesButton.setText("CC\nالترجمة\n" + (prefs.getBoolean("subtitles", true) ? "تشغيل" : "إيقاف"));
+        autoplayButton.setText("▷\nتشغيل تلقائي\n" + (prefs.getBoolean("autoplay", true) ? "تشغيل" : "إيقاف"));
+        timeButton.setText("◷\nالوقت\n" + (prefs.getBoolean("time_24h", true) ? "24 ساعة" : "12 ساعة"));
     }
 
-    private void renderQuality(String quality) {
-        if ("sd".equals(quality)) {
-            binding.qualityDescription.setText("SD • حد أقصى 480p لتقليل استهلاك الشبكة");
-        } else if ("hd".equals(quality)) {
-            binding.qualityDescription.setText("HD • حد أقصى 1080p عند توفره من الباقة");
-        } else {
-            binding.qualityDescription.setText("تلقائي • يختار Media3 أفضل جودة مناسبة للشبكة");
-        }
+    private MaterialButton tile(String text) {
+        MaterialButton button = new MaterialButton(this);
+        button.setText(text);
+        button.setTextColor(getColor(R.color.blofy_text));
+        button.setTextSize(15);
+        button.setGravity(Gravity.CENTER);
+        button.setFocusable(true);
+        button.setBackgroundResource(R.drawable.bg_home_status);
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setOnFocusChangeListener((v, focused) -> v.animate()
+                .scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f)
+                .setDuration(70).start());
+        return button;
     }
 
-    private void renderBuffer(String buffer) {
-        binding.bufferDescription.setText("stable".equals(buffer)
-                ? "أكثر ثباتًا • مخزن أكبر للشبكات المتذبذبة"
-                : "بدء سريع • مخزن قصير لفتح القناة بأسرع وقت");
+    private void add(GridLayout grid, View view, int row, int col) {
+        GridLayout.LayoutParams lp = new GridLayout.LayoutParams(GridLayout.spec(row, 1f), GridLayout.spec(col, 1f));
+        lp.width = 0; lp.height = 0;
+        lp.setMargins(dp(7), dp(7), dp(7), dp(7));
+        grid.addView(view, lp);
     }
 
-    private static void installFocusFeedback(View... controls) {
-        for (View control : controls) {
-            control.setOnFocusChangeListener((view, focused) -> view.animate()
-                    .scaleX(focused ? 1.025f : 1f)
-                    .scaleY(focused ? 1.025f : 1f)
-                    .translationZ(focused ? 10f : 0f)
-                    .setDuration(110)
-                    .start());
-        }
+    private static int indexOf(String[] values, String target) {
+        for (int i = 0; i < values.length; i++) if (values[i].equals(target)) return i;
+        return 0;
     }
+
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN
-                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE
-                || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
-            finish();
-            return true;
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            finish(); return true;
         }
         return super.dispatchKeyEvent(event);
     }

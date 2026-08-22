@@ -7,6 +7,7 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.io.Reader;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.HttpUrl;
@@ -18,9 +19,17 @@ import okhttp3.Response;
 public final class XtreamClient {
     public interface CatalogConsumer { void accept(JSONObject item) throws Exception; }
 
-    private static final String USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20";
+    private static final String[] API_USER_AGENTS = new String[] {
+            "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "IPTVSmartersPlayer",
+            "Dalvik/2.1.0 (Linux; U; Android 11; Android TV)",
+            "VLC/3.0.20 LibVLC/3.0.20"
+    };
+
     private final ProviderProfile profile;
     private final OkHttpClient http;
+    private volatile String workingUserAgent = API_USER_AGENTS[0];
+    private volatile int lastApiStatus = -1;
 
     public XtreamClient(ProviderProfile profile) {
         if (profile == null || !profile.isXtream() || !profile.isValid()) {
@@ -64,9 +73,9 @@ public final class XtreamClient {
 
     /** Streaming parser for very large Xtream libraries. Only one item is materialized at a time. */
     public int streamCatalog(String type, CatalogConsumer consumer) throws Exception {
-        Request request = request(apiUrl("action", action(type, false)));
-        try (Response response = http.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new Exception("المزوّد رفض المكتبة (HTTP " + response.code() + ").");
+        String url = apiUrl("action", action(type, false));
+        try (Response response = executeCompatible(url)) {
+            if (!response.isSuccessful()) throw providerHttpError("المكتبة", response.code());
             if (response.body() == null) throw new Exception("مكتبة المزوّد فارغة.");
             try (Reader body = response.body().charStream(); JsonReader reader = new JsonReader(body)) {
                 int count = 0;
@@ -109,8 +118,23 @@ public final class XtreamClient {
 
     public String serverName() { return profile.name.isEmpty() ? profile.serverUrl : profile.name; }
 
+    public ProviderProfile playlistFallbackProfile() {
+        HttpUrl base = HttpUrl.parse(profile.serverUrl + "/get.php");
+        if (base == null) throw new IllegalArgumentException("رابط Xtream غير صالح.");
+        String url = base.newBuilder()
+                .addQueryParameter("username", profile.username)
+                .addQueryParameter("password", profile.password)
+                .addQueryParameter("type", "m3u_plus")
+                .addQueryParameter("output", "ts")
+                .build().toString();
+        return new ProviderProfile("m3u", profile.name, "", "", "", url);
+    }
+
+    public String workingUserAgent() { return workingUserAgent; }
+    public int lastApiStatus() { return lastApiStatus; }
+
     private JSONObject readCatalogItem(JsonReader reader, String type) throws Exception {
-        String id = "", name = "", image = "", backdrop = "", category = "", rating = "", year = "", ext = "";
+        String id = "", name = "", image = "", backdrop = "", category = "", rating = "", year = "", ext = "", directSource = "";
         reader.beginObject();
         while (reader.hasNext()) {
             String key = reader.nextName();
@@ -123,6 +147,7 @@ public final class XtreamClient {
                 case "category_id": category = nextString(reader); break;
                 case "rating": rating = nextString(reader); break;
                 case "year": year = nextString(reader); break;
+                case "direct_source": directSource = nextString(reader); break;
                 case "releaseDate":
                 case "release_date": {
                     String release = nextString(reader);
@@ -135,6 +160,14 @@ public final class XtreamClient {
             }
         }
         reader.endObject();
+
+        String safeDirectSource = isHttpUrl(directSource) ? directSource : "";
+        String normalizedExtension = "series".equals(type)
+                ? ""
+                : cleanExtension(ext, "live".equals(type) ? "ts" : "mp4");
+        String directExtension = extensionFromUrl(safeDirectSource);
+        if (!directExtension.isEmpty() && !"series".equals(type)) normalizedExtension = directExtension;
+
         JSONObject item = new JSONObject();
         item.put("type", type);
         item.put("id", id);
@@ -144,7 +177,8 @@ public final class XtreamClient {
         item.put("categoryId", category);
         item.put("rating", rating);
         item.put("year", year);
-        item.put("extension", "series".equals(type) ? "" : cleanExtension(ext, "live".equals(type) ? "ts" : "mp4"));
+        item.put("extension", normalizedExtension);
+        item.put("directSource", safeDirectSource);
         return item;
     }
 
@@ -185,11 +219,51 @@ public final class XtreamClient {
         return builder.build().toString();
     }
 
-    private Request request(String url) {
-        return new Request.Builder().url(url)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "application/json,*/*")
-                .build();
+    private Request request(String url, String userAgent) {
+        Request.Builder builder = new Request.Builder().url(url)
+                .header("User-Agent", userAgent)
+                .header("Accept", "application/json,text/plain,*/*")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache");
+        if ("IPTVSmartersPlayer".equals(userAgent)) {
+            builder.header("X-Requested-With", "com.nst.iptvsmarterstvbox");
+        } else if (userAgent.startsWith("Mozilla/")) {
+            HttpUrl target = HttpUrl.parse(profile.serverUrl);
+            if (target != null) {
+                String origin = target.scheme() + "://" + target.host()
+                        + ((target.port() == 80 && "http".equals(target.scheme()))
+                        || (target.port() == 443 && "https".equals(target.scheme())) ? "" : ":" + target.port());
+                builder.header("Origin", origin).header("Referer", origin + "/");
+            }
+        }
+        return builder.build();
+    }
+
+    private Response executeCompatible(String url) throws Exception {
+        String preferred = workingUserAgent;
+        Response last = http.newCall(request(url, preferred)).execute();
+        lastApiStatus = last.code();
+        if (last.code() != 403 && last.code() != 406) return last;
+        for (String userAgent : API_USER_AGENTS) {
+            if (userAgent.equals(preferred)) continue;
+            Response candidate;
+            try {
+                candidate = http.newCall(request(url, userAgent)).execute();
+            } catch (IOException error) {
+                last.close();
+                throw error;
+            }
+            lastApiStatus = candidate.code();
+            if (candidate.code() != 403 && candidate.code() != 406) {
+                last.close();
+                workingUserAgent = userAgent;
+                return candidate;
+            }
+            last.close();
+            last = candidate;
+        }
+        return last;
     }
 
     private JSONObject object(String url) throws Exception {
@@ -205,13 +279,20 @@ public final class XtreamClient {
     }
 
     private String requestText(String url) throws Exception {
-        try (Response response = http.newCall(request(url)).execute()) {
-            if (!response.isSuccessful()) throw new Exception("المزوّد رفض الطلب (HTTP " + response.code() + ").");
+        try (Response response = executeCompatible(url)) {
+            if (!response.isSuccessful()) throw providerHttpError("الطلب", response.code());
             if (response.body() == null) throw new Exception("استجابة المزوّد فارغة.");
             return response.body().string();
         } catch (IOException error) {
             throw new Exception("تعذر الاتصال مباشرة بمزوّد IPTV: " + error.getMessage());
         }
+    }
+
+    private Exception providerHttpError(String area, int status) {
+        if (status == 403) return new Exception("المزوّد رفض " + area + " (HTTP 403).");
+        if (status == 401) return new Exception("المزوّد رفض بيانات الدخول (HTTP 401).");
+        if (status == 456) return new Exception("المزوّد رفض الطلب (HTTP 456).");
+        return new Exception("المزوّد رفض " + area + " (HTTP " + status + ").");
     }
 
     private static String action(String type, boolean categories) {
@@ -222,8 +303,28 @@ public final class XtreamClient {
     }
 
     private static String cleanExtension(String value, String fallback) {
-        String ext = value == null ? "" : value.toLowerCase().replaceAll("[^a-z0-9]", "");
+        String ext = value == null ? "" : value.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
         return ext.isEmpty() ? fallback : ext;
+    }
+
+    private static String extensionFromUrl(String value) {
+        if (!isHttpUrl(value)) return "";
+        String lower = value.toLowerCase(Locale.US);
+        int query = lower.indexOf('?');
+        String path = query >= 0 ? lower.substring(0, query) : lower;
+        if (path.endsWith(".m3u8")) return "m3u8";
+        if (path.endsWith(".mpd")) return "mpd";
+        if (path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".m2ts")) return "ts";
+        if (path.endsWith(".mp4") || path.endsWith(".m4v")) return "mp4";
+        if (path.endsWith(".mkv")) return "mkv";
+        if (path.endsWith(".webm")) return "webm";
+        if (lower.contains("output=m3u8") || lower.contains("format=m3u8")) return "m3u8";
+        if (lower.contains("output=ts") || lower.contains("format=ts")) return "ts";
+        return "";
+    }
+
+    private static boolean isHttpUrl(String value) {
+        return value != null && (value.startsWith("http://") || value.startsWith("https://"));
     }
 
     private static String encodePath(String value) {

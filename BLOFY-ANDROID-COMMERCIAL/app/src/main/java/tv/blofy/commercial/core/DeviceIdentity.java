@@ -30,6 +30,20 @@ public final class DeviceIdentity {
         }
     }
 
+    /** Public display key derived from the private device secret; the secret itself is never exposed. */
+    public static String key(Context context) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest(("BLOFY-DEVICE-KEY:" + secret(context)).getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (int index = 0; index < 6; index++) hex.append(String.format(Locale.US, "%02X", hash[index]));
+            String value = hex.toString();
+            return value.substring(0, 4) + "-" + value.substring(4, 8) + "-" + value.substring(8, 12);
+        } catch (Exception error) {
+            return "0000-0000-0000";
+        }
+    }
+
     public static String secret(Context context) {
         android.content.SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String saved = prefs.getString(KEY_SECRET, "");

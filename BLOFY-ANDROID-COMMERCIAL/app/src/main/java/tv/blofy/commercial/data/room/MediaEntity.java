@@ -22,12 +22,14 @@ public final class MediaEntity {
     @NonNull public String rating;
     @NonNull public String year;
     @NonNull public String extension;
+    @ColumnInfo(name = "direct_source") @NonNull public String directSource;
     @ColumnInfo(name = "sort_order") public long sortOrder;
 
     public MediaEntity(@NonNull String type, @NonNull String id, @NonNull String name,
                        @NonNull String image, @NonNull String backdrop,
                        @NonNull String categoryId, @NonNull String rating,
-                       @NonNull String year, @NonNull String extension, long sortOrder) {
+                       @NonNull String year, @NonNull String extension,
+                       @NonNull String directSource, long sortOrder) {
         this.type = type;
         this.id = id;
         this.name = name;
@@ -37,6 +39,7 @@ public final class MediaEntity {
         this.rating = rating;
         this.year = year;
         this.extension = extension;
+        this.directSource = directSource;
         this.sortOrder = sortOrder;
     }
 }

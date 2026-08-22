@@ -1,27 +1,24 @@
-name: Build BLOFY Commercial APK
+name: Build BLOFY Signed Commercial Release
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - "blofy-commercial-*"
-    paths:
-      - "BLOFY-ANDROID-COMMERCIAL/**"
-      - ".github/workflows/commercial-android.yml"
   pull_request:
     paths:
       - "BLOFY-ANDROID-COMMERCIAL/**"
       - ".github/workflows/commercial-android.yml"
 
 concurrency:
-  group: blofy-commercial-${{ github.ref }}
+  group: blofy-commercial-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  commercial-apk:
-    name: Commercial Native Android APK
+  commercial-release:
+    name: BLOFY Signed Commercial Release
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -31,33 +28,89 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
+
       - name: Test BLOFY service contracts
         working-directory: BLOFY-WEB-2026/web-test
         run: |
           node --check server.mjs
           node --test --test-concurrency=1 test/*.test.mjs
+
       - name: Verify commercial source
         run: |
           test -f BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player/PlayerActivity.java
           ! grep -R "android.webkit.WebView" BLOFY-ANDROID-COMMERCIAL/app/src/main/java
           grep -R "androidx.media3" BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player
-      - name: Test and build
+
+      - name: Test and build release
         working-directory: BLOFY-ANDROID-COMMERCIAL
         env:
           BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
-        run: gradle --no-daemon clean testDebugUnitTest lintDebug assembleDebug -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
-      - name: Upload APK
+        run: gradle --no-daemon clean testReleaseUnitTest lintRelease assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Restore existing BLOFY production signing key
+        uses: actions/download-artifact@v4
+        with:
+          name: BLOFY-PLAYER-SIGNED-COMMERCIAL-RELEASE
+          path: production-signing
+          repository: ${{ github.repository }}
+          run-id: 32551935740
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign with existing production certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYSTORE="production-signing/BLOFY-PLAYER-PRODUCTION.keystore"
+          PASS_FILE="production-signing/keystore-password.txt"
+          ALIAS_FILE="production-signing/keystore-alias.txt"
+          test -f "$KEYSTORE"
+          test -f "$PASS_FILE"
+          test -f "$ALIAS_FILE"
+          PASS="$(tr -d '\r\n' < "$PASS_FILE")"
+          ALIAS="$(tr -d '\r\n' < "$ALIAS_FILE")"
+          echo "::add-mask::$PASS"
+
+          BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          ZIPALIGN="$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign"
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
+          UNSIGNED="BLOFY-ANDROID-COMMERCIAL/app/build/outputs/apk/release/app-release-unsigned.apk"
+          mkdir -p release-output
+          ALIGNED="release-output/BLOFY-PLAYER-aligned.apk"
+          SIGNED="release-output/BLOFY-PLAYER-IBO-7UP-COMMERCIAL-RELEASE.apk"
+
+          "$ZIPALIGN" -f -p 4 "$UNSIGNED" "$ALIGNED"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE" \
+            --ks-key-alias "$ALIAS" \
+            --ks-pass "pass:$PASS" \
+            --key-pass "pass:$PASS" \
+            --out "$SIGNED" \
+            "$ALIGNED"
+
+          "$APKSIGNER" verify --verbose --print-certs "$SIGNED" | tee release-output/signing-info.txt
+          CERT="$($APKSIGNER verify --print-certs "$SIGNED" | awk -F': ' '/certificate SHA-256 digest/{print tolower($NF); exit}')"
+          EXPECTED="1dcc4a6731db8c17052e451df6f453b65304eb1f31d13677aa3755100123967d"
+          test "$CERT" = "$EXPECTED"
+          sha256sum "$SIGNED" | tee release-output/BLOFY-PLAYER-IBO-7UP-COMMERCIAL-RELEASE.sha256
+          rm -f "$ALIGNED"
+          rm -rf production-signing
+
+      - name: Upload final signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-PLAYER-COMMERCIAL-APK
-          path: BLOFY-ANDROID-COMMERCIAL/app/build/outputs/apk/debug/app-debug.apk
+          name: BLOFY-PLAYER-IBO-7UP-SIGNED-RELEASE
+          path: |
+            release-output/BLOFY-PLAYER-IBO-7UP-COMMERCIAL-RELEASE.apk
+            release-output/BLOFY-PLAYER-IBO-7UP-COMMERCIAL-RELEASE.sha256
+            release-output/signing-info.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+
       - name: Upload reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-COMMERCIAL-BUILD-REPORTS
+          name: BLOFY-COMMERCIAL-RELEASE-REPORTS
           path: |
             BLOFY-ANDROID-COMMERCIAL/app/build/reports/**
             BLOFY-ANDROID-COMMERCIAL/app/build/test-results/**

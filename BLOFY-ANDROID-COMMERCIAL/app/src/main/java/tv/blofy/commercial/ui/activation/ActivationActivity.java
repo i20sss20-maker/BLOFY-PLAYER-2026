@@ -24,9 +24,13 @@ import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.DeviceIdentity;
 import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.databinding.ActivityActivationBinding;
+import tv.blofy.commercial.provider.CompatibilityProfileStore;
+import tv.blofy.commercial.provider.PlaylistProfile;
+import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.PlaylistStateStore;
 import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.provider.ProviderProfileStore;
-import tv.blofy.commercial.provider.XtreamClient;
+import tv.blofy.commercial.ui.discovery.DiscoveryActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
 import tv.blofy.commercial.ui.sync.SyncActivity;
 
@@ -97,7 +101,11 @@ public final class ActivationActivity extends AppCompatActivity {
                 licensed = LicenseGate.isLicensed(data);
                 int days = data.optInt("remainingDays", 0);
                 boolean imported = licensed && pullPairedProfile();
-                boolean configured = licensed && ProviderProfileStore.hasProfile(this);
+                ProviderProfile local = ProviderProfileStore.load(this);
+                boolean configured = licensed && local != null;
+                PlaylistProfile playlist = configured ? ensurePlaylist(local) : null;
+                boolean compatible = playlist != null && CompatibilityProfileStore.load(this, playlist.id) != null;
+                boolean ready = playlist != null && PlaylistStateStore.isReady(this, playlist.id);
                 runOnUiThread(() -> {
                     if (binding == null) return;
                     binding.licenseStatus.setText(licensed ? "مفعّل • متبقي " + days + " أيام" : "بانتظار التجديد");
@@ -106,11 +114,8 @@ public final class ActivationActivity extends AppCompatActivity {
                     if (configured && !forceForm && !isFinishing()) {
                         navigating = true;
                         main.removeCallbacks(poll);
-                        boolean ready = getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                                .getBoolean("catalog_ready", false)
-                                && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                                .getInt("catalog_schema", 0) >= 4;
-                        startActivity(new Intent(this, ready ? HomeActivity.class : SyncActivity.class));
+                        Class<?> target = compatible ? (ready ? HomeActivity.class : SyncActivity.class) : DiscoveryActivity.class;
+                        startActivity(new Intent(this, target));
                         finish();
                     } else if (licensed && !configured) {
                         showStatus("امسح الباركود وأرسل بيانات الباقة من الموقع، أو أدخلها هنا مباشرة.", false);
@@ -131,13 +136,32 @@ public final class ActivationActivity extends AppCompatActivity {
             JSONObject bootstrap = api.get("/api/device/bootstrap?device_id=" + ApiClient.encode(api.deviceId()));
             boolean imported = ProviderProfileStore.importFromBootstrap(this, bootstrap);
             if (imported) {
-                getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                        .putBoolean("catalog_ready", false).apply();
+                ProviderProfile local = ProviderProfileStore.load(this);
+                if (local != null) ensurePlaylist(local);
             }
             return imported;
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private PlaylistProfile ensurePlaylist(ProviderProfile provider) {
+        PlaylistProfile active = PlaylistRepository.active(this);
+        if (active != null && sameProvider(active.provider, provider)) {
+            PlaylistRepository.setActive(this, active.id);
+            return active;
+        }
+        PlaylistProfile created = PlaylistProfile.create(provider);
+        PlaylistRepository.upsert(this, created, true);
+        PlaylistStateStore.markSyncing(this, created.id);
+        return created;
+    }
+
+    private static boolean sameProvider(ProviderProfile a, ProviderProfile b) {
+        if (a == null || b == null) return false;
+        return a.kind.equals(b.kind) && a.serverUrl.equals(b.serverUrl)
+                && a.username.equals(b.username) && a.password.equals(b.password)
+                && a.playlistUrl.equals(b.playlistUrl);
     }
 
     private void ensureFreshPairing() {
@@ -181,17 +205,16 @@ public final class ActivationActivity extends AppCompatActivity {
         }
 
         binding.savePackage.setEnabled(false);
-        showStatus(xtream ? "فحص Xtream مباشرة من الجهاز…" : "حفظ قائمة M3U محليًا…", false);
         worker.execute(() -> {
             try {
-                if (profile.isXtream()) new XtreamClient(profile).validate();
                 ProviderProfileStore.save(this, profile);
-                getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                        .putBoolean("catalog_ready", false).apply();
+                PlaylistProfile playlist = PlaylistProfile.create(profile);
+                PlaylistRepository.upsert(this, playlist, true);
+                PlaylistStateStore.markSyncing(this, playlist.id);
                 runOnUiThread(() -> {
                     navigating = true;
                     main.removeCallbacks(poll);
-                    startActivity(new Intent(this, SyncActivity.class));
+                    startActivity(new Intent(this, DiscoveryActivity.class));
                     finish();
                 });
             } catch (Exception error) {

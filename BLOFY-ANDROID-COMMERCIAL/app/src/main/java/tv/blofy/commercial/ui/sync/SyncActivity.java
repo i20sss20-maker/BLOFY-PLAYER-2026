@@ -3,6 +3,7 @@ package tv.blofy.commercial.ui.sync;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -24,14 +25,18 @@ import java.util.concurrent.atomic.AtomicInteger;
 import tv.blofy.commercial.data.CatalogStore;
 import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.databinding.ActivitySyncBinding;
+import tv.blofy.commercial.provider.CompatibilityProfile;
+import tv.blofy.commercial.provider.CompatibilityProfileStore;
 import tv.blofy.commercial.provider.M3uClient;
+import tv.blofy.commercial.provider.PlaylistProfile;
+import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.PlaylistStateStore;
 import tv.blofy.commercial.provider.ProviderProfile;
-import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.provider.XtreamClient;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
 
-/** Provider sync runs directly on-device. Railway is not involved in IPTV catalogue traffic. */
+/** Phase 2 of one visual loading flow: catalog sync occupies 35-100%. */
 public final class SyncActivity extends AppCompatActivity {
     private static final String TAG = "BlofySync";
     private static final int DB_BATCH = 500;
@@ -39,68 +44,91 @@ public final class SyncActivity extends AppCompatActivity {
     private ActivitySyncBinding binding;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean destroyed = new AtomicBoolean(false);
-    private final AtomicInteger lastProgress = new AtomicInteger(0);
+    private final AtomicInteger lastInternalProgress = new AtomicInteger(0);
     private final Map<String, Integer> formats = new LinkedHashMap<>();
     private CatalogStore store;
+    private String discoveredLiveExtension = "";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         binding = ActivitySyncBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         store = new CatalogStore(this);
+        binding.progress.setProgressCompat(35, false);
+        binding.percent.setText("35%");
+        binding.stage.setText("جلب القنوات");
         binding.retry.setOnClickListener(view -> {
-            binding.retry.setVisibility(android.view.View.GONE);
+            binding.retry.setVisibility(View.GONE);
+            binding.error.setVisibility(View.GONE);
+            binding.error.setText("");
+            lastInternalProgress.set(0);
+            binding.progress.setProgressCompat(35, false);
+            binding.percent.setText("35%");
+            binding.stage.setText("جلب القنوات");
             worker.execute(this::sync);
         });
         worker.execute(this::sync);
     }
 
     private void sync() {
+        PlaylistProfile playlist = PlaylistRepository.active(this);
+        if (playlist == null) playlist = PlaylistRepository.importLegacySingleProfile(this);
+        if (playlist == null || playlist.provider == null) {
+            runOnUiThread(() -> {
+                startActivity(new Intent(this, ActivationActivity.class).putExtra("force_form", true));
+                finish();
+            });
+            return;
+        }
+        final PlaylistProfile activePlaylist = playlist;
         try {
             ensureActive();
             formats.clear();
-            getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                    .putBoolean("catalog_ready", false).apply();
+            CompatibilityProfile compatibility = CompatibilityProfileStore.load(this, activePlaylist.id);
+            discoveredLiveExtension = protocolExtension(compatibility == null ? "" : compatibility.liveProtocol);
+            PlaylistStateStore.markSyncing(this, activePlaylist.id);
+            runOnUiThread(() -> {
+                if (binding == null) return;
+                binding.error.setVisibility(View.GONE);
+                binding.retry.setVisibility(View.GONE);
+            });
             emit(4);
 
-            ProviderProfile profile = ProviderProfileStore.load(this);
-            if (profile == null) {
-                runOnUiThread(() -> {
-                    startActivity(new Intent(this, ActivationActivity.class).putExtra("force_form", true));
-                    finish();
-                });
-                return;
-            }
-
+            ProviderProfile profile = activePlaylist.provider;
             store.clearCatalog();
+            store.putMeta("playlist_id", activePlaylist.id);
             store.putMeta("kind", profile.kind);
             store.putMeta("server", profile.name.isEmpty()
                     ? (profile.isXtream() ? profile.serverUrl : "M3U") : profile.name);
+            if (!discoveredLiveExtension.isEmpty()) store.putMeta("live_extension", discoveredLiveExtension);
 
-            if (profile.isXtream()) syncXtream(profile);
-            else syncM3u(profile);
+            if (profile.isXtream()) syncXtream(profile); else syncM3u(profile);
 
             store.putMeta("profile", playbackProfile());
             store.putMeta("last_sync", String.valueOf(System.currentTimeMillis()));
-            getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                    .putBoolean("catalog_ready", true)
-                    .putInt("catalog_schema", 4)
-                    .apply();
+            PlaylistStateStore.markReady(this, activePlaylist.id);
             emit(100);
-            Thread.sleep(350);
+            Thread.sleep(220);
             ensureActive();
             runOnUiThread(() -> {
                 if (destroyed.get() || isFinishing() || isDestroyed()) return;
                 startActivity(new Intent(this, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                overridePendingTransition(0, 0);
                 finish();
             });
         } catch (Exception error) {
             if (destroyed.get() || Thread.currentThread().isInterrupted()) return;
             Log.e(TAG, "Direct provider sync failed", error);
-            emit(lastProgress.get());
+            emit(lastInternalProgress.get());
+            String message = error.getMessage();
+            if (message == null || message.trim().isEmpty()) message = "تعذر قراءة الباقة مباشرة من المزوّد.";
+            final String visibleMessage = message;
             runOnUiThread(() -> {
-                if (destroyed.get() || isFinishing() || isDestroyed()) return;
-                binding.retry.setVisibility(android.view.View.VISIBLE);
+                if (destroyed.get() || isFinishing() || isDestroyed() || binding == null) return;
+                binding.error.setText(visibleMessage);
+                binding.error.setVisibility(View.VISIBLE);
+                binding.retry.setVisibility(View.VISIBLE);
+                binding.stage.setText("تعذر إكمال التحميل");
                 binding.retry.requestFocus();
             });
         }
@@ -109,10 +137,21 @@ public final class SyncActivity extends AppCompatActivity {
     private void syncXtream(ProviderProfile profile) throws Exception {
         XtreamClient client = new XtreamClient(profile);
         emit(8);
-        client.validate();
-        importXtreamType(client, "live", 12, 42);
-        importXtreamType(client, "movies", 42, 70);
-        importXtreamType(client, "series", 70, 94);
+        try {
+            client.validate();
+            importXtreamType(client, "live", 12, 42);
+            importXtreamType(client, "movies", 42, 70);
+            importXtreamType(client, "series", 70, 94);
+        } catch (Exception apiError) {
+            String message = apiError.getMessage() == null ? "" : apiError.getMessage();
+            if (!message.contains("HTTP 403")) throw apiError;
+            Log.w(TAG, "Xtream API blocked with 403; switching to get.php/M3U fallback");
+            store.clearCatalog();
+            store.putMeta("kind", "m3u");
+            store.putMeta("server", (profile.name.isEmpty() ? profile.serverUrl : profile.name) + " • M3U fallback");
+            emit(10);
+            syncM3u(client.playlistFallbackProfile());
+        }
     }
 
     private void importXtreamType(XtreamClient client, String type, int start, int end) throws Exception {
@@ -129,6 +168,12 @@ public final class SyncActivity extends AppCompatActivity {
         client.streamCatalog(type, item -> {
             ensureActive();
             MediaRecord row = MediaRecord.from(item, type);
+            if ("live".equals(type)
+                    && row.directSource.isEmpty()
+                    && shouldUseDiscoveredProtocol(row.extension, discoveredLiveExtension)) {
+                row = new MediaRecord(row.type, row.id, row.name, row.image, row.backdrop,
+                        row.categoryId, row.rating, row.year, discoveredLiveExtension, row.directSource);
+            }
             batch.add(row);
             trackFormat(row);
             loaded[0]++;
@@ -159,8 +204,15 @@ public final class SyncActivity extends AppCompatActivity {
             if (savedCategories.add(categoryKey)) store.saveCategory(type, categoryId, categoryName);
             List<MediaRecord> batch = batches.get(type);
             if (batch == null) batch = batches.get("live");
-            batch.add(item);
-            trackFormat(item);
+            MediaRecord row = item;
+            if ("live".equals(type)
+                    && row.directSource.isEmpty()
+                    && shouldUseDiscoveredProtocol(row.extension, discoveredLiveExtension)) {
+                row = new MediaRecord(row.type, row.id, row.name, row.image, row.backdrop,
+                        row.categoryId, row.rating, row.year, discoveredLiveExtension, row.directSource);
+            }
+            batch.add(row);
+            trackFormat(row);
             loaded[0]++;
             if (batch.size() >= DB_BATCH) {
                 store.saveMedia(new ArrayList<>(batch));
@@ -170,6 +222,23 @@ public final class SyncActivity extends AppCompatActivity {
         });
         for (List<MediaRecord> batch : batches.values()) if (!batch.isEmpty()) store.saveMedia(batch);
         emit(94);
+    }
+
+    private static boolean shouldUseDiscoveredProtocol(String current, String discovered) {
+        if (discovered == null || discovered.isEmpty()) return false;
+        String saved = current == null ? "" : current.toLowerCase(Locale.US);
+        if ("m3u8".equals(discovered)) return saved.isEmpty() || "ts".equals(saved);
+        if ("mpd".equals(discovered)) return saved.isEmpty() || "ts".equals(saved);
+        return saved.isEmpty();
+    }
+
+    private static String protocolExtension(String protocol) {
+        String value = protocol == null ? "" : protocol.trim().toLowerCase(Locale.US);
+        if ("hls".equals(value) || "m3u8".equals(value)) return "m3u8";
+        if ("dash".equals(value) || "mpd".equals(value)) return "mpd";
+        if ("ts".equals(value) || "mpegts".equals(value)) return "ts";
+        if ("mp4".equals(value)) return "mp4";
+        return "";
     }
 
     private void trackFormat(MediaRecord item) {
@@ -187,22 +256,27 @@ public final class SyncActivity extends AppCompatActivity {
         return "Media3 + LibVLC • VOD مباشر من المزود";
     }
 
-    private void emit(int percent) {
+    private void emit(int internalPercent) {
         if (destroyed.get()) return;
-        int safePercent = Math.max(0, Math.min(100, percent));
-        if (safePercent < lastProgress.get()) return;
-        lastProgress.set(safePercent);
+        int internal = Math.max(0, Math.min(100, internalPercent));
+        if (internal < lastInternalProgress.get()) return;
+        lastInternalProgress.set(internal);
+        int visible = 35 + Math.round(internal * 0.65f);
+        visible = Math.max(35, Math.min(100, visible));
+        final int finalVisible = visible;
         runOnUiThread(() -> {
             if (destroyed.get() || isFinishing() || isDestroyed() || binding == null) return;
-            binding.progress.setProgressCompat(safePercent, true);
-            binding.percent.setText(safePercent + "%");
+            binding.progress.setProgressCompat(finalVisible, true);
+            binding.percent.setText(finalVisible + "%");
+            if (internal < 42) binding.stage.setText("جلب القنوات");
+            else if (internal < 70) binding.stage.setText("جلب الأفلام");
+            else if (internal < 94) binding.stage.setText("جلب المسلسلات");
+            else binding.stage.setText("تجهيز المكتبة");
         });
     }
 
     private void ensureActive() throws InterruptedException {
-        if (destroyed.get() || Thread.currentThread().isInterrupted()) {
-            throw new InterruptedException("تم إيقاف المزامنة.");
-        }
+        if (destroyed.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("تم إيقاف المزامنة.");
     }
 
     @Override protected void onDestroy() {

@@ -1,0 +1,2 @@
+BLOFY PLAYER v18 release build trigger
+validation=2

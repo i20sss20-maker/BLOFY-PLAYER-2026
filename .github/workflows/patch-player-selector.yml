@@ -1,0 +1,72 @@
+name: Patch BLOFY player selector
+
+on:
+  push:
+    branches: [blofy-commercial-v21]
+    paths: ['.github/workflows/patch-player-selector.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: blofy-commercial-v21
+      - name: Patch player selector
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # Settings layout: add player spinner.
+          p = Path('BLOFY-ANDROID-COMMERCIAL/app/src/main/res/layout/activity_settings.xml')
+          s = p.read_text()
+          anchor = '<TextView android:layout_width="match_parent" android:layout_height="44dp" android:layout_marginTop="16dp" android:background="@drawable/bg_home_status" android:gravity="center" android:text="Media3 أصلي • تشغيل مباشر • وضع توافق احتياطي" android:textColor="@color/blofy_success" android:textSize="13sp" android:textStyle="bold" />'
+          insert = anchor + '''\n        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="22dp" android:gravity="end" android:text="المشغل المفضل" android:textColor="@color/blofy_text" android:textSize="16sp" android:textStyle="bold" />\n        <androidx.appcompat.widget.AppCompatSpinner android:id="@+id/playerEngine" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="8dp" android:background="@drawable/bg_panel" android:focusable="true" android:paddingStart="14dp" android:paddingEnd="14dp" />\n        <TextView android:id="@+id/playerEngineDescription" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:gravity="end" android:textColor="@color/blofy_muted" android:textDirection="rtl" android:textSize="12sp" />'''
+          if anchor not in s: raise SystemExit('settings layout anchor missing')
+          p.write_text(s.replace(anchor, insert, 1))
+
+          # Settings activity: spinner values and persistence.
+          p = Path('BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/settings/SettingsActivity.java')
+          s = p.read_text()
+          s = s.replace('import android.content.SharedPreferences;\n', 'import android.content.SharedPreferences;\nimport android.widget.ArrayAdapter;\nimport android.widget.AdapterView;\n', 1)
+          marker = '        prefs = getSharedPreferences("blofy_player_settings", MODE_PRIVATE);\n'
+          player_setup = marker + '''        String[] playerLabels = {"تلقائي", "Media3", "LibVLC", "MX Player", "MX Player Pro", "VLC", "أي مشغل خارجي"};\n        String[] playerValues = {"auto", "media3", "libvlc", "mx_free", "mx_pro", "vlc_external", "external"};\n        ArrayAdapter<String> playerAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, playerLabels);\n        playerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);\n        binding.playerEngine.setAdapter(playerAdapter);\n        String savedPlayer = prefs.getString("player_engine", "auto");\n        int selectedPlayer = 0;\n        for (int i = 0; i < playerValues.length; i++) if (playerValues[i].equals(savedPlayer)) selectedPlayer = i;\n        binding.playerEngine.setSelection(selectedPlayer, false);\n        renderPlayer(savedPlayer);\n        binding.playerEngine.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {\n            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {\n                String value = playerValues[Math.max(0, Math.min(position, playerValues.length - 1))];\n                prefs.edit().putString("player_engine", value).apply();\n                renderPlayer(value);\n            }\n            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }\n        });\n'''
+          if marker not in s: raise SystemExit('settings prefs marker missing')
+          s = s.replace(marker, player_setup, 1)
+          method_anchor = '    private void renderQuality(String quality) {\n'
+          player_method = '''    private void renderPlayer(String value) {\n        String text;\n        switch (value) {\n            case "media3": text = "Media3 داخلي • المحرك الأساسي السريع"; break;\n            case "libvlc": text = "LibVLC داخلي • توافق واسع مع الصيغ"; break;\n            case "mx_free": text = "MX Player خارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;\n            case "mx_pro": text = "MX Player Pro خارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;\n            case "vlc_external": text = "VLC الخارجي • يعود إلى Media3 إذا لم يكن مثبتًا"; break;\n            case "external": text = "يفتح قائمة المشغلات المثبتة على الجهاز"; break;\n            default: text = "تلقائي • Media3 أولًا ثم LibVLC عند مشاكل الصيغة"; break;\n        }\n        binding.playerEngineDescription.setText(text);\n    }\n\n'''
+          if method_anchor not in s: raise SystemExit('settings method anchor missing')
+          s = s.replace(method_anchor, player_method + method_anchor, 1)
+          s = s.replace('                binding.fastBuffer, binding.stableBuffer, binding.subtitles, binding.autoplay,\n', '                binding.playerEngine, binding.fastBuffer, binding.stableBuffer, binding.subtitles, binding.autoplay,\n', 1)
+          p.write_text(s)
+
+          # Player activity: route resolved URL according to selected engine.
+          p = Path('BLOFY-ANDROID-COMMERCIAL/app/src/main/java/tv/blofy/commercial/ui/player/PlayerActivity.java')
+          s = p.read_text()
+          old = '''                    if (!isCurrent(generation, requestedId)) return;\n                    if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {\n                        prepareMedia3Direct(directUrl, requestedExtension);\n                    }\n'''
+          new = '''                    if (!isCurrent(generation, requestedId)) return;\n                    if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {\n                        routeSelectedPlayer(directUrl, requestedExtension);\n                    }\n'''
+          if old not in s: raise SystemExit('player route anchor missing')
+          s = s.replace(old, new, 1)
+          anchor = '    private boolean isCurrent(int generation, String requestedId) {\n'
+          route = '''    private void routeSelectedPlayer(String url, String mediaExtension) {\n        String selected = getSharedPreferences("blofy_player_settings", MODE_PRIVATE)\n                .getString("player_engine", "auto");\n        String contentMime = mime(mediaExtension);\n        if ("libvlc".equals(selected)) {\n            playbackUrl = url;\n            playbackExtension = mediaExtension;\n            launchVlcFallback();\n            return;\n        }\n        if ("mx_free".equals(selected)) {\n            if (ExternalPlayerLauncher.launch(this, ExternalPlayerLauncher.MX_FREE, url, contentMime, name)) return;\n        } else if ("mx_pro".equals(selected)) {\n            if (ExternalPlayerLauncher.launch(this, ExternalPlayerLauncher.MX_PRO, url, contentMime, name)) return;\n        } else if ("vlc_external".equals(selected)) {\n            if (ExternalPlayerLauncher.launch(this, ExternalPlayerLauncher.VLC, url, contentMime, name)) return;\n        } else if ("external".equals(selected)) {\n            if (ExternalPlayerLauncher.launchChooser(this, url, contentMime, name)) return;\n        }\n        prepareMedia3Direct(url, mediaExtension);\n    }\n\n'''
+          if anchor not in s: raise SystemExit('player method anchor missing')
+          s = s.replace(anchor, route + anchor, 1)
+          # onStart must respect saved selection too.
+          s = s.replace('        if (playbackUrl != null) prepareMedia3Direct(playbackUrl, playbackExtension == null ? extension : playbackExtension);\n', '        if (playbackUrl != null) routeSelectedPlayer(playbackUrl, playbackExtension == null ? extension : playbackExtension);\n', 1)
+          p.write_text(s)
+
+          # bump version to v23 to include player selector after v22 M3U compatibility work.
+          p = Path('BLOFY-ANDROID-COMMERCIAL/app/build.gradle.kts')
+          s = p.read_text().replace('versionCode = 2026082221', 'versionCode = 2026082223').replace('versionName = "2026.08.22.21-commercial"', 'versionName = "2026.08.22.23-commercial"')
+          p.write_text(s)
+
+      - name: Commit player selector
+        run: |
+          git config user.name "blofy-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add BLOFY-ANDROID-COMMERCIAL
+          git commit -m "BLOFY v23: Media3 LibVLC MX VLC and external player selector" || exit 0
+          git push origin HEAD:blofy-commercial-v21

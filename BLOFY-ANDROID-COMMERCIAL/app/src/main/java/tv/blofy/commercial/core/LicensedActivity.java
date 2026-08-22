@@ -12,6 +12,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import tv.blofy.commercial.BuildConfig;
+
 /**
  * Protected BLOFY screen gate.
  *
@@ -34,6 +36,11 @@ public abstract class LicensedActivity extends AppCompatActivity {
     }
 
     protected final void verifyEntitlement() {
+        // Emulator CI may bypass BLOFY account licensing only in DEBUG builds. Production
+        // release builds can never enter this branch because BuildConfig.DEBUG is false.
+        if (BuildConfig.DEBUG && getSharedPreferences("blofy_emulator_test", MODE_PRIVATE)
+                .getBoolean("skip_license", false)) return;
+
         if (leavingForActivation || isFinishing() || isDestroyed()
                 || !checkingLicense.compareAndSet(false, true)) return;
         licenseWorker.execute(() -> {

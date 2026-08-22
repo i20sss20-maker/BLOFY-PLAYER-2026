@@ -14,10 +14,14 @@ import tv.blofy.commercial.core.ApiClient;
 import tv.blofy.commercial.core.DeviceIdentity;
 import tv.blofy.commercial.core.LicenseGate;
 import tv.blofy.commercial.databinding.ActivityBootBinding;
+import tv.blofy.commercial.provider.PlaylistProfile;
+import tv.blofy.commercial.provider.PlaylistRepository;
+import tv.blofy.commercial.provider.PlaylistStateStore;
+import tv.blofy.commercial.provider.ProviderProfile;
 import tv.blofy.commercial.provider.ProviderProfileStore;
 import tv.blofy.commercial.ui.activation.ActivationActivity;
 import tv.blofy.commercial.ui.home.HomeActivity;
-import tv.blofy.commercial.ui.sync.SyncActivity;
+import tv.blofy.commercial.ui.playlists.PlaylistsActivity;
 
 public final class BootActivity extends AppCompatActivity {
     private ActivityBootBinding binding;
@@ -41,7 +45,6 @@ public final class BootActivity extends AppCompatActivity {
     private void boot() {
         worker.execute(() -> {
             ApiClient api = new ApiClient(this);
-            boolean hasCatalog = hasLocalCatalog();
             try {
                 stage(14, "فحص خدمة التفعيل…");
                 api.get("/api/health");
@@ -66,27 +69,32 @@ public final class BootActivity extends AppCompatActivity {
                 try {
                     JSONObject bootstrap = api.get("/api/device/bootstrap?device_id=" + ApiClient.encode(api.deviceId()));
                     if (ProviderProfileStore.importFromBootstrap(this, bootstrap)) {
-                        getSharedPreferences("blofy_commercial_state", MODE_PRIVATE).edit()
-                                .putBoolean("catalog_ready", false).apply();
-                        hasCatalog = false;
+                        ProviderProfile imported = ProviderProfileStore.load(this);
+                        if (imported != null) ensurePlaylist(imported);
                     }
                 } catch (Exception ignored) {
-                    // Keep an existing local profile during temporary activation-service outages.
+                    // Local playlists remain usable while the control plane is temporarily unavailable.
                 }
 
-                stage(80, "فحص بيانات الباقة…");
-                if (!ProviderProfileStore.hasProfile(this)) {
+                stage(82, "فحص قوائم التشغيل…");
+                PlaylistProfile playlist = PlaylistRepository.active(this);
+                if (playlist == null) playlist = PlaylistRepository.importLegacySingleProfile(this);
+                if (playlist == null) {
                     openActivation("امسح الباركود وأرسل بيانات Xtream أو M3U من صفحة الربط.");
                     return;
                 }
 
-                stage(94, "فحص الكتالوج المحلي…");
                 stage(100, "جاهز");
-                open(hasCatalog ? HomeActivity.class : SyncActivity.class);
+                open(PlaylistsActivity.class);
             } catch (Exception error) {
-                if (hasCatalog && ProviderProfileStore.hasProfile(this)) {
-                    stage(100, "خدمة التفعيل غير متاحة مؤقتًا — فتح المكتبة المحلية");
+                PlaylistProfile playlist = PlaylistRepository.active(this);
+                if (playlist != null && PlaylistStateStore.isReady(this, playlist.id)) {
+                    stage(100, "فتح المكتبة المحلية");
                     open(HomeActivity.class);
+                    return;
+                }
+                if (playlist != null) {
+                    open(PlaylistsActivity.class);
                     return;
                 }
                 openActivation(error.getMessage());
@@ -94,11 +102,20 @@ public final class BootActivity extends AppCompatActivity {
         });
     }
 
-    private boolean hasLocalCatalog() {
-        return getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                .getBoolean("catalog_ready", false)
-                && getSharedPreferences("blofy_commercial_state", MODE_PRIVATE)
-                .getInt("catalog_schema", 0) >= 4;
+    private PlaylistProfile ensurePlaylist(ProviderProfile provider) {
+        PlaylistProfile active = PlaylistRepository.active(this);
+        if (active != null && sameProvider(active.provider, provider)) return active;
+        PlaylistProfile created = PlaylistProfile.create(provider);
+        PlaylistRepository.upsert(this, created, true);
+        PlaylistStateStore.markSyncing(this, created.id);
+        return created;
+    }
+
+    private static boolean sameProvider(ProviderProfile a, ProviderProfile b) {
+        if (a == null || b == null) return false;
+        return a.kind.equals(b.kind) && a.serverUrl.equals(b.serverUrl)
+                && a.username.equals(b.username) && a.password.equals(b.password)
+                && a.playlistUrl.equals(b.playlistUrl);
     }
 
     private void openActivation(String message) {
