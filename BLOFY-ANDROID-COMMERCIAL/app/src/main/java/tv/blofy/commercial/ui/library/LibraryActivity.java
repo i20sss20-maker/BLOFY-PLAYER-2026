@@ -33,7 +33,7 @@ import tv.blofy.commercial.data.MediaRecord;
 import tv.blofy.commercial.ui.details.DetailsActivity;
 import tv.blofy.commercial.ui.player.PlayerActivity;
 
-/** Two-pane Movies/Series browser: category rail + poster grid. */
+/** Two-pane TV library: category rail + poster grid. Search never steals focus on entry. */
 public final class LibraryActivity extends LicensedActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicInteger generation = new AtomicInteger();
@@ -59,6 +59,8 @@ public final class LibraryActivity extends LicensedActivity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(28), dp(22), dp(28), dp(24));
         root.setBackgroundResource(R.drawable.bg_blofy);
+        root.setFocusable(true);
+        root.setFocusableInTouchMode(true);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
@@ -71,8 +73,7 @@ public final class LibraryActivity extends LicensedActivity {
 
         count = text("", 13, false);
         count.setTextColor(getColor(R.color.blofy_muted));
-        LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(110), ViewGroup.LayoutParams.WRAP_CONTENT);
-        top.addView(count, countLp);
+        top.addView(count, new LinearLayout.LayoutParams(dp(110), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         search = new EditText(this);
         search.setHint("بحث");
@@ -81,13 +82,29 @@ public final class LibraryActivity extends LicensedActivity {
         search.setHintTextColor(getColor(R.color.blofy_muted));
         search.setBackgroundResource(R.drawable.bg_home_status);
         search.setPadding(dp(16), 0, dp(16), 0);
-        LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(dp(260), dp(48));
-        top.addView(search, searchLp);
+        search.setShowSoftInputOnFocus(false);
+        search.setFocusable(true);
+        search.setFocusableInTouchMode(false);
+        top.addView(search, new LinearLayout.LayoutParams(dp(260), dp(48)));
         search.setOnEditorActionListener((v, action, event) -> {
             query = v.getText() == null ? "" : v.getText().toString().trim();
             hideKeyboard();
             loadMedia();
             return true;
+        });
+        search.setOnClickListener(v -> showKeyboard());
+        search.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                showKeyboard();
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (posterAdapter != null && posterAdapter.getItemCount() > 0) focus(grid, 0);
+                else focus(categories, 0);
+                return true;
+            }
+            return false;
         });
 
         LinearLayout body = new LinearLayout(this);
@@ -111,6 +128,7 @@ public final class LibraryActivity extends LicensedActivity {
         posterAdapter = new PosterAdapter();
         categories.setAdapter(categoryAdapter);
         grid.setAdapter(posterAdapter);
+        root.requestFocus();
         return root;
     }
 
@@ -119,6 +137,7 @@ public final class LibraryActivity extends LicensedActivity {
         view.setHasFixedSize(true);
         view.setItemAnimator(null);
         view.setItemViewCacheSize(20);
+        view.setFocusable(false);
         return view;
     }
 
@@ -130,7 +149,7 @@ public final class LibraryActivity extends LicensedActivity {
             runOnUiThread(() -> {
                 categoryAdapter.submit(rows);
                 loadMedia();
-                categories.post(() -> focus(categories, 0));
+                categories.postDelayed(() -> focus(categories, 0), 80);
             });
         });
     }
@@ -150,6 +169,7 @@ public final class LibraryActivity extends LicensedActivity {
     }
 
     private void open(MediaRecord item) {
+        if (item == null || item.id == null || item.id.trim().isEmpty()) return;
         boolean directM3u = "m3u".equalsIgnoreCase(store.getMeta("kind"));
         Class<?> target = directM3u ? PlayerActivity.class : DetailsActivity.class;
         startActivity(new Intent(this, target)
@@ -187,13 +207,13 @@ public final class LibraryActivity extends LicensedActivity {
         TextView title = text("", 13, true);
         title.setGravity(Gravity.CENTER);
         title.setMaxLines(2);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
-        card.addView(title, titleLp);
+        card.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
         card.setTag(new Object[]{image, title});
         return card;
     }
 
     private void focus(RecyclerView view, int position) {
+        if (view == null || position < 0) return;
         view.scrollToPosition(position);
         view.post(() -> {
             RecyclerView.ViewHolder holder = view.findViewHolderForAdapterPosition(position);
@@ -203,14 +223,24 @@ public final class LibraryActivity extends LicensedActivity {
 
     private TextView text(String value, int sp, boolean bold) {
         TextView view = new TextView(this);
-        view.setText(value); view.setTextColor(getColor(R.color.blofy_text)); view.setTextSize(sp);
+        view.setText(value);
+        view.setTextColor(getColor(R.color.blofy_text));
+        view.setTextSize(sp);
         if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return view;
+    }
+
+    private void showKeyboard() {
+        search.setShowSoftInputOnFocus(true);
+        search.requestFocus();
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT);
     }
 
     private void hideKeyboard() {
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(search.getWindowToken(), 0);
+        search.setShowSoftInputOnFocus(false);
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -231,6 +261,9 @@ public final class LibraryActivity extends LicensedActivity {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && posterAdapter.getItemCount() > 0) {
                     focus(grid, 0); return true;
                 }
+                if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP && holder.getBindingAdapterPosition() == 0) {
+                    search.requestFocus(); return true;
+                }
                 return false;
             });
         }
@@ -248,7 +281,14 @@ public final class LibraryActivity extends LicensedActivity {
             BlofyImageLoader.poster(LibraryActivity.this, holder.image, row.image);
             holder.itemView.setOnClickListener(v -> open(row));
             holder.itemView.setOnFocusChangeListener((v, focused) -> v.animate()
-                    .scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f).setDuration(65).start());
+                    .scaleX(focused ? 1.045f : 1f).scaleY(focused ? 1.045f : 1f).setDuration(70).start());
+            holder.itemView.setOnKeyListener((v, keyCode, event) -> {
+                int p = holder.getBindingAdapterPosition();
+                if (event.getAction() != KeyEvent.ACTION_DOWN || p == RecyclerView.NO_POSITION) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && p % 5 == 0) { focus(categories, 0); return true; }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP && p < 5) { search.requestFocus(); return true; }
+                return false;
+            });
         }
         @Override public int getItemCount() { return rows.size(); }
         final class Holder extends RecyclerView.ViewHolder {
@@ -264,12 +304,16 @@ public final class LibraryActivity extends LicensedActivity {
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && (event.getKeyCode() == KeyEvent.KEYCODE_ESCAPE || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B)) {
+            hideKeyboard();
             finish(); return true;
         }
         return super.dispatchKeyEvent(event);
     }
 
     @Override protected void onDestroy() {
-        generation.incrementAndGet(); worker.shutdownNow(); if (store != null) store.close(); super.onDestroy();
+        generation.incrementAndGet();
+        worker.shutdownNow();
+        if (store != null) store.close();
+        super.onDestroy();
     }
 }
