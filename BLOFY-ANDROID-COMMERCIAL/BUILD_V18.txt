@@ -1,2 +1,2 @@
 BLOFY PLAYER v18 release build trigger
-validation=1
+validation=2
