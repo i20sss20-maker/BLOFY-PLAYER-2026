@@ -39,14 +39,29 @@ public final class PlaybackCompatibility {
         return manual == null || manual.isEmpty() || "auto".equals(manual) ? preferredEngine : manual;
     }
 
+    /**
+     * Mirrors the HTTP fingerprint that ServerDiscoveryEngine proved acceptable for this provider.
+     * Some Xtream/CDN panels reject playback when the catalog/probe UA is reused without its
+     * companion headers (notably IPTV Smarters' X-Requested-With), returning vendor codes such as 456.
+     */
     public Map<String, String> requestHeaders() {
         Map<String, String> out = new LinkedHashMap<>();
         out.put("Accept", "*/*");
         out.put("Accept-Encoding", "identity");
+        out.put("Accept-Language", "en-US,en;q=0.9");
         out.put("Cache-Control", "no-cache");
+        out.put("Pragma", "no-cache");
         out.put("Icy-MetaData", "1");
-        if (!origin.isEmpty()) out.put("Origin", origin);
-        if (!referer.isEmpty()) out.put("Referer", referer);
+
+        if (userAgent.startsWith("Mozilla/")) {
+            if (!origin.isEmpty()) out.put("Origin", origin);
+            if (!referer.isEmpty()) out.put("Referer", referer);
+        } else if ("IPTVSmartersPlayer".equals(userAgent)) {
+            out.put("X-Requested-With", "com.nst.iptvsmarterstvbox");
+        } else {
+            if (!origin.isEmpty()) out.put("Origin", origin);
+            if (!referer.isEmpty()) out.put("Referer", referer);
+        }
         return out;
     }
 
