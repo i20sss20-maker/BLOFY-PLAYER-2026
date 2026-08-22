@@ -19,14 +19,16 @@ public final class XtreamClient {
     public interface CatalogConsumer { void accept(JSONObject item) throws Exception; }
 
     private static final String[] API_USER_AGENTS = new String[] {
-            "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
-            "IPTV Smarters Pro",
-            "okhttp/4.12.0"
+            "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "IPTVSmartersPlayer",
+            "Dalvik/2.1.0 (Linux; U; Android 11; Android TV)",
+            "VLC/3.0.20 LibVLC/3.0.20"
     };
 
     private final ProviderProfile profile;
     private final OkHttpClient http;
     private volatile String workingUserAgent = API_USER_AGENTS[0];
+    private volatile int lastApiStatus = -1;
 
     public XtreamClient(ProviderProfile profile) {
         if (profile == null || !profile.isXtream() || !profile.isValid()) {
@@ -72,7 +74,7 @@ public final class XtreamClient {
     public int streamCatalog(String type, CatalogConsumer consumer) throws Exception {
         String url = apiUrl("action", action(type, false));
         try (Response response = executeCompatible(url)) {
-            if (!response.isSuccessful()) throw new Exception("المزوّد رفض المكتبة (HTTP " + response.code() + ").");
+            if (!response.isSuccessful()) throw providerHttpError("المكتبة", response.code());
             if (response.body() == null) throw new Exception("مكتبة المزوّد فارغة.");
             try (Reader body = response.body().charStream(); JsonReader reader = new JsonReader(body)) {
                 int count = 0;
@@ -115,6 +117,7 @@ public final class XtreamClient {
 
     public String serverName() { return profile.name.isEmpty() ? profile.serverUrl : profile.name; }
     public String workingUserAgent() { return workingUserAgent; }
+    public int lastApiStatus() { return lastApiStatus; }
 
     private JSONObject readCatalogItem(JsonReader reader, String type) throws Exception {
         String id = "", name = "", image = "", backdrop = "", category = "", rating = "", year = "", ext = "";
@@ -193,31 +196,51 @@ public final class XtreamClient {
     }
 
     private Request request(String url, String userAgent) {
-        return new Request.Builder().url(url)
+        Request.Builder builder = new Request.Builder().url(url)
                 .header("User-Agent", userAgent)
                 .header("Accept", "application/json,text/plain,*/*")
                 .header("Accept-Language", "en-US,en;q=0.9")
                 .header("Cache-Control", "no-cache")
-                .header("Pragma", "no-cache")
-                .header("Connection", "keep-alive")
-                .build();
+                .header("Pragma", "no-cache");
+
+        if ("IPTVSmartersPlayer".equals(userAgent)) {
+            builder.header("X-Requested-With", "com.nst.iptvsmarterstvbox");
+        } else if (userAgent.startsWith("Mozilla/")) {
+            HttpUrl target = HttpUrl.parse(profile.serverUrl);
+            if (target != null) {
+                String origin = target.scheme() + "://" + target.host()
+                        + ((target.port() == 80 && "http".equals(target.scheme()))
+                        || (target.port() == 443 && "https".equals(target.scheme())) ? "" : ":" + target.port());
+                builder.header("Origin", origin).header("Referer", origin + "/");
+            }
+        }
+        return builder.build();
     }
 
     private Response executeCompatible(String url) throws Exception {
         String preferred = workingUserAgent;
-        Response response = http.newCall(request(url, preferred)).execute();
-        if (response.code() != 403 && response.code() != 406) return response;
-        response.close();
+        Response last = null;
 
-        for (String userAgent : API_USER_AGENTS) {
-            if (userAgent.equals(preferred)) continue;
-            Response candidate = http.newCall(request(url, userAgent)).execute();
+        for (int pass = 0; pass < API_USER_AGENTS.length; pass++) {
+            String userAgent = pass == 0 ? preferred : API_USER_AGENTS[pass - (API_USER_AGENTS[0].equals(preferred) ? 0 : 1)];
+            if (pass > 0 && userAgent.equals(preferred)) continue;
+            Response candidate;
+            try {
+                candidate = http.newCall(request(url, userAgent)).execute();
+            } catch (IOException error) {
+                if (last != null) last.close();
+                throw error;
+            }
+            lastApiStatus = candidate.code();
             if (candidate.code() != 403 && candidate.code() != 406) {
+                if (last != null) last.close();
                 workingUserAgent = userAgent;
                 return candidate;
             }
-            candidate.close();
+            if (last != null) last.close();
+            last = candidate;
         }
+        if (last != null) return last;
         return http.newCall(request(url, preferred)).execute();
     }
 
@@ -235,12 +258,21 @@ public final class XtreamClient {
 
     private String requestText(String url) throws Exception {
         try (Response response = executeCompatible(url)) {
-            if (!response.isSuccessful()) throw new Exception("المزوّد رفض الطلب (HTTP " + response.code() + ").");
+            if (!response.isSuccessful()) throw providerHttpError("الطلب", response.code());
             if (response.body() == null) throw new Exception("استجابة المزوّد فارغة.");
             return response.body().string();
         } catch (IOException error) {
             throw new Exception("تعذر الاتصال مباشرة بمزوّد IPTV: " + error.getMessage());
         }
+    }
+
+    private Exception providerHttpError(String area, int status) {
+        if (status == 403) {
+            return new Exception("المزوّد رفض " + area + " (HTTP 403) بعد تجربة هويات API متعددة. غالبًا الحساب أو IP الجهاز أو سياسة مزوّد الخدمة تمنع player_api.php.");
+        }
+        if (status == 401) return new Exception("المزوّد رفض بيانات الدخول (HTTP 401). تحقق من اسم المستخدم وكلمة المرور.");
+        if (status == 456) return new Exception("المزوّد رفض الطلب (HTTP 456). غالبًا يوجد تقييد IP/اتصال على الحساب.");
+        return new Exception("المزوّد رفض " + area + " (HTTP " + status + ").");
     }
 
     private static String action(String type, boolean categories) {
