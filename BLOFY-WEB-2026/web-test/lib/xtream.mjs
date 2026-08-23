@@ -120,9 +120,15 @@ export class XtreamClient {
       categoryId: String(row.category_id || ""),
       rating: row.rating_5based || row.rating || "",
       year: row.year || row.releaseDate || row.releasedate || "",
-      extension: String(row.container_extension || extensionFromUrl(row.direct_source) || (type === "live" ? "ts" : "mp4")).toLowerCase(),
+      // Match 7 Max behaviour for Xtream Live: TS is the default and the
+      // player's fallback decision controls when HLS is requested. A provider
+      // direct_source must not silently lock Live to one format, otherwise a
+      // TS -> HLS recovery would keep reopening the exact same URL.
+      extension: type === "live"
+        ? "ts"
+        : String(row.container_extension || extensionFromUrl(row.direct_source) || "mp4").toLowerCase(),
       epgId: row.epg_channel_id || "",
-      sourceUrl: normalizeDirectSource(row.direct_source),
+      sourceUrl: type === "live" ? "" : normalizeDirectSource(row.direct_source),
       type,
     }));
   }
