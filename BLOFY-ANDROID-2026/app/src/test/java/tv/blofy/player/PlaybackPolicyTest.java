@@ -30,9 +30,9 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void sevenMaxStyleStartupTimeoutsAreBounded() {
-        assertEquals(15_000, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(20_000, PlaybackPolicy.startupTimeoutMs(1));
+    public void fastStartupTimeoutsAreBounded() {
+        assertEquals(6_000, PlaybackPolicy.startupTimeoutMs(0));
+        assertEquals(8_000, PlaybackPolicy.startupTimeoutMs(1));
     }
 
     @Test
@@ -42,17 +42,16 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void recoveryUsesPlayer1ThenPlayer2ThenAlternateFormat() {
-        assertFalse(PlaybackPolicy.useCronet(0));
+    public void recoveryUsesCronetFirstThenHttpThenAlternateFormat() {
+        assertTrue(PlaybackPolicy.useCronet(0));
         assertFalse(PlaybackPolicy.useCronet(1));
         assertTrue(PlaybackPolicy.useCronet(2));
         assertFalse(PlaybackPolicy.useCronet(3));
-        assertTrue(PlaybackPolicy.useCronet(4));
 
         assertTrue(PlaybackPolicy.shouldRetrySameFormat(1));
-        assertTrue(PlaybackPolicy.shouldRetrySameFormat(2));
-        assertTrue(PlaybackPolicy.shouldTryAlternateLiveFormat(3));
-        assertTrue(PlaybackPolicy.shouldRetryAlternateFormat(4));
-        assertTrue(PlaybackPolicy.exhausted(5));
+        assertFalse(PlaybackPolicy.shouldRetrySameFormat(2));
+        assertTrue(PlaybackPolicy.shouldTryAlternateLiveFormat(2));
+        assertTrue(PlaybackPolicy.shouldRetryAlternateFormat(3));
+        assertTrue(PlaybackPolicy.exhausted(4));
     }
 }
