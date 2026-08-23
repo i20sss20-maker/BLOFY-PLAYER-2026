@@ -52,9 +52,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "ndk;$ANDROID_NDK_VERSION" \
             "cmake;3.31.4"
+          test -d "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
 
       - name: Checkout exact Media3 1.11.0 source
         shell: bash
@@ -172,7 +173,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-7MAX-FULL-APK",
-            "version": "2026.08.23.4-7maxfull"
+            "version": "2026.08.23.7-7max-audit"
           }
           EOF
           git add .ci/full-player-status.json
