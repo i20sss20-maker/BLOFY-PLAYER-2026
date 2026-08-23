@@ -25,6 +25,7 @@ jobs:
       BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
       ANDROID_NDK_VERSION: 26.1.10909125
       ANDROID_ABI: 23
+      MEDIA3_COMMIT: e156aec119c304d3de70a2fa69e08dc585b9d92b
 
     steps:
       - name: Checkout BLOFY
@@ -49,15 +50,13 @@ jobs:
             "ndk;$ANDROID_NDK_VERSION" \
             "cmake;3.31.4"
 
-      - name: Checkout matching Media3 source
+      - name: Checkout exact Media3 1.11.0 source
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth=1 --branch release https://github.com/androidx/media.git .media3
-          grep -R '1.11.0' .media3/RELEASENOTES.md >/dev/null || {
-            echo "Media3 release checkout is not 1.11.x-compatible" >&2
-            exit 1
-          }
+          git clone https://github.com/androidx/media.git .media3
+          git -C .media3 checkout "$MEDIA3_COMMIT"
+          grep -R '1.11.0' .media3/RELEASENOTES.md >/dev/null
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > .media3/local.properties
 
       - name: Build FFmpeg audio libraries
@@ -114,7 +113,7 @@ jobs:
           ./gradlew --no-daemon assembleDebug \
             -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
 
-      - name: Verify APK contains FFmpeg and Cronet integration
+      - name: Verify APK contains FFmpeg extension
         shell: bash
         run: |
           set -euo pipefail
