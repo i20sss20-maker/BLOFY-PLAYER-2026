@@ -16,7 +16,7 @@ on:
       - ".github/workflows/full-player-apk.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: blofy-full-android-${{ github.ref }}
@@ -148,3 +148,34 @@ jobs:
           path: BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Publish CI run pointer
+        if: always() && github.event_name == 'push'
+        shell: bash
+        env:
+          CI_JOB_STATUS: ${{ job.status }}
+          CI_RUN_ID: ${{ github.run_id }}
+          CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CI_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "blofy-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          mkdir -p .ci
+          cat > .ci/full-player-status.json <<EOF
+          {
+            "workflow": "Build BLOFY FULL Player APK",
+            "status": "${CI_JOB_STATUS}",
+            "run_id": ${CI_RUN_ID},
+            "run_attempt": ${CI_RUN_ATTEMPT},
+            "source_sha": "${CI_SOURCE_SHA}",
+            "artifact": "BLOFY-PLAYER-7MAX-FULL-APK",
+            "version": "2026.08.23.4-7maxfull"
+          }
+          EOF
+          git add .ci/full-player-status.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "ci: record full player build ${CI_RUN_ID}"
+          git push origin main
