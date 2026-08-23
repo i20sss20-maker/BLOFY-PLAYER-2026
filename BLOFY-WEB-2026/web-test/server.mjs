@@ -12,6 +12,15 @@ import { LicenseStore } from "./lib/license-store.mjs";
 import { DeviceProfileStore, persistDeviceSessionFromHeaders } from "./lib/device-profile-store.mjs";
 import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs";
 import { bindRelayCancellation, providerRequestHeaders, providerResponseStatus } from "./lib/media-relay.mjs";
+import {
+  appendMediaAttemptId,
+  buildNativeLinkContract,
+  createMediaAttemptId,
+  mediaErrorStatus,
+  mediaLogContext,
+  mediaProviderStatus,
+  normalizeMediaAttemptId,
+} from "./lib/native-link.mjs";
 import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackPath, nativePlaybackTarget } from "./lib/runtime.mjs";
 import { providerSessionCacheKey, providerSessionResponseStatus, refreshProviderSession } from "./lib/session-refresh.mjs";
 import { extensionFromUrl, XtreamClient } from "./lib/xtream.mjs";
@@ -76,9 +85,16 @@ function activeLicense(req) {
   return licensePayloadIsActive(license, Date.now(), nativeDeviceId) ? license : null;
 }
 
-function requireActiveLicense(req, res) {
+function requireActiveLicense(req, res, attemptId = "") {
   if (activeLicense(req)) return true;
-  json(res, 402, { error: "انتهت الفترة التجريبية. فعّل الجهاز ثم اضغط تحديث التفعيل." }, securityHeaders());
+  const normalizedAttempt = normalizeMediaAttemptId(attemptId);
+  json(res, 402, {
+    error: "انتهت الفترة التجريبية. فعّل الجهاز ثم اضغط تحديث التفعيل.",
+    ...(normalizedAttempt ? { attemptId: normalizedAttempt } : {}),
+  }, {
+    ...securityHeaders(),
+    ...(normalizedAttempt ? { "x-blofy-attempt-id": normalizedAttempt } : {}),
+  });
   return false;
 }
 
@@ -232,7 +248,12 @@ function safeImage(url) {
 async function loadM3u(session) {
   return cached(cacheKey(session, "m3u"), async () => {
     const response = await fetchSafe(session.url, { headers: { accept: "application/x-mpegURL,text/plain,*/*" } });
-    if (!response.ok) throw new Error(`تعذر تحميل القائمة (${response.status}).`);
+    if (!response.ok) {
+      throw Object.assign(new Error(`تعذر تحميل القائمة (${response.status}).`), {
+        status: response.status,
+        providerStatus: response.status,
+      });
+    }
     const text = await readTextLimited(response, 64_000_000, 15_000);
     const items = parseM3u(text, response.url || session.url);
     if (!items.length) throw new Error("القائمة لا تحتوي على قنوات صالحة.");
@@ -278,6 +299,9 @@ async function catalogFor(session, type, query) {
     page,
     pageSize,
   });
+  // Keep optional direct_source values only for the page the user just read.
+  // Playback itself never waits for a full 50k+ catalogue download.
+  for (const item of result.items) rememberDirectSource(session, type, item.id, item.sourceUrl);
   return {
     ...result,
     // Native clients can load provider artwork directly. Sending every poster
@@ -309,49 +333,52 @@ async function imageFor(session, type, id, kind) {
 async function sourceFor(session, type, id, extension = "") {
   if (session.kind === "xtream") {
     const client = new XtreamClient(session);
-    if (type === "episode") {
-      const remembered = recalledDirectSource(session, type, id);
-      if (remembered) return remembered;
-    } else {
-      try {
-        const rows = await cached(cacheKey(session, `catalog:${type}:`), () => client.catalog(type), catalogCacheTtl);
-        const direct = rows.find((item) => String(item.id) === String(id))?.sourceUrl || "";
-        if (direct) return direct;
-      } catch {
-        // direct_source is optional. Preserve the canonical Xtream fallback if
-        // the provider refuses the extra catalogue lookup.
-      }
-      if (type === "movies") {
-        try {
-          const movie = await cached(cacheKey(session, `movie:${id}`), () => client.movieInfo(id));
-          if (movie.sourceUrl) return movie.sourceUrl;
-        } catch {
-          // Fall through to /movie/user/pass/id.ext below.
-        }
-      }
-    }
+    // A catalogue can contain hundreds of thousands of rows. Looking it up
+    // here delayed every play request and could restart sync. Use a previously
+    // observed direct_source when available; otherwise Xtream's canonical URL
+    // is deterministic and can be issued immediately.
+    const remembered = recalledDirectSource(session, type, id);
+    if (remembered) return remembered;
     return client.streamUrl(type, id, extension || (type === "live" ? "ts" : "mp4"));
   }
   const item = (await loadM3u(session)).find((entry) => entry.id === id);
-  if (!item) throw new Error("لم يتم العثور على رابط التشغيل.");
+  if (!item) throw Object.assign(new Error("لم يتم العثور على رابط التشغيل."), { status: 404 });
   return item.sourceUrl;
 }
 
-function rewritePlaylist(text, baseUrl) {
+function rewritePlaylist(text, baseUrl, attemptId = "") {
   return text.split(/\r?\n/).map((line) => {
     if (!line.trim()) return line;
     if (!line.startsWith("#")) {
-      try { return signedPath(new URL(line.trim(), baseUrl).toString()); } catch { return line; }
+      try {
+        return appendMediaAttemptId(signedPath(new URL(line.trim(), baseUrl).toString()), attemptId);
+      } catch { return line; }
     }
     return line.replace(/URI="([^"]+)"/g, (_, value) => {
-      try { return `URI="${signedPath(new URL(value, baseUrl).toString())}"`; } catch { return `URI="${value}"`; }
+      try {
+        const target = appendMediaAttemptId(signedPath(new URL(value, baseUrl).toString()), attemptId);
+        return `URI="${target}"`;
+      } catch { return `URI="${value}"`; }
     });
   }).join("\n");
 }
 
-async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls = false, transcodeVideo = false, preferTranscode = false } = {}) {
+async function relayRemote(req, res, rawUrl, {
+  allowTranscode = false,
+  forceHls = false,
+  transcodeVideo = false,
+  preferTranscode = false,
+  attemptId = "",
+} = {}) {
+  const traceId = normalizeMediaAttemptId(attemptId) || createMediaAttemptId();
+  const traceHeaders = { "x-blofy-attempt-id": traceId };
   if (allowTranscode && forceHls && preferTranscode) {
-    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
+    res.writeHead(302, {
+      ...securityHeaders(),
+      ...traceHeaders,
+      location: appendMediaAttemptId(transcodePath(rawUrl, transcodeVideo), traceId),
+      "cache-control": "no-store",
+    });
     res.end();
     return;
   }
@@ -367,7 +394,12 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
   } catch (error) {
     if (lifecycle.cancelled || relayController.signal.aborted) return;
     lifecycle.complete();
-    throw error;
+    const status = mediaErrorStatus(error, 502);
+    console.error(`[media] provider-connection-error ${mediaLogContext({ attemptId: traceId, type: "relay", host: sourceHost(rawUrl), status })} message=${mediaErrorSummary(error?.message)}`);
+    return json(res, status, {
+      error: status === 504 ? "انتهت مهلة اتصال مصدر التشغيل." : "تعذر الاتصال بمصدر التشغيل.",
+      attemptId: traceId,
+    }, { ...securityHeaders(), ...traceHeaders });
   }
   cancelUpstream = () => {
     relayController.abort();
@@ -381,11 +413,12 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
     await cancelUpstream();
     lifecycle.complete();
     const status = providerResponseStatus(response.status);
-    console.error(`[media] provider-http-error status=${response.status} host=${sourceHost(rawUrl)}`);
+    console.error(`[media] provider-http-error ${mediaLogContext({ attemptId: traceId, type: "relay", host: sourceHost(rawUrl), status: response.status })}`);
     return json(res, status, {
       error: `مصدر التشغيل أعاد الخطأ ${response.status}.`,
       providerStatus: response.status,
-    }, securityHeaders());
+      attemptId: traceId,
+    }, { ...securityHeaders(), ...traceHeaders });
   }
   const type = (response.headers.get("content-type") || "").toLowerCase();
   const looksPlaylist = /mpegurl|m3u8/.test(type) || /\.m3u8(?:$|\?)/i.test(rawUrl);
@@ -393,9 +426,10 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
   if (looksPlaylist) {
     inspected = await inspectPlaylistBody(response);
     if (inspected.playlist && !transcodeVideo) {
-      const body = rewritePlaylist(inspected.playlist, response.url || rawUrl);
+      const body = rewritePlaylist(inspected.playlist, response.url || rawUrl, traceId);
       res.writeHead(200, {
         ...securityHeaders(),
+        ...traceHeaders,
         "content-type": "application/vnd.apple.mpegurl; charset=utf-8",
         "cache-control": "no-store",
         "content-length": Buffer.byteLength(body),
@@ -408,13 +442,19 @@ async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls 
   if (allowTranscode && (forceHls || !/video\/(mp4|webm)|audio\//.test(type))) {
     await inspected?.reader?.cancel().catch(() => {});
     if (!inspected && response.body) await response.body.cancel().catch(() => {});
-    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
+    res.writeHead(302, {
+      ...securityHeaders(),
+      ...traceHeaders,
+      location: appendMediaAttemptId(transcodePath(rawUrl, transcodeVideo), traceId),
+      "cache-control": "no-store",
+    });
     res.end();
     lifecycle.complete();
     return;
   }
   const passthrough = {
     ...securityHeaders(),
+    ...traceHeaders,
     "content-type": response.headers.get("content-type") || "application/octet-stream",
     "cache-control": "no-store",
     "accept-ranges": response.headers.get("accept-ranges") || "bytes",
@@ -594,7 +634,18 @@ setInterval(() => {
 
 async function handleApi(req, res, url) {
   const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/image/") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/native-") || url.pathname.startsWith("/api/transcode/");
-  if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
+  const requestAttemptId = mediaRequest
+    ? normalizeMediaAttemptId(url.searchParams.get("a")) || createMediaAttemptId()
+    : "";
+  if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) {
+    return json(res, 429, {
+      error: "طلبات كثيرة، حاول بعد دقيقة.",
+      ...(requestAttemptId ? { attemptId: requestAttemptId } : {}),
+    }, {
+      ...securityHeaders(),
+      ...(requestAttemptId ? { "x-blofy-attempt-id": requestAttemptId } : {}),
+    });
+  }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     return json(res, 200, {
@@ -770,26 +821,39 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/proxy") {
-    if (!requireActiveLicense(req, res)) return;
+    const attemptId = requestAttemptId;
+    if (!requireActiveLicense(req, res, attemptId)) return;
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
-    if (!raw) return json(res, 403, { error: "انتهى رابط الوسيط، أعد فتح المحتوى." }, securityHeaders());
-    return relayRemote(req, res, raw);
+    if (!raw) return json(res, 403, {
+      error: "انتهى رابط الوسيط، أعد فتح المحتوى.",
+      attemptId,
+    }, { ...securityHeaders(), "x-blofy-attempt-id": attemptId });
+    return relayRemote(req, res, raw, { attemptId });
   }
 
   if (req.method === "GET" && url.pathname === "/api/native-play") {
-    if (!requireActiveLicense(req, res)) return;
+    const attemptId = requestAttemptId;
+    if (!requireActiveLicense(req, res, attemptId)) return;
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
-    if (!raw) return json(res, 403, { error: "انتهى رابط Media3، أعد فتح المحتوى." }, securityHeaders());
+    if (!raw) return json(res, 403, {
+      error: "انتهى رابط Media3، أعد فتح المحتوى.",
+      attemptId,
+    }, { ...securityHeaders(), "x-blofy-attempt-id": attemptId });
     await assertSafeUrl(raw);
     const location = nativePlaybackTarget(raw);
-    console.log(`[media] native-open host=${sourceHost(raw)} mode=${NATIVE_PLAYBACK_MODE}`);
-    res.writeHead(302, { ...securityHeaders(), location, "cache-control": "no-store" });
+    console.log(`[media] native-open ${mediaLogContext({ attemptId, type: "direct", host: sourceHost(raw) })} mode=${NATIVE_PLAYBACK_MODE}`);
+    res.writeHead(302, {
+      ...securityHeaders(),
+      "x-blofy-attempt-id": attemptId,
+      location,
+      "cache-control": "no-store",
+    });
     res.end();
     return;
   }
 
   if (req.method === "GET" && (url.pathname === "/api/transcode/index.m3u8" || url.pathname.startsWith("/api/transcode/segment-"))) {
-    if (!requireActiveLicense(req, res)) return;
+    if (!requireActiveLicense(req, res, requestAttemptId)) return;
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
     if (!raw) return json(res, 403, { error: "انتهت جلسة التشغيل." }, securityHeaders());
     const fileName = url.pathname.split("/").pop();
@@ -797,38 +861,75 @@ async function handleApi(req, res, url) {
   }
 
   const session = getSession(req);
-  if (!session) return json(res, 401, { error: "أضف قائمة تشغيل أولًا." }, securityHeaders());
-  if (!requireActiveLicense(req, res)) return;
+  if (!session) return json(res, 401, {
+    error: "أضف قائمة تشغيل أولًا.",
+    ...(requestAttemptId ? { attemptId: requestAttemptId } : {}),
+  }, {
+    ...securityHeaders(),
+    ...(requestAttemptId ? { "x-blofy-attempt-id": requestAttemptId } : {}),
+  });
+  if (!requireActiveLicense(req, res, requestAttemptId)) return;
 
   const imageMatch = url.pathname.match(/^\/api\/image\/(live|movies|series)\/([^/]+)\/(poster|backdrop)$/);
   if (req.method === "GET" && imageMatch) {
     const [, type, id, kind] = imageMatch;
     const source = await imageFor(session, type, decodeURIComponent(id), kind);
     if (!source) return json(res, 404, { error: "لا توجد صورة لهذا المحتوى." }, securityHeaders());
-    return relayRemote(req, res, source);
+    return relayRemote(req, res, source, { attemptId: requestAttemptId });
   }
 
   const nativeLinkMatch = url.pathname.match(/^\/api\/native-link\/(live|movies|episode)\/([^/]+)$/);
   if (req.method === "GET" && nativeLinkMatch) {
     const [, type, id] = nativeLinkMatch;
     const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
-    const source = await sourceFor(session, type, id, extension);
-    const resolvedExtension = extensionFromUrl(source) || extension;
-    console.log(`[media] native-link type=${type} id=${id} ext=${resolvedExtension} host=${sourceHost(source)}`);
-    return json(res, 200, {
-      // HTTPS sources are opened directly by Media3. Legacy HTTP sources are
-      // copied through BLOFY HTTPS without FFmpeg/transcoding, so Android never
-      // needs a global cleartext exception.
-      url: signedPath(source, nativePlaybackPath(source), 7200),
-      // Some providers reject direct Android/TV requests even though the same
-      // source is valid from Railway. Keep a second raw-byte route available
-      // for Media3. This is a relay only (Range requests are preserved); it
-      // does not invoke FFmpeg and therefore starts much faster than the
-      // compatibility/transcode pipeline.
-      relayUrl: signedPath(source, "/api/proxy", 7200),
-      extension: resolvedExtension,
-      mode: NATIVE_PLAYBACK_MODE,
-    }, securityHeaders());
+    const attemptId = requestAttemptId;
+    try {
+      const source = await sourceFor(session, type, id, extension);
+      await assertSafeUrl(source);
+      const resolvedExtension = extensionFromUrl(source) || extension;
+      const context = mediaLogContext({
+        attemptId,
+        type,
+        id,
+        extension: resolvedExtension,
+        host: sourceHost(source),
+      });
+      console.log(`[media] native-link ${context} strategy=direct-first`);
+      const contract = buildNativeLinkContract({
+        // The JSON never contains provider credentials. New native clients
+        // resolve a short-lived redirect and then connect from the TV itself.
+        // `url` preserves the HTTPS relay for older cleartext-disabled APKs.
+        directUrl: signedPath(source, "/api/native-play", 7200),
+        relayUrl: signedPath(source, "/api/proxy", 7200),
+        legacyUrl: signedPath(source, nativePlaybackPath(source), 7200),
+        extension: resolvedExtension,
+        attemptId,
+        mode: NATIVE_PLAYBACK_MODE,
+      });
+      return json(res, 200, contract, {
+        ...securityHeaders(),
+        "x-blofy-attempt-id": attemptId,
+      });
+    } catch (error) {
+      const providerStatus = mediaProviderStatus(error);
+      const status = mediaErrorStatus(error);
+      console.error(`[media] native-link-failed ${mediaLogContext({ attemptId, type, id, extension, status })} providerStatus=${providerStatus || "none"} message=${mediaErrorSummary(error?.message)}`);
+      const payload = {
+        error: providerStatus
+          ? `مصدر التشغيل أعاد الخطأ ${providerStatus}.`
+          : status === 404
+            ? "لم يتم العثور على رابط التشغيل."
+            : status === 504
+              ? "انتهت مهلة الاتصال بمصدر التشغيل."
+              : "تعذر إصدار رابط التشغيل من المصدر.",
+        attemptId,
+        ...(providerStatus ? { providerStatus } : {}),
+      };
+      return json(res, status, payload, {
+        ...securityHeaders(),
+        "x-blofy-attempt-id": attemptId,
+      });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/categories") {
@@ -892,6 +993,7 @@ async function handleApi(req, res, url) {
       forceHls: !secureRawRelay && (type === "live" || compatibilityMode),
       transcodeVideo: compatibilityLevel === "2",
       preferTranscode: type === "live" && !/^m3u8$/i.test(extension),
+      attemptId: requestAttemptId,
     });
   }
 

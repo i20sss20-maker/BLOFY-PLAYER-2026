@@ -74,7 +74,12 @@ export class XtreamClient {
         headers: { accept: "application/json" },
         requestTimeoutMs: limits.headerTimeoutMs,
       });
-      if (!response.ok) throw new Error(`الخادم رفض الطلب (${response.status}).`);
+      if (!response.ok) {
+        throw Object.assign(new Error(`الخادم رفض الطلب (${response.status}).`), {
+          status: response.status,
+          providerStatus: response.status,
+        });
+      }
       const text = await readTextLimited(response, limits.maxBytes, limits.idleTimeoutMs, limits.totalTimeoutMs);
       try { return JSON.parse(text); } catch { throw new Error("الخادم أعاد بيانات غير صالحة."); }
     };

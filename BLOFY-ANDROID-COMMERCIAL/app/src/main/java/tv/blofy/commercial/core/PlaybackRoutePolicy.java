@@ -17,8 +17,49 @@ public final class PlaybackRoutePolicy {
         return value != null && value.trim().toLowerCase(java.util.Locale.US).startsWith("http://");
     }
 
+    public static boolean isHttpUrl(String value) {
+        if (value == null) return false;
+        String url = value.trim().toLowerCase(java.util.Locale.US);
+        return url.startsWith("http://") || url.startsWith("https://");
+    }
+
+    /**
+     * The resource signature is independent from the serving endpoint. This
+     * lets the native app resolve the same signed resource through
+     * /api/native-play and open it on the TV first, while retaining /api/proxy
+     * as the one-shot relay fallback.
+     */
+    public static String directRedirectPath(String signedPath) {
+        if (signedPath == null) return "";
+        String value = signedPath.trim();
+        if (!hasCompleteSignature(value)) return "";
+        if (value.startsWith("/api/native-play?")) return value;
+        if (value.startsWith("/api/proxy?")) {
+            return "/api/native-play?" + value.substring("/api/proxy?".length());
+        }
+        return "";
+    }
+
     public static boolean canTryRelay(String relayUrl, boolean alreadyAttempted) {
         return !alreadyAttempted && relayUrl != null && !relayUrl.trim().isEmpty();
+    }
+
+    public static boolean canTryRelay(String relayUrl, boolean alreadyAttempted, String currentUrl) {
+        return canTryRelay(relayUrl, alreadyAttempted)
+                && (currentUrl == null || !relayUrl.trim().equals(currentUrl.trim()));
+    }
+
+    public static boolean isRelayEligibleHttpStatus(int status) {
+        // These statuses can depend on request headers, rate limits, region or
+        // source IP, so changing from device-direct to the server relay can be
+        // useful. Authentication/not-found statuses are deliberately absent:
+        // changing the decoder or transport cannot repair stale credentials.
+        return status == 403 || status == 406 || status == 408 || status == 421
+                || status == 425 || status == 429 || status == 451 || status == 456;
+    }
+
+    public static boolean isHttpError(int status) {
+        return status >= 400 && status <= 599;
     }
 
     public static boolean isBackendAuthorizationStatus(int status, int providerStatus) {
@@ -41,6 +82,23 @@ public final class PlaybackRoutePolicy {
         } catch (RuntimeException ignored) {
             return false;
         }
+    }
+
+    public static boolean isBlofyRelayUrl(String baseUrl, String mediaUrl) {
+        if (!isBlofyUrl(baseUrl, mediaUrl)) return false;
+        try {
+            String path = URI.create(mediaUrl).getPath();
+            return "/api/proxy".equals(path)
+                    || "/api/transcode/index.m3u8".equals(path)
+                    || "/api/play/live".equals(path)
+                    || (path != null && path.startsWith("/api/play/"));
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean hasCompleteSignature(String value) {
+        return value.contains("u=") && value.contains("e=") && value.contains("s=");
     }
 
     private static int defaultPort(String scheme) {
