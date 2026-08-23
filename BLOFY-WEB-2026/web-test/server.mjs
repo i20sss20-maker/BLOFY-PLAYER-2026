@@ -1,19 +1,10 @@
 import http from "node:http";
 import crypto from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Readable } from "node:stream";
-import { spawn } from "node:child_process";
-import QRCode from "qrcode";
 import { LicenseStore } from "./lib/license-store.mjs";
 import { DeviceProfileStore, persistDeviceSessionFromHeaders } from "./lib/device-profile-store.mjs";
-import { inspectPlaylistBody, pipeInspectedBody } from "./lib/media-response.mjs";
-import { bindRelayCancellation, providerRequestHeaders, providerResponseStatus } from "./lib/media-relay.mjs";
-import { APP_VERSION, NATIVE_PLAYBACK_MODE, nativePlaybackPath, nativePlaybackTarget } from "./lib/runtime.mjs";
-import { providerSessionCacheKey, providerSessionResponseStatus, refreshProviderSession } from "./lib/session-refresh.mjs";
 import { extensionFromUrl, XtreamClient } from "./lib/xtream.mjs";
 import { pageItems, parseM3u } from "./lib/playlist.mjs";
 import { publicCatalogItem, publicSeriesItem } from "./lib/catalog-response.mjs";
@@ -35,9 +26,10 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
+const APP_VERSION = "2026.08.23.6";
+const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
-const transcodeRoot = path.join(os.tmpdir(), "blofy-player-transcodes");
 const port = Number(process.env.PORT || 3000);
 const cacheTtl = boundedInteger(process.env.CACHE_TTL_MS, 300_000, 1_000, 86_400_000);
 const catalogCacheTtl = Math.max(cacheTtl,
@@ -45,16 +37,13 @@ const catalogCacheTtl = Math.max(cacheTtl,
 const maxMemoryCacheEntries = boundedInteger(process.env.MAX_MEMORY_CACHE_ENTRIES, 96, 16, 1_000);
 const configuredActivationUrl = String(process.env.ACTIVATION_URL || "").trim();
 const trialDays = Math.max(1, Number(process.env.TRIAL_DAYS || 7));
-const maxTranscodes = Math.max(1, Number(process.env.MAX_TRANSCODE_SESSIONS || 4));
 const licenseDbPath = process.env.LICENSE_DB_PATH || path.join(here, "data", "licenses.json");
 const deviceProfileDbPath = process.env.DEVICE_PROFILE_DB_PATH || path.join(path.dirname(licenseDbPath), "device-profiles.json");
 const memoryCache = new Map();
 const directSourceCache = new Map();
 const rateBuckets = new Map();
-const transcodes = new Map();
 const licenses = new LicenseStore(licenseDbPath, { trialDays });
 const deviceProfiles = new DeviceProfileStore(deviceProfileDbPath);
-mkdirSync(transcodeRoot, { recursive: true });
 
 function requestOrigin(req) {
   const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
@@ -67,11 +56,20 @@ function activationUrlFor(req) {
   return configuredActivationUrl || `${requestOrigin(req)}/activate`;
 }
 
+function securityHeaders() {
+  return {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    ...(process.env.NODE_ENV === "production" ? { "strict-transport-security": "max-age=31536000; includeSubDomains" } : {}),
+  };
+}
+
 function activeLicense(req) {
   const token = parseCookies(req.headers.cookie || "").blofy_license;
   const license = token ? unseal(token) : null;
-  // Bind native requests to the device declared by their encrypted license.
-  // Browser requests remain cookie-only because they do not send this header.
   const nativeDeviceId = String(req.headers["x-blofy-device-id"] || "");
   return licensePayloadIsActive(license, Date.now(), nativeDeviceId) ? license : null;
 }
@@ -91,18 +89,7 @@ function adminAuthorized(req) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function securityHeaders() {
-  return {
-    "x-content-type-options": "nosniff",
-    "x-frame-options": "DENY",
-    "referrer-policy": "no-referrer",
-    "permissions-policy": "camera=(), microphone=(), geolocation=()",
-    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
-    ...(process.env.NODE_ENV === "production" ? { "strict-transport-security": "max-age=31536000; includeSubDomains" } : {}),
-  };
-}
-
-function limited(req, limit = 100, windowMs = 60_000, namespace = "api") {
+function limited(req, limit = 120, windowMs = 60_000, namespace = "api") {
   const key = `${namespace}:${clientKey(req)}`;
   const now = Date.now();
   const bucket = rateBuckets.get(key);
@@ -114,8 +101,41 @@ function limited(req, limit = 100, windowMs = 60_000, namespace = "api") {
   return bucket.count > limit;
 }
 
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
+}
+
 function cacheKey(session, suffix) {
   return crypto.createHash("sha256").update(JSON.stringify(session)).update(suffix).digest("hex");
+}
+
+function pruneMemoryCache(now = Date.now()) {
+  for (const [key, record] of memoryCache) if (record.expiresAt <= now) memoryCache.delete(key);
+  while (memoryCache.size > maxMemoryCacheEntries) {
+    const oldest = memoryCache.keys().next().value;
+    if (oldest === undefined) break;
+    memoryCache.delete(oldest);
+  }
+}
+
+async function cached(key, loader, ttl = cacheTtl) {
+  const now = Date.now();
+  const current = memoryCache.get(key);
+  if (current && current.expiresAt > now) return current.value;
+  if (current) memoryCache.delete(key);
+  const pending = Promise.resolve().then(loader);
+  memoryCache.set(key, { value: pending, expiresAt: now + ttl });
+  pruneMemoryCache(now);
+  try {
+    const value = await pending;
+    if (memoryCache.get(key)?.value === pending) memoryCache.set(key, { value, expiresAt: Date.now() + ttl });
+    return value;
+  } catch (error) {
+    if (memoryCache.get(key)?.value === pending) memoryCache.delete(key);
+    throw error;
+  }
 }
 
 function rememberDirectSource(session, type, id, source) {
@@ -135,51 +155,22 @@ function recalledDirectSource(session, type, id) {
   return current.source;
 }
 
-function boundedInteger(value, fallback, minimum, maximum) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
-}
-
-function pruneMemoryCache(now = Date.now()) {
-  for (const [key, record] of memoryCache) {
-    if (record.expiresAt <= now) memoryCache.delete(key);
-  }
-  while (memoryCache.size > maxMemoryCacheEntries) {
-    const oldest = memoryCache.keys().next().value;
-    if (oldest === undefined) break;
-    memoryCache.delete(oldest);
-  }
-}
-
-async function cached(key, loader, ttl = cacheTtl) {
-  const now = Date.now();
-  const current = memoryCache.get(key);
-  if (current && current.expiresAt > now) return current.value;
-  if (current) memoryCache.delete(key);
-  // Cache the in-flight Promise too. Large Xtream catalogs can otherwise be
-  // downloaded several times when multiple native requests arrive together.
-  const pending = Promise.resolve().then(loader);
-  memoryCache.set(key, { value: pending, expiresAt: now + ttl });
-  pruneMemoryCache(now);
-  try {
-    const value = await pending;
-    // A very slow loader can outlive its TTL. Never overwrite a newer load.
-    if (memoryCache.get(key)?.value === pending) {
-      memoryCache.set(key, { value, expiresAt: Date.now() + ttl });
-    }
-    return value;
-  } catch (error) {
-    if (memoryCache.get(key)?.value === pending) memoryCache.delete(key);
-    throw error;
-  }
-}
-
 function getSession(req) {
   const token = parseCookies(req.headers.cookie || "").blofy_session;
   const session = token ? unseal(token) : null;
   if (!session || !["xtream", "m3u"].includes(session.kind)) return null;
   return session;
+}
+
+async function loadM3u(session) {
+  return cached(cacheKey(session, "m3u"), async () => {
+    const response = await fetchSafe(session.url, { headers: { accept: "application/x-mpegURL,text/plain,*/*" } });
+    if (!response.ok) throw new Error(`تعذر تحميل القائمة (${response.status}).`);
+    const text = await readTextLimited(response, 64_000_000, 15_000);
+    const items = parseM3u(text, response.url || session.url);
+    if (!items.length) throw new Error("القائمة لا تحتوي على قنوات صالحة.");
+    return items;
+  }, catalogCacheTtl);
 }
 
 async function sessionFromInput(body) {
@@ -212,34 +203,6 @@ function publicSession(session) {
   };
 }
 
-function signedPath(url, prefix = "/api/proxy", lifetime = 7200) {
-  const { encoded, expires, signature } = signResource(url, lifetime);
-  return `${prefix}?u=${encodeURIComponent(encoded)}&e=${expires}&s=${encodeURIComponent(signature)}`;
-}
-
-function transcodePath(url, transcodeVideo = false) {
-  return `${signedPath(url, "/api/transcode/index.m3u8", 21_600)}${transcodeVideo ? "&v=1" : ""}`;
-}
-
-function sourceHost(rawUrl) {
-  try { return new URL(rawUrl).host; } catch { return "unknown"; }
-}
-
-function safeImage(url) {
-  return url ? signedPath(url, "/api/proxy", 86_400) : "";
-}
-
-async function loadM3u(session) {
-  return cached(cacheKey(session, "m3u"), async () => {
-    const response = await fetchSafe(session.url, { headers: { accept: "application/x-mpegURL,text/plain,*/*" } });
-    if (!response.ok) throw new Error(`تعذر تحميل القائمة (${response.status}).`);
-    const text = await readTextLimited(response, 64_000_000, 15_000);
-    const items = parseM3u(text, response.url || session.url);
-    if (!items.length) throw new Error("القائمة لا تحتوي على قنوات صالحة.");
-    return items;
-  }, catalogCacheTtl);
-}
-
 async function categoriesFor(session, type) {
   if (session.kind === "xtream") {
     const client = new XtreamClient(session);
@@ -253,8 +216,7 @@ async function categoriesFor(session, type) {
 
 async function catalogFor(session, type, query) {
   const page = boundedInteger(query.get("page"), 1, 1, 1_000_000);
-  const maximumPageSize = query.get("native") === "1" ? 5000 : 500;
-  const pageSize = boundedInteger(query.get("page_size"), 60, 30, maximumPageSize);
+  const pageSize = boundedInteger(query.get("page_size"), 60, 30, 500);
   const category = query.get("category") || "";
   const search = query.get("search") || "";
   let rows;
@@ -266,342 +228,61 @@ async function catalogFor(session, type, query) {
       category ? cacheTtl : catalogCacheTtl,
     );
   } else {
-    // Catalog pagination and playback must reference the exact same M3U
-    // snapshot. Otherwise rotating playlist URLs can invalidate stored ids.
     rows = (await loadM3u(session)).filter((item) => item.type === type);
   }
-  // Paginate first. Signing every image in a 50k+ catalog for every page made
-  // native synchronization repeat expensive work and eventually hit timeouts.
-  const result = pageItems(rows, {
-    category,
-    search,
-    page,
-    pageSize,
-  });
+  const result = pageItems(rows, { category, search, page, pageSize });
   return {
     ...result,
-    // Native clients can load provider artwork directly. Sending every poster
-    // through Railway is slow for large libraries and fails when a CDN blocks
-    // data-centre IPs. Browser clients keep the protected BLOFY image route.
-    items: result.items.map((item) => publicCatalogItem(item,
-      query.get("native") === "1"
-        ? (raw) => String(raw || "")
-        : (_raw, kind, row) => `/api/image/${encodeURIComponent(type)}/${encodeURIComponent(String(row.id))}/${kind}`)),
+    items: result.items.map((item) => publicCatalogItem(item, (raw) => String(raw || ""))),
   };
-}
-
-async function imageFor(session, type, id, kind) {
-  const index = await cached(cacheKey(session, `image-index:${type}`), async () => {
-    let rows;
-    if (session.kind === "xtream") {
-      const client = new XtreamClient(session);
-      rows = await cached(cacheKey(session, `catalog:${type}:`), () => client.catalog(type), catalogCacheTtl);
-    }
-    else rows = (await loadM3u(session)).filter((item) => item.type === type);
-    return new Map(rows.map((item) => [String(item.id), {
-      poster: item.image || "",
-      backdrop: item.backdrop || item.image || "",
-    }]));
-  }, catalogCacheTtl);
-  return index.get(String(id))?.[kind] || "";
 }
 
 async function sourceFor(session, type, id, extension = "") {
   if (session.kind === "xtream") {
     const client = new XtreamClient(session);
+    if (type === "live") {
+      return client.streamUrl("live", id, extension || "ts");
+    }
     if (type === "episode") {
       const remembered = recalledDirectSource(session, type, id);
       if (remembered) return remembered;
-    } else {
-      try {
-        const rows = await cached(cacheKey(session, `catalog:${type}:`), () => client.catalog(type), catalogCacheTtl);
-        const direct = rows.find((item) => String(item.id) === String(id))?.sourceUrl || "";
-        if (direct) return direct;
-      } catch {
-        // direct_source is optional. Preserve the canonical Xtream fallback if
-        // the provider refuses the extra catalogue lookup.
-      }
-      if (type === "movies") {
-        try {
-          const movie = await cached(cacheKey(session, `movie:${id}`), () => client.movieInfo(id));
-          if (movie.sourceUrl) return movie.sourceUrl;
-        } catch {
-          // Fall through to /movie/user/pass/id.ext below.
-        }
-      }
+      return client.streamUrl("episode", id, extension || "mp4");
     }
-    return client.streamUrl(type, id, extension || (type === "live" ? "ts" : "mp4"));
+    try {
+      const rows = await cached(cacheKey(session, "catalog:movies:"), () => client.catalog("movies"), catalogCacheTtl);
+      const direct = rows.find((item) => String(item.id) === String(id))?.sourceUrl || "";
+      if (direct) return direct;
+    } catch {}
+    try {
+      const movie = await cached(cacheKey(session, `movie:${id}`), () => client.movieInfo(id));
+      if (movie.sourceUrl) return movie.sourceUrl;
+    } catch {}
+    return client.streamUrl("movies", id, extension || "mp4");
   }
-  const item = (await loadM3u(session)).find((entry) => entry.id === id);
+  const item = (await loadM3u(session)).find((entry) => String(entry.id) === String(id));
   if (!item) throw new Error("لم يتم العثور على رابط التشغيل.");
   return item.sourceUrl;
 }
 
-function rewritePlaylist(text, baseUrl) {
-  return text.split(/\r?\n/).map((line) => {
-    if (!line.trim()) return line;
-    if (!line.startsWith("#")) {
-      try { return signedPath(new URL(line.trim(), baseUrl).toString()); } catch { return line; }
-    }
-    return line.replace(/URI="([^"]+)"/g, (_, value) => {
-      try { return `URI="${signedPath(new URL(value, baseUrl).toString())}"`; } catch { return `URI="${value}"`; }
-    });
-  }).join("\n");
+function signedNativePath(rawUrl, lifetime = 7200) {
+  const { encoded, expires, signature } = signResource(rawUrl, lifetime);
+  return `/api/native-play?u=${encodeURIComponent(encoded)}&e=${expires}&s=${encodeURIComponent(signature)}`;
 }
-
-async function relayRemote(req, res, rawUrl, { allowTranscode = false, forceHls = false, transcodeVideo = false, preferTranscode = false } = {}) {
-  if (allowTranscode && forceHls && preferTranscode) {
-    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
-    res.end();
-    return;
-  }
-  const relayController = new AbortController();
-  let cancelUpstream = () => relayController.abort();
-  const lifecycle = bindRelayCancellation(req, res, () => cancelUpstream());
-  let response;
-  try {
-    response = await fetchSafe(rawUrl, {
-      headers: providerRequestHeaders(req.headers),
-      signal: relayController.signal,
-    });
-  } catch (error) {
-    if (lifecycle.cancelled || relayController.signal.aborted) return;
-    lifecycle.complete();
-    throw error;
-  }
-  cancelUpstream = () => {
-    relayController.abort();
-    return response.body?.cancel().catch(() => {});
-  };
-  if (lifecycle.cancelled) {
-    await cancelUpstream();
-    return;
-  }
-  if (!response.ok && response.status !== 206) {
-    await cancelUpstream();
-    lifecycle.complete();
-    const status = providerResponseStatus(response.status);
-    console.error(`[media] provider-http-error status=${response.status} host=${sourceHost(rawUrl)}`);
-    return json(res, status, {
-      error: `مصدر التشغيل أعاد الخطأ ${response.status}.`,
-      providerStatus: response.status,
-    }, securityHeaders());
-  }
-  const type = (response.headers.get("content-type") || "").toLowerCase();
-  const looksPlaylist = /mpegurl|m3u8/.test(type) || /\.m3u8(?:$|\?)/i.test(rawUrl);
-  let inspected = null;
-  if (looksPlaylist) {
-    inspected = await inspectPlaylistBody(response);
-    if (inspected.playlist && !transcodeVideo) {
-      const body = rewritePlaylist(inspected.playlist, response.url || rawUrl);
-      res.writeHead(200, {
-        ...securityHeaders(),
-        "content-type": "application/vnd.apple.mpegurl; charset=utf-8",
-        "cache-control": "no-store",
-        "content-length": Buffer.byteLength(body),
-      });
-      res.end(body);
-      lifecycle.complete();
-      return;
-    }
-  }
-  if (allowTranscode && (forceHls || !/video\/(mp4|webm)|audio\//.test(type))) {
-    await inspected?.reader?.cancel().catch(() => {});
-    if (!inspected && response.body) await response.body.cancel().catch(() => {});
-    res.writeHead(302, { ...securityHeaders(), location: transcodePath(rawUrl, transcodeVideo), "cache-control": "no-store" });
-    res.end();
-    lifecycle.complete();
-    return;
-  }
-  const passthrough = {
-    ...securityHeaders(),
-    "content-type": response.headers.get("content-type") || "application/octet-stream",
-    "cache-control": "no-store",
-    "accept-ranges": response.headers.get("accept-ranges") || "bytes",
-  };
-  for (const name of ["content-length", "content-range"]) {
-    const value = response.headers.get(name);
-    if (value) passthrough[name] = value;
-  }
-  res.writeHead(response.status, passthrough);
-  res.once("finish", lifecycle.complete);
-  if (inspected) {
-    cancelUpstream = () => {
-      relayController.abort();
-      return inspected.reader?.cancel().catch(() => {});
-    };
-    return pipeInspectedBody(res, inspected.reader, inspected.prefix);
-  }
-  if (!response.body) {
-    res.end();
-    lifecycle.complete();
-    return;
-  }
-  const sourceStream = Readable.fromWeb(response.body);
-  cancelUpstream = () => {
-    relayController.abort();
-    sourceStream.destroy();
-  };
-  sourceStream.on("error", () => res.destroy()).pipe(res);
-}
-
-function transcodeKey(url, transcodeVideo) {
-  return crypto.createHash("sha256").update(url).update(transcodeVideo ? ":h264" : ":copy").digest("hex").slice(0, 24);
-}
-
-function mediaErrorSummary(value) {
-  return String(value || "")
-    .replace(/https?:\/\/\S+/gi, "[source]")
-    .replace(/\/(live|movie|series)\/[^/\s]+\/[^/\s]+/gi, "/$1/[redacted]/[redacted]")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-3)
-    .join(" | ")
-    .slice(0, 600);
-}
-
-function appendMediaError(record, value) {
-  record.error = `${record.error}\n${String(value || "")}`.slice(-2400);
-}
-
-async function pipeTransportSource(url, child, record) {
-  try {
-    const response = await fetchSafe(url, {
-      headers: {
-        accept: "video/mp2t,application/octet-stream,*/*",
-        "user-agent": "VLC/3.0.20 LibVLC/3.0.20",
-      },
-    });
-    if (!response.ok && response.status !== 206) throw new Error(`Source HTTP ${response.status}`);
-    if (!response.body) throw new Error("Source returned an empty response");
-    console.log(`[media] source-open key=${record.key} status=${response.status} type=${String(response.headers.get("content-type") || "unknown").split(";")[0]}`);
-    const sourceStream = Readable.fromWeb(response.body);
-    record.sourceStream = sourceStream;
-    sourceStream.on("error", (error) => {
-      appendMediaError(record, error.message);
-      child.stdin?.destroy(error);
-    });
-    child.stdin?.on("error", () => sourceStream.destroy());
-    sourceStream.pipe(child.stdin);
-  } catch (error) {
-    appendMediaError(record, error?.name === "AbortError" ? "Source connection timed out" : error?.message || error);
-    if (!child.killed && child.exitCode === null) child.kill("SIGTERM");
-  }
-}
-
-function startTranscode(url, forceVideo = false) {
-  const transcodeVideo = forceVideo || String(process.env.TRANSCODE_VIDEO || "false") === "true";
-  const pipeSource = /\.ts(?:$|\?)/i.test(url);
-  const key = transcodeKey(url, transcodeVideo);
-  const existing = transcodes.get(key);
-  if (existing?.process && !existing.process.killed && existing.process.exitCode === null) {
-    existing.lastAccess = Date.now();
-    return existing;
-  }
-  if (transcodes.size >= maxTranscodes) {
-    const oldest = [...transcodes.values()].sort((a, b) => a.lastAccess - b.lastAccess)[0];
-    if (oldest) stopTranscode(oldest.key);
-  }
-  const dir = path.join(transcodeRoot, key);
-  rmSync(dir, { recursive: true, force: true });
-  mkdirSync(dir, { recursive: true });
-  const args = [
-    "-nostdin", "-hide_banner", "-loglevel", "warning",
-    "-fflags", "+genpts+discardcorrupt",
-    ...(pipeSource
-      ? ["-f", "mpegts", "-analyzeduration", "2500000", "-probesize", "2500000", "-i", "pipe:0"]
-      : [
-        "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
-        "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
-        "-rw_timeout", "12000000", "-analyzeduration", "2500000", "-probesize", "2500000",
-        "-i", url,
-      ]),
-    "-map", "0:v:0?", "-map", "0:a:0?",
-    "-c:v", transcodeVideo ? "libx264" : "copy",
-    ...(transcodeVideo ? ["-preset", "veryfast", "-tune", "zerolatency"] : []),
-    "-c:a", "aac", "-ac", "2", "-b:a", "128k",
-    "-f", "hls", "-hls_time", "1", "-hls_list_size", "8",
-    "-hls_flags", transcodeVideo
-      ? "delete_segments+append_list+omit_endlist+independent_segments"
-      : "delete_segments+append_list+omit_endlist+split_by_time",
-    "-hls_segment_filename", path.join(dir, "segment-%06d.ts"),
-    path.join(dir, "index.m3u8"),
-  ];
-  const child = spawn("ffmpeg", args, { stdio: [pipeSource ? "pipe" : "ignore", "ignore", "pipe"] });
-  const record = { key, dir, process: child, sourceStream: null, lastAccess: Date.now(), error: "" };
-  console.log(`[media] ffmpeg-start key=${key} host=${sourceHost(url)} mode=${transcodeVideo ? "h264" : "copy"} input=${pipeSource ? "node-pipe" : "direct"}`);
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => appendMediaError(record, chunk));
-  child.on("exit", (code) => {
-    record.sourceStream?.destroy();
-    if (code && !record.error) record.error = `FFmpeg stopped (${code})`;
-    const detail = mediaErrorSummary(record.error);
-    console.log(`[media] ffmpeg-exit key=${key} code=${code ?? "signal"}${detail ? ` detail=${detail}` : ""}`);
-  });
-  transcodes.set(key, record);
-  if (pipeSource) void pipeTransportSource(url, child, record);
-  return record;
-}
-
-function stopTranscode(key) {
-  const record = transcodes.get(key);
-  if (!record) return;
-  try { record.sourceStream?.destroy(); } catch {}
-  try { record.process.kill("SIGTERM"); } catch {}
-  try { rmSync(record.dir, { recursive: true, force: true }); } catch {}
-  transcodes.delete(key);
-}
-
-async function waitForFile(file, timeout = 8000) {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    if (existsSync(file) && statSync(file).size > 20) return true;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  return false;
-}
-
-async function serveTranscode(res, rawUrl, query, fileName) {
-  await assertSafeUrl(rawUrl);
-  const record = startTranscode(rawUrl, query.get("v") === "1");
-  record.lastAccess = Date.now();
-  const safeName = fileName === "index.m3u8" || /^segment-\d{6}\.ts$/.test(fileName) ? fileName : "";
-  if (!safeName) throw new Error("ملف تشغيل غير صالح.");
-  const target = path.join(record.dir, safeName);
-  if (!(await waitForFile(target, safeName === "index.m3u8" ? 12_000 : 5000))) {
-    console.error(`[media] transcode-timeout key=${record.key} host=${sourceHost(rawUrl)} code=${record.process.exitCode ?? "running"}`);
-    throw new Error(record.error ? "تعذر تحويل هذا البث إلى صيغة متوافقة." : "البث لم يستجب بالسرعة المطلوبة.");
-  }
-  if (safeName === "index.m3u8") {
-    let text = await readFile(target, "utf8");
-    const suffix = `?u=${encodeURIComponent(query.get("u"))}&e=${encodeURIComponent(query.get("e"))}&s=${encodeURIComponent(query.get("s"))}${query.get("v") === "1" ? "&v=1" : ""}`;
-    text = text.split(/\r?\n/).map((line) => /^segment-\d{6}\.ts$/.test(line) ? `/api/transcode/${line}${suffix}` : line).join("\n");
-    res.writeHead(200, { ...securityHeaders(), "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" });
-    return res.end(text);
-  }
-  res.writeHead(200, { ...securityHeaders(), "content-type": "video/mp2t", "cache-control": "no-store" });
-  createReadStream(target).pipe(res);
-}
-
-setInterval(() => {
-  pruneMemoryCache();
-  const cutoff = Date.now() - 120_000;
-  for (const [key, record] of transcodes) if (record.lastAccess < cutoff) stopTranscode(key);
-  const rateCutoff = Date.now() - 120_000;
-  for (const [key, bucket] of rateBuckets) if (bucket.resetAt < rateCutoff) rateBuckets.delete(key);
-}, 30_000).unref();
 
 async function handleApi(req, res, url) {
-  const mediaRequest = url.pathname.startsWith("/api/proxy") || url.pathname.startsWith("/api/image/") || url.pathname.startsWith("/api/play/") || url.pathname.startsWith("/api/native-") || url.pathname.startsWith("/api/transcode/");
-  if (limited(req, mediaRequest ? 1200 : 120, 60_000, mediaRequest ? "media" : "api")) return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
+  const nativeRequest = url.pathname.startsWith("/api/native-");
+  if (limited(req, nativeRequest ? 1200 : 120, 60_000, nativeRequest ? "native" : "api")) {
+    return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
+  }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     return json(res, 200, {
       ok: true,
-      service: "BLOFY PLAYER",
+      service: "BLOFY PLAYER API",
       version: APP_VERSION,
       nativePlayback: NATIVE_PLAYBACK_MODE,
+      mediaProxy: false,
+      transcoding: false,
       time: new Date().toISOString(),
     }, securityHeaders());
   }
@@ -624,7 +305,6 @@ async function handleApi(req, res, url) {
     if (!Number.isFinite(expiresAt)) expiresAt = Date.parse(String(rawExpiry)) || 0;
     if (expiresAt > 0 && expiresAt < 10_000_000_000) expiresAt *= 1000;
     const plan = data?.plan || (data?.active === true || expiresAt > Date.now() ? "active" : "expired");
-    const cookie = licenseCookie(seal({ deviceId, expiresAt, plan }));
     return json(res, 200, {
       ...data,
       deviceId,
@@ -635,7 +315,7 @@ async function handleApi(req, res, url) {
       activationUrl: activationUrlFor(req),
     }, {
       ...securityHeaders(),
-      "set-cookie": cookie,
+      "set-cookie": licenseCookie(seal({ deviceId, expiresAt, plan })),
     });
   }
 
@@ -665,11 +345,7 @@ async function handleApi(req, res, url) {
         Number(pairing.expiresAt || 0) <= Date.now() || !pairing.keyHash) {
       return json(res, 403, { error: "انتهت صلاحية ربط الجهاز. حدّث الباركود من التطبيق." }, securityHeaders());
     }
-
-    // Pairing/configuration no longer uses activation codes.
-    // Payment/license status is managed separately by device id.
     const license = await licenses.get(deviceId);
-
     const hasProfile = body.kind === "xtream" || body.kind === "m3u";
     let configured = false;
     if (hasProfile) {
@@ -687,10 +363,10 @@ async function handleApi(req, res, url) {
     if (!license || !["trial", "active"].includes(license.plan)) {
       return json(res, 402, { error: "الجهاز غير مفعّل أو انتهت صلاحيته." }, securityHeaders());
     }
+    const licenseValue = seal({ deviceId, expiresAt: license.expiresAt, plan: license.plan });
     const profileToken = await deviceProfiles.profile(deviceId, deviceKey);
     if (!profileToken) return json(res, 200, { ok: true, configured: false, license }, {
-      ...securityHeaders(),
-      "set-cookie": licenseCookie(seal({ deviceId, expiresAt: license.expiresAt, plan: license.plan })),
+      ...securityHeaders(), "set-cookie": licenseCookie(licenseValue),
     });
     const session = unseal(profileToken);
     if (!session || !["xtream", "m3u"].includes(session.kind)) throw new Error("بيانات الباقة المحفوظة غير صالحة. أعد إرسالها من صفحة الربط.");
@@ -699,10 +375,7 @@ async function handleApi(req, res, url) {
       : { kind: "m3u", name: session.name || "M3U / M3U8", url: session.url || "" };
     return json(res, 200, { ok: true, configured: true, license, session: publicSession(session), profile }, {
       ...securityHeaders(),
-      "set-cookie": [
-        licenseCookie(seal({ deviceId, expiresAt: license.expiresAt, plan: license.plan })),
-        sessionCookie(seal(session)),
-      ],
+      "set-cookie": [licenseCookie(licenseValue), sessionCookie(seal(session))],
     });
   }
 
@@ -717,115 +390,50 @@ async function handleApi(req, res, url) {
     return json(res, 200, { codes: await licenses.listCodes() }, securityHeaders());
   }
 
-  if (req.method === "GET" && url.pathname === "/api/qr") {
-    const text = String(url.searchParams.get("text") || "").slice(0, 500);
-    const svg = await QRCode.toString(text || activationUrlFor(req), { type: "svg", margin: 1, width: 220, color: { dark: "#120033", light: "#ffffff" } });
-    res.writeHead(200, { ...securityHeaders(), "content-type": "image/svg+xml; charset=utf-8", "cache-control": "private, max-age=300" });
-    return res.end(svg);
+  if (url.pathname === "/api/session" && req.method === "GET") {
+    return json(res, 200, { session: publicSession(getSession(req)) }, securityHeaders());
   }
 
-  if (url.pathname === "/api/session" && req.method === "GET") {
-    const session = getSession(req);
-    if (url.searchParams.get("refresh") !== "1" || !session || session.kind !== "xtream") {
-      return json(res, 200, { session: publicSession(session) }, securityHeaders());
-    }
-    if (!requireActiveLicense(req, res)) return;
-    let refreshed;
-    try {
-      refreshed = await cached(providerSessionCacheKey(session), () => refreshProviderSession(session), 60_000);
-    } catch (error) {
-      console.warn(`[session] provider-refresh-failed host=${session.serverName || "unknown"} message=${mediaErrorSummary(error?.message)}`);
-      return json(res, 503, { error: "تعذر تحديث حالة الباقة حاليًا. احتفظنا بالجلسة السابقة." }, securityHeaders());
-    }
-    const sealedSession = seal(refreshed);
-    await persistDeviceSessionFromHeaders(deviceProfiles, req.headers, sealedSession);
-    if (providerSessionResponseStatus(refreshed) === 402) {
-      return json(res, 402, {
-        error: "انتهى اشتراك مزود الباقة أو أصبحت بياناته غير صالحة. جدّد الاشتراك ثم أعد تسجيل الدخول.",
-        session: publicSession(refreshed),
-        refreshed: true,
-      }, {
-        ...securityHeaders(),
-        "set-cookie": sessionCookie(sealedSession),
-      });
-    }
-    return json(res, 200, { session: publicSession(refreshed), refreshed: true }, {
-      ...securityHeaders(),
-      "set-cookie": sessionCookie(sealedSession),
-    });
-  }
   if (url.pathname === "/api/session" && req.method === "DELETE") {
     return json(res, 200, { ok: true }, { ...securityHeaders(), "set-cookie": clearSessionCookie() });
   }
+
   if (url.pathname === "/api/session" && req.method === "POST") {
     if (!requireActiveLicense(req, res)) return;
-    const body = await readJson(req);
-    const session = await sessionFromInput(body);
+    const session = await sessionFromInput(await readJson(req));
     const sealedSession = seal(session);
     await persistDeviceSessionFromHeaders(deviceProfiles, req.headers, sealedSession);
     return json(res, 200, { ok: true, session: publicSession(session) }, {
-      ...securityHeaders(),
-      "set-cookie": sessionCookie(sealedSession),
+      ...securityHeaders(), "set-cookie": sessionCookie(sealedSession),
     });
-  }
-
-  if (req.method === "GET" && url.pathname === "/api/proxy") {
-    if (!requireActiveLicense(req, res)) return;
-    const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
-    if (!raw) return json(res, 403, { error: "انتهى رابط الوسيط، أعد فتح المحتوى." }, securityHeaders());
-    return relayRemote(req, res, raw);
   }
 
   if (req.method === "GET" && url.pathname === "/api/native-play") {
     if (!requireActiveLicense(req, res)) return;
     const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
-    if (!raw) return json(res, 403, { error: "انتهى رابط Media3، أعد فتح المحتوى." }, securityHeaders());
+    if (!raw) return json(res, 403, { error: "انتهى رابط التشغيل، أعد فتح المحتوى." }, securityHeaders());
     await assertSafeUrl(raw);
-    const location = nativePlaybackTarget(raw);
-    console.log(`[media] native-open host=${sourceHost(raw)} mode=${NATIVE_PLAYBACK_MODE}`);
-    res.writeHead(302, { ...securityHeaders(), location, "cache-control": "no-store" });
+    console.log(`[media] direct-open host=${new URL(raw).host}`);
+    res.writeHead(302, { ...securityHeaders(), location: raw, "cache-control": "no-store" });
     res.end();
     return;
-  }
-
-  if (req.method === "GET" && (url.pathname === "/api/transcode/index.m3u8" || url.pathname.startsWith("/api/transcode/segment-"))) {
-    if (!requireActiveLicense(req, res)) return;
-    const raw = verifyResource(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
-    if (!raw) return json(res, 403, { error: "انتهت جلسة التشغيل." }, securityHeaders());
-    const fileName = url.pathname.split("/").pop();
-    return serveTranscode(res, raw, url.searchParams, fileName);
   }
 
   const session = getSession(req);
   if (!session) return json(res, 401, { error: "أضف قائمة تشغيل أولًا." }, securityHeaders());
   if (!requireActiveLicense(req, res)) return;
 
-  const imageMatch = url.pathname.match(/^\/api\/image\/(live|movies|series)\/([^/]+)\/(poster|backdrop)$/);
-  if (req.method === "GET" && imageMatch) {
-    const [, type, id, kind] = imageMatch;
-    const source = await imageFor(session, type, decodeURIComponent(id), kind);
-    if (!source) return json(res, 404, { error: "لا توجد صورة لهذا المحتوى." }, securityHeaders());
-    return relayRemote(req, res, source);
-  }
-
   const nativeLinkMatch = url.pathname.match(/^\/api\/native-link\/(live|movies|episode)\/([^/]+)$/);
   if (req.method === "GET" && nativeLinkMatch) {
     const [, type, id] = nativeLinkMatch;
-    const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
+    const fallbackExt = type === "live" ? "ts" : "mp4";
+    const extension = String(url.searchParams.get("ext") || fallbackExt).replace(/[^a-zA-Z0-9]/g, "") || fallbackExt;
     const source = await sourceFor(session, type, id, extension);
     const resolvedExtension = extensionFromUrl(source) || extension;
-    console.log(`[media] native-link type=${type} id=${id} ext=${resolvedExtension} host=${sourceHost(source)}`);
+    await assertSafeUrl(source);
+    console.log(`[media] direct-link type=${type} id=${id} ext=${resolvedExtension} host=${new URL(source).host}`);
     return json(res, 200, {
-      // HTTPS sources are opened directly by Media3. Legacy HTTP sources are
-      // copied through BLOFY HTTPS without FFmpeg/transcoding, so Android never
-      // needs a global cleartext exception.
-      url: signedPath(source, nativePlaybackPath(source), 7200),
-      // Some providers reject direct Android/TV requests even though the same
-      // source is valid from Railway. Keep a second raw-byte route available
-      // for Media3. This is a relay only (Range requests are preserved); it
-      // does not invoke FFmpeg and therefore starts much faster than the
-      // compatibility/transcode pipeline.
-      relayUrl: signedPath(source, "/api/proxy", 7200),
+      url: signedNativePath(source),
       extension: resolvedExtension,
       mode: NATIVE_PLAYBACK_MODE,
     }, securityHeaders());
@@ -846,13 +454,8 @@ async function handleApi(req, res, url) {
     if (session.kind !== "xtream") return json(res, 400, { error: "تفاصيل الفيلم غير متوفرة لهذا النوع من القوائم." }, securityHeaders());
     const client = new XtreamClient(session);
     const item = await cached(cacheKey(session, `movie:${movieMatch[1]}`), () => client.movieInfo(movieMatch[1]));
-    const directArtwork = url.searchParams.get("native") === "1";
     const { sourceUrl: _privateSource, ...publicItem } = item;
-    return json(res, 200, {
-      ...publicItem,
-      image: directArtwork ? item.image : safeImage(item.image),
-      backdrop: directArtwork ? item.backdrop : safeImage(item.backdrop),
-    }, securityHeaders());
+    return json(res, 200, { ...publicItem, image: item.image || "", backdrop: item.backdrop || "" }, securityHeaders());
   }
 
   const seriesMatch = url.pathname.match(/^\/api\/series\/([^/]+)$/);
@@ -861,13 +464,10 @@ async function handleApi(req, res, url) {
     const client = new XtreamClient(session);
     const item = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
     if (!item.seasons.length) return json(res, 404, { error: "لم يرسل مزود القائمة مواسم أو حلقات لهذا المسلسل." }, securityHeaders());
-    for (const season of item.seasons) {
-      for (const episode of season.episodes) rememberDirectSource(session, "episode", episode.id, episode.sourceUrl);
+    for (const season of item.seasons) for (const episode of season.episodes) {
+      rememberDirectSource(session, "episode", episode.id, episode.sourceUrl);
     }
-    const artwork = url.searchParams.get("native") === "1"
-      ? (raw) => String(raw || "")
-      : safeImage;
-    return json(res, 200, publicSeriesItem(item, artwork), securityHeaders());
+    return json(res, 200, publicSeriesItem(item, (raw) => String(raw || "")), securityHeaders());
   }
 
   const epgMatch = url.pathname.match(/^\/api\/epg\/([^/]+)$/);
@@ -878,67 +478,68 @@ async function handleApi(req, res, url) {
     return json(res, 200, { entries }, securityHeaders());
   }
 
-  const playMatch = url.pathname.match(/^\/api\/play\/(live|movies|episode)\/([^/]+)$/);
-  if (req.method === "GET" && playMatch) {
-    const [, type, id] = playMatch;
-    const extension = String(url.searchParams.get("ext") || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
-    const source = await sourceFor(session, type, id, extension);
-    const compatibilityLevel = url.searchParams.get("compat");
-    const compatibilityMode = compatibilityLevel === "1" || compatibilityLevel === "2";
-    const secureRawRelay = url.searchParams.get("raw") === "1";
-    console.log(`[media] web-open type=${type} id=${id} ext=${extension} host=${sourceHost(source)} mode=${compatibilityLevel === "2" ? "compat" : "standard"}`);
-    return relayRemote(req, res, source, {
-      allowTranscode: !secureRawRelay && (type === "live" || compatibilityMode),
-      forceHls: !secureRawRelay && (type === "live" || compatibilityMode),
-      transcodeVideo: compatibilityLevel === "2",
-      preferTranscode: type === "live" && !/^m3u8$/i.test(extension),
-    });
-  }
-
   return json(res, 404, { error: "المسار غير موجود." }, securityHeaders());
 }
+
+const staticFiles = new Map([
+  ["/activate", "activate.html"],
+  ["/activate/", "activate.html"],
+  ["/activate.html", "activate.html"],
+  ["/activate.js", "activate.js"],
+  ["/styles.css", "styles.css"],
+  ["/assets/blofy-logo-192.png", "assets/blofy-logo-192.png"],
+  ["/assets/blofy-logo-512.png", "assets/blofy-logo-512.png"],
+]);
 
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
 };
 
-async function serveStatic(req, res, pathname) {
-  let target;
-  if (pathname === "/vendor/hls.min.js") target = path.join(here, "node_modules", "hls.js", "dist", "hls.min.js");
-  else {
-    const relative = pathname === "/" ? "index.html" : pathname === "/activate" || pathname === "/activate/" ? "activate.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
-    target = path.resolve(publicDir, relative);
-    if (target !== publicDir && !target.startsWith(`${publicDir}${path.sep}`)) return false;
-  }
+function serveStatic(res, pathname) {
+  const relative = staticFiles.get(pathname);
+  if (!relative) return false;
+  const target = path.join(publicDir, relative);
   if (!existsSync(target) || !statSync(target).isFile()) return false;
   const stat = statSync(target);
   res.writeHead(200, {
     ...securityHeaders(),
     "content-type": mime[path.extname(target).toLowerCase()] || "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": /(?:app(?:\.compat)?\.js|activate(?:\.html|\.js)|styles\.css|index\.html)$/.test(target) ? "no-cache" : "public, max-age=86400",
+    "cache-control": /activate|styles/.test(relative) ? "no-cache" : "public, max-age=86400",
   });
   createReadStream(target).pipe(res);
   return true;
 }
+
+setInterval(() => {
+  pruneMemoryCache();
+  const now = Date.now();
+  for (const [key, record] of directSourceCache) if (record.expiresAt <= now) directSourceCache.delete(key);
+  for (const [key, bucket] of rateBuckets) if (bucket.resetAt < now - 120_000) rateBuckets.delete(key);
+}, 30_000).unref();
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
     if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "الطريقة غير مسموحة." }, securityHeaders());
-    if (await serveStatic(req, res, url.pathname)) return;
-    await serveStatic(req, res, "/");
+    if (serveStatic(res, url.pathname)) return;
+    if (url.pathname === "/") {
+      return json(res, 200, {
+        ok: true,
+        service: "BLOFY PLAYER API",
+        version: APP_VERSION,
+        nativePlayback: NATIVE_PLAYBACK_MODE,
+        activation: "/activate",
+      }, securityHeaders());
+    }
+    return json(res, 404, { error: "المسار غير موجود." }, securityHeaders());
   } catch (error) {
     const message = error?.name === "AbortError" ? "انتهت مهلة اتصال الخادم." : error?.message || "حدث خطأ غير متوقع.";
-    if (String(req.url || "").startsWith("/api/play/") || String(req.url || "").startsWith("/api/native-") || String(req.url || "").startsWith("/api/transcode/")) {
+    if (String(req.url || "").startsWith("/api/native-")) {
       console.error(`[media] request-failed path=${String(req.url || "").split("?")[0]} message=${message}`);
     }
     if (!res.headersSent) json(res, 500, { error: message }, securityHeaders());
@@ -947,11 +548,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(`BLOFY PLAYER is ready on port ${port}`);
+  console.log(`BLOFY PLAYER API ${APP_VERSION} ready on port ${port}`);
 });
 
 function shutdown() {
-  for (const key of transcodes.keys()) stopTranscode(key);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 }
