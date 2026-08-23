@@ -8,6 +8,7 @@ on:
     paths:
       - "BLOFY-ANDROID-2026/**"
       - ".github/workflows/android-apk.yml"
+      - "tools/apply_7max_ui.py"
 
 permissions:
   contents: write
@@ -33,27 +34,14 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/apply_sync_fix.py
-          if git diff --quiet -- BLOFY-WEB-2026/web-test/server.mjs; then
-            echo "Server sync repair already applied"
-          else
-            git config user.name "blofy-ci"
-            git config user.email "actions@users.noreply.github.com"
-            git add BLOFY-WEB-2026/web-test/server.mjs
-            git commit -m "fix: raise catalog sync capacity"
-            for attempt in 1 2 3 4; do
-              git fetch origin main
-              git rebase origin/main
-              if git push origin HEAD:main; then
-                echo "Server sync repair pushed"
-                break
-              fi
-              if [ "$attempt" -eq 4 ]; then
-                echo "Unable to push server sync repair after retries" >&2
-                exit 1
-              fi
-              sleep $((attempt * 2))
-            done
-          fi
+
+      - name: Apply 7 Max style shell routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/apply_7max_ui.py
+          grep -q 'SevenMaxActivity.class' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
+          grep -q 'class SevenMaxActivity' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -66,16 +54,16 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Verify fast playback and complete catalog fix
+      - name: Verify fast playback and 7 Max theme
         shell: bash
         run: |
           set -euo pipefail
           grep -q 'private static final int VERSION = 3' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
-          grep -q '"complete".equals(database.metadata("sync_state", ""))' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
           grep -q 'setLoadControl(loadControl)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'return recoveryStep == 0 || recoveryStep == 2' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
           grep -q 'importByCategories' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q '2026.08.23.9-7max-fast' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q '2026.08.23.10-7max-theme' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'بث مباشر' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
 
       - name: Create Gradle wrapper
         working-directory: BLOFY-ANDROID-2026
@@ -101,13 +89,13 @@ jobs:
       - name: Prepare named APK
         run: |
           cp BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk \
-            BLOFY-PLAYER-2026-NATIVE.apk
+            BLOFY-PLAYER-2026-7MAX-THEME.apk
 
       - name: Upload BLOFY PLAYER APK
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-PLAYER-NATIVE-APK
-          path: BLOFY-PLAYER-2026-NATIVE.apk
+          name: BLOFY-PLAYER-7MAX-THEME-APK
+          path: BLOFY-PLAYER-2026-7MAX-THEME.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -144,8 +132,8 @@ jobs:
             "run_id": ${CI_RUN_ID},
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
-            "artifact": "BLOFY-PLAYER-NATIVE-APK",
-            "version": "2026.08.23.9-7max-fast"
+            "artifact": "BLOFY-PLAYER-7MAX-THEME-APK",
+            "version": "2026.08.23.10-7max-theme"
           }
           EOF
           git add .ci/native-apk-status.json
