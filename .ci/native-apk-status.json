@@ -1,9 +1,9 @@
 {
   "workflow": "Build BLOFY PLAYER APK",
   "status": "cancelled",
-  "run_id": 32664600302,
+  "run_id": 32664617989,
   "run_attempt": 1,
-  "source_sha": "bf39aa76d4b1095bbd5fadb20ca8b8f788264ec8",
+  "source_sha": "657383070c85f7ff535421ddb467690cdce09321",
   "artifact": "BLOFY-PLAYER-NATIVE-APK",
   "version": "2026.08.23.9-7max-fast"
 }
