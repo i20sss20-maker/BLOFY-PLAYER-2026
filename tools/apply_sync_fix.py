@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 
+# One-shot repair for the large-package sync path.
 ROOT = Path(__file__).resolve().parents[1]
 server_path = ROOT / "BLOFY-WEB-2026/web-test/server.mjs"
 importer_path = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java"
@@ -55,7 +56,6 @@ new_run = r'''    Result run() throws Exception {
             emit(100, "اكتملت قراءة الباقة", "جاهز للتشغيل المباشر عبر Media3");
             return new Result(database.count("live"), database.count("movies"), database.count("series"), profile);
         } catch (Exception error) {
-            // Never leave a partially imported package looking valid after a failed sync.
             database.beginFreshImport();
             database.putMetadata("sync_state", "failed");
             throw error;
