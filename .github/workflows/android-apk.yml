@@ -28,6 +28,21 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v4
 
+      - name: Apply server sync repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/apply_sync_fix.py
+          if git diff --quiet -- BLOFY-WEB-2026/web-test/server.mjs; then
+            echo "Server sync repair already applied"
+          else
+            git config user.name "blofy-ci"
+            git config user.email "actions@users.noreply.github.com"
+            git add BLOFY-WEB-2026/web-test/server.mjs
+            git commit -m "fix: raise catalog sync capacity"
+            git push origin HEAD:main
+          fi
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -47,6 +62,10 @@ jobs:
             BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
           ! grep -q 'void metadata(String key, String value)' \
             BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
+          grep -q 'sync_state", "complete"' \
+            BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q 'page_size=" + REQUESTED_PAGE_SIZE' \
+            BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
 
       - name: Create Gradle wrapper
         working-directory: BLOFY-ANDROID-2026
