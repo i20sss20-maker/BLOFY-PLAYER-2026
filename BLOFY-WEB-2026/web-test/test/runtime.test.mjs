@@ -9,7 +9,7 @@ test("native playback is permanently direct and never adds a Railway transcode U
   assert.match(APP_VERSION, /^2026\.08\.\d{2}\.\d+$/);
 });
 
-test("legacy HTTP playback stays behind BLOFY HTTPS while HTTPS remains direct", () => {
-  assert.equal(nativePlaybackPath("http://provider.example/live/1.ts"), "/api/proxy");
+test("native Android resolves both HTTP and HTTPS providers through the authorization redirect", () => {
+  assert.equal(nativePlaybackPath("http://provider.example/live/1.ts"), "/api/native-play");
   assert.equal(nativePlaybackPath("https://cdn.example/live/1.m3u8"), "/api/native-play");
 });
