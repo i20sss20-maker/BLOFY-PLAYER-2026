@@ -96,7 +96,9 @@ text = replace_required(
 )
 path.write_text(text, encoding='utf-8')
 
-# PlayerActivity: back gestures and TV remote BACK both flow through the dispatcher.
+# PlayerActivity: back gestures use the dispatcher. Remote/media keys use
+# Activity.onKeyDown instead of ComponentActivity.dispatchKeyEvent, which is
+# restricted to the AndroidX library group and was the final lint blocker.
 path = ROOT / 'PlayerActivity.java'
 text = path.read_text(encoding='utf-8')
 text = replace_required(text, 'import android.app.Activity;\n', '', 'Player Activity import')
@@ -134,6 +136,30 @@ text = replace_required(
     '',
     'Player old back override',
 )
+text = replace_required(
+    text,
+    '''    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            switch (event.getKeyCode()) {''',
+    '''    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        switch (keyCode) {''',
+    'Player dispatchKeyEvent start',
+)
+text = replace_required(
+    text,
+    '''            }
+        }
+        return super.dispatchKeyEvent(event);
+    }
+''',
+    '''        }
+        return super.onKeyDown(keyCode, event);
+    }
+''',
+    'Player dispatchKeyEvent end',
+)
 path.write_text(text, encoding='utf-8')
 
-print('BLOFY lint fixes applied: predictive back, API 23 progress, Media3 opt-in')
+print('BLOFY lint fixes applied: predictive back, API 23 progress, Media3 opt-in, TV key handling')
