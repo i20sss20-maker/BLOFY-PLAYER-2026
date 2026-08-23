@@ -52,11 +52,19 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-datasource-cronet:$media3Version")
-    // Mirrors the transport shape found in 7 Max: GMS Cronet when available,
-    // with our code falling back to Media3 DefaultHttpDataSource when unavailable.
     implementation("com.google.android.gms:play-services-cronet:18.1.0")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("com.google.zxing:core:3.5.4")
+
+    // Media3's FFmpeg decoder is not published on Google Maven. The dedicated
+    // full-player workflow builds the matching 1.11.0 AAR locally. Normal APK
+    // builds remain valid without it; DefaultRenderersFactory simply uses the
+    // platform audio decoder and decoder fallback.
+    val ffmpegDecoderAar = file("libs/media3-decoder-ffmpeg-release.aar")
+    if (ffmpegDecoderAar.exists()) {
+        implementation(files(ffmpegDecoderAar))
+    }
+
     testImplementation("junit:junit:4.13.2")
 }
