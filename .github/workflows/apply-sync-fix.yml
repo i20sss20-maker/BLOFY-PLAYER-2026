@@ -1,0 +1,41 @@
+name: Apply BLOFY Sync Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/apply_sync_fix.py"
+      - ".github/workflows/apply-sync-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Apply fix
+        run: python3 tools/apply_sync_fix.py
+      - name: Verify expected changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'page_size=2000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q 'sync_state", "complete"' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q 'syncRequest' BLOFY-WEB-2026/web-test/server.mjs
+          grep -q '30, 2000' BLOFY-WEB-2026/web-test/server.mjs
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "blofy-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add BLOFY-WEB-2026/web-test/server.mjs \
+                  BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java \
+                  BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java \
+                  BLOFY-ANDROID-2026/app/build.gradle
+          git commit -m "fix: make large IPTV package sync resilient"
+          git push origin main
