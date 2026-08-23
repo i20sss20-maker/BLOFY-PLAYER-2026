@@ -7,14 +7,43 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Dispatch final full APK workflow
+        id: dispatch
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh workflow run full-player-apk.yml --ref main
+
+      - name: Record dispatcher result
+        if: always()
+        shell: bash
+        env:
+          DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "blofy-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          mkdir -p .ci
+          cat > .ci/temp-dispatch-status.json <<EOF
+          {
+            "dispatcher_run_id": ${RUN_ID},
+            "dispatch_outcome": "${DISPATCH_OUTCOME}",
+            "target": "full-player-apk.yml"
+          }
+          EOF
+          git add .ci/temp-dispatch-status.json
+          git commit -m "ci: record temporary APK dispatch ${RUN_ID}" || exit 0
+          git push origin HEAD:main
