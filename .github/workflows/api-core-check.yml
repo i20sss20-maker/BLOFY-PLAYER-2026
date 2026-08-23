@@ -1,0 +1,47 @@
+name: Verify BLOFY API Core
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "BLOFY-WEB-2026/web-test/**"
+      - ".github/workflows/api-core-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "BLOFY-WEB-2026/web-test/**"
+      - ".github/workflows/api-core-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  api-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: BLOFY-WEB-2026/web-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: BLOFY-WEB-2026/web-test/package-lock.json
+      - name: Install clean API dependencies
+        run: npm ci
+      - name: Syntax check
+        run: npm run check
+      - name: Unit tests
+        run: npm test
+      - name: Assert legacy media server is gone
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -E "spawn\(.*ffmpeg|/api/transcode|/api/proxy|hls\.js|app\.compat\.js|android\.webkit\.WebView" . --exclude-dir=node_modules --exclude='README_AR.md'
+          grep -q 'nativePlayback: NATIVE_PLAYBACK_MODE' server.mjs
+          grep -q 'mediaProxy: false' server.mjs
+          grep -q 'transcoding: false' server.mjs
