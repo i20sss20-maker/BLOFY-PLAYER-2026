@@ -66,10 +66,11 @@ final class PackageImporter {
             database.putMetadata("last_sync", String.valueOf(System.currentTimeMillis()));
             database.putMetadata("sync_state", "complete");
             emit(98, "تجهيز التشغيل", profile);
-            emit(100, "اكتملت قراءة الباقة", "جاهز للتشغيل المباشر عبر Media3");
+            emit(100, "اكتملت قراءة الباقة", "Live " + database.count("live")
+                    + " • Movies " + database.count("movies")
+                    + " • Series " + database.count("series"));
             return new Result(database.count("live"), database.count("movies"), database.count("series"), profile);
         } catch (Exception error) {
-            // A failed first import must never leave a partial catalog looking valid.
             database.beginFreshImport();
             database.putMetadata("sync_state", "failed");
             throw error;
@@ -86,11 +87,17 @@ final class PackageImporter {
                 + "&page=1&page_size=" + REQUESTED_PAGE_SIZE, true);
         int total = Math.max(0, first.optInt("total", 0));
         int pageSize = Math.max(1, first.optInt("pageSize", 60));
+
+        // Some Xtream panels return an empty global VOD/series list but expose
+        // valid items when category_id is supplied. Use categories as a safe
+        // fallback instead of silently storing 0 Movies/Series.
+        if (total == 0 && !"live".equals(type) && !categories.isEmpty()) {
+            importByCategories(type, label, categories, start, end);
+            return;
+        }
+
         int pages = Math.max(1, (int) Math.ceil(total / (double) pageSize));
         save(BlofyModels.Media.list(first, type));
-
-        // Older BLOFY API builds cap the page size at 500 and allow 120 API calls/minute.
-        // Pace only that legacy path. Newer API builds return a larger page and run at full speed.
         boolean legacyRateLimit = pageSize < 1000;
         for (int page = 2; page <= pages; page++) {
             int progress = start + Math.round((end - start) * ((page - 1f) / pages));
@@ -101,7 +108,33 @@ final class PackageImporter {
                     + "&page=" + page + "&page_size=" + REQUESTED_PAGE_SIZE, true);
             save(BlofyModels.Media.list(response, type));
         }
-        emit(end, "اكتملت " + label, total + " عنصر محفوظ محليًا");
+        emit(end, "اكتملت " + label, database.count(type) + " عنصر محفوظ محليًا");
+    }
+
+    private void importByCategories(String type, String label,
+                                    List<BlofyModels.Category> categories,
+                                    int start, int end) throws Exception {
+        int categoryCount = Math.max(1, categories.size());
+        for (int index = 0; index < categories.size(); index++) {
+            BlofyModels.Category category = categories.get(index);
+            int progress = start + Math.round((end - start) * (index / (float) categoryCount));
+            emit(progress, "قراءة " + label,
+                    "تصنيف " + (index + 1) + " من " + categories.size());
+
+            String base = "/api/catalog?type=" + BlofyApi.encode(type)
+                    + "&category=" + BlofyApi.encode(category.id)
+                    + "&page_size=" + REQUESTED_PAGE_SIZE;
+            JSONObject first = getWithRetry(base + "&page=1", true);
+            int total = Math.max(0, first.optInt("total", 0));
+            int pageSize = Math.max(1, first.optInt("pageSize", 60));
+            int pages = Math.max(1, (int) Math.ceil(total / (double) pageSize));
+            save(BlofyModels.Media.list(first, type));
+            for (int page = 2; page <= pages; page++) {
+                JSONObject response = getWithRetry(base + "&page=" + page, true);
+                save(BlofyModels.Media.list(response, type));
+            }
+        }
+        emit(end, "اكتملت " + label, database.count(type) + " عنصر محفوظ محليًا");
     }
 
     private JSONObject getWithRetry(String path, boolean catalogRequest) throws Exception {
@@ -135,19 +168,24 @@ final class PackageImporter {
     private void save(List<BlofyModels.Media> items) {
         database.saveMedia(items);
         for (BlofyModels.Media item : items) {
-            String extension = item.extension == null || item.extension.isEmpty() ? "unknown" : item.extension.toLowerCase(Locale.US);
-            extensions.put(extension, extensions.containsKey(extension) ? extensions.get(extension) + 1 : 1);
+            String extension = item.extension == null || item.extension.isEmpty()
+                    ? "unknown" : item.extension.toLowerCase(Locale.US);
+            extensions.put(extension, extensions.containsKey(extension)
+                    ? extensions.get(extension) + 1 : 1);
         }
     }
 
     private String profile() {
         int hls = extensions.containsKey("m3u8") ? extensions.get("m3u8") : 0;
         int transport = 0;
-        for (String extension : new String[]{"ts", "mts", "m2ts"}) transport += extensions.containsKey(extension) ? extensions.get(extension) : 0;
+        for (String extension : new String[]{"ts", "mts", "m2ts"})
+            transport += extensions.containsKey(extension) ? extensions.get(extension) : 0;
         int files = 0;
-        for (String extension : new String[]{"mp4", "mkv", "avi", "mov", "webm"}) files += extensions.containsKey(extension) ? extensions.get(extension) : 0;
-        if (transport >= hls && transport >= files) return "Media3 مباشر • بث TS مع كشف تلقائي للترميز";
-        if (hls >= files) return "Media3 مباشر • HLS/M3U8 متكيف";
+        for (String extension : new String[]{"mp4", "mkv", "avi", "mov", "webm"})
+            files += extensions.containsKey(extension) ? extensions.get(extension) : 0;
+        if (transport >= hls && transport >= files)
+            return "Media3 مباشر • Cronet أولًا • TS سريع";
+        if (hls >= files) return "Media3 مباشر • Cronet أولًا • HLS متكيف";
         return "Media3 مباشر • ملفات فيديو مع دعم الاستكمال";
     }
 
