@@ -52,7 +52,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-datasource-cronet:$media3Version")
-    implementation("org.chromium.net:cronet-embedded:500.0.1")
+    // Mirrors the transport shape found in 7 Max: GMS Cronet when available,
+    // with our code falling back to Media3 DefaultHttpDataSource when unavailable.
+    implementation("com.google.android.gms:play-services-cronet:18.1.0")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("com.google.zxing:core:3.5.4")
