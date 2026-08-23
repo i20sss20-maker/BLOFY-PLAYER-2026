@@ -171,7 +171,7 @@ jobs:
           retention-days: 7
 
       - name: Publish CI run pointer
-        if: always() && github.event_name == 'push'
+        if: always()
         shell: bash
         env:
           CI_JOB_STATUS: ${{ job.status }}
