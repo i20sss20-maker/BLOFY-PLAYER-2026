@@ -11,7 +11,7 @@ import java.util.List;
 
 final class CatalogDatabase extends SQLiteOpenHelper {
     private static final String NAME = "blofy_catalog.db";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     CatalogDatabase(Context context) { super(context.getApplicationContext(), NAME, null, VERSION); }
 
@@ -25,7 +25,19 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         database.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
     }
 
-    @Override public void onUpgrade(SQLiteDatabase database, int oldVersion, int newVersion) {}
+    @Override
+    public void onUpgrade(SQLiteDatabase database, int oldVersion, int newVersion) {
+        if (oldVersion < 2) {
+            // Builds before v2 could leave a partially imported package after HTTP 429.
+            // Keep favorites/history, but force a clean catalog import once after upgrade.
+            database.delete("categories", null, null);
+            database.delete("media", null, null);
+            ContentValues values = new ContentValues();
+            values.put("key", "sync_state");
+            values.put("value", "upgrade_required");
+            database.insertWithOnConflict("metadata", null, values, SQLiteDatabase.CONFLICT_REPLACE);
+        }
+    }
 
     void beginFreshImport() {
         SQLiteDatabase database = getWritableDatabase();
