@@ -10,7 +10,7 @@ on:
       - ".github/workflows/android-apk.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: blofy-android-${{ github.ref }}
@@ -92,3 +92,34 @@ jobs:
             BLOFY-ANDROID-2026/app/build/test-results/**
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Publish native CI run pointer
+        if: always()
+        shell: bash
+        env:
+          CI_JOB_STATUS: ${{ job.status }}
+          CI_RUN_ID: ${{ github.run_id }}
+          CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CI_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "blofy-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          mkdir -p .ci
+          cat > .ci/native-apk-status.json <<EOF
+          {
+            "workflow": "Build BLOFY PLAYER APK",
+            "status": "${CI_JOB_STATUS}",
+            "run_id": ${CI_RUN_ID},
+            "run_attempt": ${CI_RUN_ATTEMPT},
+            "source_sha": "${CI_SOURCE_SHA}",
+            "artifact": "BLOFY-PLAYER-NATIVE-APK",
+            "version": "2026.08.23.4-7maxfull"
+          }
+          EOF
+          git add .ci/native-apk-status.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "ci: record native APK build ${CI_RUN_ID}"
+          git push origin main
