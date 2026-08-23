@@ -16,8 +16,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 202608233
-        versionName = "2026.08.23.3-7maxfull"
+        versionCode = 202608234
+        versionName = "2026.08.23.4-7maxfull"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 
@@ -52,7 +52,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-datasource-cronet:$media3Version")
-    implementation("com.google.android.gms:play-services-cronet:18.1.0")
+    implementation("com.google.android.gms:play-services-cronet:18.0.1")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("com.google.zxing:core:3.5.4")
