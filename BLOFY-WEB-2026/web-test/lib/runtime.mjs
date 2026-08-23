@@ -1,4 +1,4 @@
-export const APP_VERSION = "2026.08.21.12";
+export const APP_VERSION = "2026.08.23.4";
 export const NATIVE_PLAYBACK_MODE = "direct";
 
 export function nativePlaybackTarget(rawUrl) {
@@ -8,6 +8,9 @@ export function nativePlaybackTarget(rawUrl) {
 }
 
 export function nativePlaybackPath(rawUrl) {
-  const target = new URL(nativePlaybackTarget(rawUrl));
-  return target.protocol === "https:" ? "/api/native-play" : "/api/proxy";
+  // Native Android allows cleartext provider URLs where required. Always use
+  // the authorization redirect endpoint so BLOFY can verify the device once,
+  // then let Media3 connect directly to the provider for both HTTP and HTTPS.
+  nativePlaybackTarget(rawUrl);
+  return "/api/native-play";
 }
