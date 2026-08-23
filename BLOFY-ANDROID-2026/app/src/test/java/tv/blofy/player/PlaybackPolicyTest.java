@@ -42,10 +42,17 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void recoveryRetriesSameFormatBeforeFormatFallback() {
+    public void recoveryUsesPlayer1ThenPlayer2ThenAlternateFormat() {
+        assertFalse(PlaybackPolicy.useCronet(0));
+        assertFalse(PlaybackPolicy.useCronet(1));
+        assertTrue(PlaybackPolicy.useCronet(2));
+        assertFalse(PlaybackPolicy.useCronet(3));
+        assertTrue(PlaybackPolicy.useCronet(4));
+
         assertTrue(PlaybackPolicy.shouldRetrySameFormat(1));
         assertTrue(PlaybackPolicy.shouldRetrySameFormat(2));
-        assertFalse(PlaybackPolicy.shouldRetrySameFormat(3));
         assertTrue(PlaybackPolicy.shouldTryAlternateLiveFormat(3));
+        assertTrue(PlaybackPolicy.shouldRetryAlternateFormat(4));
+        assertTrue(PlaybackPolicy.exhausted(5));
     }
 }
