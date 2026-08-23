@@ -10,6 +10,8 @@ import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.cronet.CronetDataSource;
 import androidx.media3.datasource.cronet.CronetUtil;
 
+import com.google.android.gms.net.CronetProviderInstaller;
+
 import org.chromium.net.CronetEngine;
 
 import java.util.concurrent.Executor;
@@ -19,13 +21,43 @@ import java.util.concurrent.Executor;
 final class PlaybackTransportFactory {
     private static final String TAG = "BlofyTransport";
     private static volatile CronetEngine cronetEngine;
-    private static volatile boolean cronetAttempted;
+    private static volatile boolean cronetInstallStarted;
 
     private PlaybackTransportFactory() {}
 
+    static void warmUpCronet(Context context) {
+        if (cronetEngine != null || cronetInstallStarted) return;
+        synchronized (PlaybackTransportFactory.class) {
+            if (cronetEngine != null || cronetInstallStarted) return;
+            cronetInstallStarted = true;
+        }
+
+        Context appContext = context.getApplicationContext();
+        try {
+            CronetProviderInstaller.installProvider(appContext)
+                    .addOnCompleteListener(task -> {
+                        if (!task.isSuccessful()) {
+                            Log.w(TAG, "cronet-provider-install-failed", task.getException());
+                            return;
+                        }
+                        try {
+                            cronetEngine = CronetUtil.buildCronetEngine(appContext, null, true);
+                            Log.i(TAG, cronetEngine != null
+                                    ? "cronet-provider-ready"
+                                    : "cronet-provider-ready-but-engine-unavailable");
+                        } catch (Throwable error) {
+                            Log.w(TAG, "cronet-engine-init-failed", error);
+                            cronetEngine = null;
+                        }
+                    });
+        } catch (Throwable error) {
+            Log.w(TAG, "cronet-provider-install-start-failed", error);
+        }
+    }
+
     static DataSource.Factory create(Context context, boolean preferCronet, Executor executor) {
         if (preferCronet) {
-            CronetEngine engine = getCronetEngine(context.getApplicationContext());
+            CronetEngine engine = cronetEngine;
             if (engine != null) {
                 Log.i(TAG, "transport=cronet-gms");
                 return new DefaultDataSource.Factory(
@@ -39,23 +71,5 @@ final class PlaybackTransportFactory {
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true);
         return new DefaultDataSource.Factory(context, http);
-    }
-
-    private static CronetEngine getCronetEngine(Context context) {
-        if (cronetAttempted) return cronetEngine;
-        synchronized (PlaybackTransportFactory.class) {
-            if (!cronetAttempted) {
-                try {
-                    // 7 Max contains the GMS Cronet provider classes and no bundled
-                    // libcronet.so in its ARM64 split. Prefer the same provider shape.
-                    cronetEngine = CronetUtil.buildCronetEngine(context, null, true);
-                } catch (Throwable error) {
-                    Log.w(TAG, "cronet-init-failed", error);
-                    cronetEngine = null;
-                }
-                cronetAttempted = true;
-            }
-        }
-        return cronetEngine;
     }
 }
