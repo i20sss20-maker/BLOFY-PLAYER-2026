@@ -8,6 +8,12 @@ on:
     paths:
       - "BLOFY-ANDROID-2026/**"
       - ".github/workflows/full-player-apk.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "BLOFY-ANDROID-2026/**"
+      - ".github/workflows/full-player-apk.yml"
 
 permissions:
   contents: read
