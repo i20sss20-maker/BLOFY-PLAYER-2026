@@ -27,8 +27,7 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
-import androidx.media3.datasource.DefaultDataSource;
-import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.DataSource;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory;
@@ -45,15 +44,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * BLOFY playback core v1.
+ * BLOFY playback core v2.
  *
- * Design goal: match the simple and stable IPTV behaviour observed in 7 Max:
- * direct source playback, Xtream live TS first, normal ExoPlayer/Media3 buffering,
- * renderer fallback, reconnect on live termination, behind-live-window recovery,
- * then TS <-> HLS fallback before surfacing an error.
- *
- * Railway only signs/resolves the source URL. /api/native-play returns a redirect
- * to the provider and does not relay/transcode the media bytes.
+ * Stable IPTV strategy inspired by the behaviour observed in 7 Max, without
+ * copying its source code: direct provider playback, Xtream TS first, Media3
+ * defaults, Player1 (Default HTTP), Player2 (Cronet), renderer fallback,
+ * behind-live-window recovery and TS/HLS fallback.
  */
 @UnstableApi
 public final class PlayerActivity extends Activity implements Player.Listener {
@@ -81,14 +77,17 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private long resumePosition;
     private int recoveryStep;
     private boolean resolving;
+    private boolean stickyCronet;
     private long playbackStartedAtMs;
 
     private final ExecutorService network = Executors.newSingleThreadExecutor();
+    private final ExecutorService cronetExecutor = Executors.newCachedThreadPool();
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
 
     private final Runnable playbackTimeout = () -> {
         if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
-        Log.w(TAG, "startup-timeout kind=" + kind + " ext=" + extension + " step=" + recoveryStep);
+        Log.w(TAG, "startup-timeout kind=" + kind + " ext=" + extension
+                + " step=" + recoveryStep + " transport=" + activeTransportName());
         recoverFromFailure("انتهت مهلة بدء التشغيل");
     };
 
@@ -135,6 +134,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return isLiveKind(kind);
     }
 
+    private boolean useCronetNow() {
+        return stickyCronet || PlaybackPolicy.useCronet(recoveryStep);
+    }
+
+    private String activeTransportName() {
+        return useCronetNow() ? "cronet" : "default-http";
+    }
+
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
@@ -166,7 +173,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(58), Gravity.TOP));
 
         progress = new ProgressBar(this);
-        progress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.rgb(154, 88, 255)));
+        progress.setIndeterminateTintList(
+                android.content.res.ColorStateList.valueOf(Color.rgb(154, 88, 255)));
         root.addView(progress, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
 
         errorPanel = new LinearLayout(this);
@@ -197,7 +205,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         retryButton.setTextColor(Color.WHITE);
         retryButton.setTextSize(15);
         retryButton.setAllCaps(false);
-        retryButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(124, 50, 255)));
+        retryButton.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(Color.rgb(124, 50, 255)));
         retryButton.setOnClickListener(view -> manualRetry());
         errorPanel.addView(retryButton, new LinearLayout.LayoutParams(dp(240), dp(54)));
 
@@ -256,7 +265,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (!validUrl(url)) return;
         resumePosition = isLive()
                 ? 0
-                : getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
+                : getSharedPreferences("blofy_positions", MODE_PRIVATE)
+                    .getLong(positionKey(), 0);
     }
 
     private void showResolveError(String message) {
@@ -268,19 +278,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         retryButton.requestFocus();
     }
 
-    private DefaultDataSource.Factory createDataSourceFactory() {
-        // 7 Max Player1 behaviour: normal ExoPlayer HTTP stack, no custom UA,
-        // direct redirects allowed. We intentionally keep Media3's normal HTTP
-        // timeouts instead of the old BLOFY 15s/30s overrides.
-        DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true);
-        return new DefaultDataSource.Factory(this, httpFactory);
+    private DataSource.Factory createDataSourceFactory() {
+        return PlaybackTransportFactory.create(this, useCronetNow(), cronetExecutor);
     }
 
     private void initializePlayer() {
         if (player != null || !validUrl(url)) return;
 
-        DefaultDataSource.Factory dataSourceFactory = createDataSourceFactory();
+        DataSource.Factory dataSourceFactory = createDataSourceFactory();
         int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
                 | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
 
@@ -293,9 +298,6 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
 
-        // Deliberately use Media3/ExoPlayer's default LoadControl. 7 Max does
-        // not appear to depend on tiny custom buffers; stability comes from
-        // direct playback and recovery rather than starving the decoder.
         player = new ExoPlayer.Builder(this, renderers)
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build();
@@ -322,7 +324,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 : mediaSourceFactory.createMediaSource(item);
 
         playbackStartedAtMs = SystemClock.elapsedRealtime();
-        Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep);
+        Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep
+                + " transport=" + activeTransportName());
         player.setMediaSource(mediaSource, Math.max(0, resumePosition));
         player.prepare();
         player.play();
@@ -336,7 +339,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (isFinishing() || isDestroyed()) return;
         playbackHandler.removeCallbacks(playbackTimeout);
         recoveryStep += 1;
-        Log.w(TAG, "recover reason=" + reason + " step=" + recoveryStep + " ext=" + extension);
+        Log.w(TAG, "recover reason=" + reason + " step=" + recoveryStep + " ext=" + extension
+                + " nextTransport=" + PlaybackPolicy.transportName(recoveryStep));
         releasePlayer();
 
         if (PlaybackPolicy.shouldRetrySameFormat(recoveryStep)) {
@@ -347,15 +351,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (isLive() && PlaybackPolicy.shouldTryAlternateLiveFormat(recoveryStep) && !id.isEmpty()) {
             extension = PlaybackPolicy.alternateLiveExtension(extension);
             url = null;
-            Log.i(TAG, "live-format-fallback ext=" + extension);
+            Log.i(TAG, "live-format-fallback ext=" + extension + " transport=" + activeTransportName());
             resolvePlaybackLink();
+            return;
+        }
+
+        if (isLive() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
+            reopenResolvedSource();
             return;
         }
 
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        errorText.setText("تعذر تشغيل المصدر بعد محاولات الاتصال المباشر. آخر سبب: " + reason
-                + "\nالصيغة: " + extension);
+        errorText.setText("تعذر تشغيل المصدر بعد Player1 وPlayer2. آخر سبب: " + reason
+                + "\nالصيغة: " + extension + "\nالنقل: " + activeTransportName());
         retryButton.setText("إعادة المحاولة من البداية");
         retryButton.requestFocus();
     }
@@ -371,6 +380,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void manualRetry() {
         recoveryStep = 0;
+        stickyCronet = false;
         releasePlayer();
         reopenResolvedSource();
     }
@@ -385,22 +395,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (playbackState == Player.STATE_READY) {
             playbackHandler.removeCallbacks(playbackTimeout);
             progress.setVisibility(View.GONE);
-            recoveryStep = 0;
+            if (PlaybackPolicy.useCronet(recoveryStep)) stickyCronet = true;
             long readyMs = playbackStartedAtMs == 0
                     ? -1
                     : SystemClock.elapsedRealtime() - playbackStartedAtMs;
-            Log.i(TAG, "ready kind=" + kind + " ext=" + extension + " ms=" + readyMs);
+            Log.i(TAG, "ready kind=" + kind + " ext=" + extension + " ms=" + readyMs
+                    + " transport=" + activeTransportName());
+            recoveryStep = 0;
             titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
             return;
         }
 
         if (playbackState == Player.STATE_ENDED) {
             progress.setVisibility(View.GONE);
-            if (isLive()) {
-                // Live feeds sometimes close the TCP/TS stream. 7 Max simply
-                // reconnects instead of treating this as a completed video.
-                recoverFromFailure("انتهى اتصال البث المباشر");
-            }
+            if (isLive()) recoverFromFailure("انتهى اتصال البث المباشر");
         }
     }
 
@@ -408,14 +416,15 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     public void onRenderedFirstFrame() {
         if (playbackStartedAtMs == 0) return;
         long firstFrameMs = SystemClock.elapsedRealtime() - playbackStartedAtMs;
-        Log.i(TAG, "first-frame kind=" + kind + " ext=" + extension + " ms=" + firstFrameMs);
+        Log.i(TAG, "first-frame kind=" + kind + " ext=" + extension + " ms=" + firstFrameMs
+                + " transport=" + activeTransportName());
     }
 
     @Override
     public void onPlayerError(PlaybackException error) {
         playbackHandler.removeCallbacks(playbackTimeout);
         Log.w(TAG, "player-error code=" + error.errorCode + " name=" + error.getErrorCodeName()
-                + " ext=" + extension, error);
+                + " ext=" + extension + " transport=" + activeTransportName(), error);
 
         if (isLive()
                 && error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW
@@ -509,6 +518,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     protected void onDestroy() {
         playbackHandler.removeCallbacksAndMessages(null);
         network.shutdownNow();
+        cronetExecutor.shutdownNow();
         super.onDestroy();
     }
 
