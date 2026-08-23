@@ -56,6 +56,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        PlaybackTransportFactory.warmUpCronet(this);
         getWindow().setStatusBarColor(BlofyUi.BLACK);
         getWindow().setNavigationBarColor(BlofyUi.BLACK);
         root = new FrameLayout(this);
@@ -77,7 +78,7 @@ public final class MainActivity extends Activity {
                 session = new BlofyModels.Session(api.get("/api/session"));
                 main.post(() -> {
                     if (!license.usable() || !session.present) showLogin("");
-                    else if (database.count("live") + database.count("movies") + database.count("series") > 0) showHome();
+                    else if ("complete".equals(database.metadata("sync_state", "")) && database.count("live") + database.count("movies") + database.count("series") > 0) showHome();
                     else importPackage();
                 });
             } catch (Exception error) {

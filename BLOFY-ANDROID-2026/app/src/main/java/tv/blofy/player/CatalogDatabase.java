@@ -11,7 +11,7 @@ import java.util.List;
 
 final class CatalogDatabase extends SQLiteOpenHelper {
     private static final String NAME = "blofy_catalog.db";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     CatalogDatabase(Context context) { super(context.getApplicationContext(), NAME, null, VERSION); }
 
@@ -27,9 +27,9 @@ final class CatalogDatabase extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase database, int oldVersion, int newVersion) {
-        if (oldVersion < 2) {
-            // Builds before v2 could leave a partially imported package after HTTP 429.
-            // Keep favorites/history, but force a clean catalog import once after upgrade.
+        if (oldVersion < 3) {
+            // v3 invalidates catalogs that could contain Live only after an interrupted sync.
+            // Favorites/history remain intact; only provider catalog data is refreshed.
             database.delete("categories", null, null);
             database.delete("media", null, null);
             ContentValues values = new ContentValues();

@@ -16,8 +16,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 202608238
-        versionName = "2026.08.23.8-7max-syncfix"
+        versionCode = 202608239
+        versionName = "2026.08.23.9-7max-fast"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 

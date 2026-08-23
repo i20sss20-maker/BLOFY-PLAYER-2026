@@ -28,6 +28,7 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory;
@@ -94,6 +95,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        PlaybackTransportFactory.warmUpCronet(this);
         url = getIntent().getStringExtra(EXTRA_URL);
         id = valueOr(getIntent().getStringExtra(EXTRA_ID), "");
         title = valueOr(getIntent().getStringExtra(EXTRA_TITLE), "BLOFY PLAYER");
@@ -135,7 +137,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private boolean useCronetNow() {
-        return stickyCronet || PlaybackPolicy.useCronet(recoveryStep);
+        return PlaybackPolicy.useCronet(recoveryStep);
     }
 
     private String activeTransportName() {
@@ -298,8 +300,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
 
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                        isLive() ? 10_000 : 20_000,
+                        isLive() ? 45_000 : 60_000,
+                        isLive() ? 1_000 : 1_500,
+                        isLive() ? 3_500 : 3_000)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
+
         player = new ExoPlayer.Builder(this, renderers)
                 .setMediaSourceFactory(mediaSourceFactory)
+                .setLoadControl(loadControl)
                 .build();
         player.addListener(this);
         player.setAudioAttributes(new AudioAttributes.Builder()
@@ -395,7 +407,6 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (playbackState == Player.STATE_READY) {
             playbackHandler.removeCallbacks(playbackTimeout);
             progress.setVisibility(View.GONE);
-            if (PlaybackPolicy.useCronet(recoveryStep)) stickyCronet = true;
             long readyMs = playbackStartedAtMs == 0
                     ? -1
                     : SystemClock.elapsedRealtime() - playbackStartedAtMs;
