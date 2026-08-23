@@ -14,7 +14,7 @@ import org.chromium.net.CronetEngine;
 
 import java.util.concurrent.Executor;
 
-/** Builds the two network transports used by the BLOFY 7-Max-style player core. */
+/** Builds Player1 (Default HTTP) and Player2 (Google Play Services Cronet). */
 @UnstableApi
 final class PlaybackTransportFactory {
     private static final String TAG = "BlofyTransport";
@@ -27,7 +27,7 @@ final class PlaybackTransportFactory {
         if (preferCronet) {
             CronetEngine engine = getCronetEngine(context.getApplicationContext());
             if (engine != null) {
-                Log.i(TAG, "transport=cronet");
+                Log.i(TAG, "transport=cronet-gms");
                 return new DefaultDataSource.Factory(
                         context,
                         new CronetDataSource.Factory(engine, executor));
@@ -46,7 +46,9 @@ final class PlaybackTransportFactory {
         synchronized (PlaybackTransportFactory.class) {
             if (!cronetAttempted) {
                 try {
-                    cronetEngine = CronetUtil.buildCronetEngine(context);
+                    // 7 Max contains the GMS Cronet provider classes and no bundled
+                    // libcronet.so in its ARM64 split. Prefer the same provider shape.
+                    cronetEngine = CronetUtil.buildCronetEngine(context, null, true);
                 } catch (Throwable error) {
                     Log.w(TAG, "cronet-init-failed", error);
                     cronetEngine = null;
