@@ -3,14 +3,14 @@ package tv.blofy.player;
 import java.util.Locale;
 
 /**
- * Playback recovery policy modeled on the stable behaviour observed in 7 Max:
- * direct TS first, retry, switch transport, then try HLS with the same two
- * transports before surfacing an error.
+ * Fast IPTV recovery policy: start Live through Cronet, fall back to the
+ * platform HTTP stack, then try the alternate Live container. This keeps the
+ * proven Media3/direct-provider path while avoiding long duplicate retries.
  */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 15_000;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 20_000;
-    static final int MAX_RECOVERY_STEPS = 4;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 6_000;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 8_000;
+    static final int MAX_RECOVERY_STEPS = 3;
 
     private PlaybackPolicy() {}
 
@@ -58,23 +58,24 @@ final class PlaybackPolicy {
         return recoveryStep > 0 ? RETRY_STARTUP_TIMEOUT_MS : INITIAL_STARTUP_TIMEOUT_MS;
     }
 
-    /** step 0/1/3 use Player1 HTTP; step 2/4 use Cronet Player2. */
+    /** step 0/2 use Cronet; step 1/3 use platform HTTP. */
     static boolean useCronet(int recoveryStep) {
-        return recoveryStep == 2 || recoveryStep == 4;
+        return recoveryStep == 0 || recoveryStep == 2;
     }
 
+    /** One same-format fallback only: Cronet -> platform HTTP. */
     static boolean shouldRetrySameFormat(int recoveryStep) {
-        return recoveryStep == 1 || recoveryStep == 2;
+        return recoveryStep == 1;
     }
 
-    /** After Default HTTP + retry + Cronet on TS, switch to HLS. */
+    /** After both transports on the original format, switch TS <-> HLS. */
     static boolean shouldTryAlternateLiveFormat(int recoveryStep) {
-        return recoveryStep == 3;
+        return recoveryStep == 2;
     }
 
-    /** After switching format, step 4 retries that format through Cronet. */
+    /** Retry the alternate format once through platform HTTP. */
     static boolean shouldRetryAlternateFormat(int recoveryStep) {
-        return recoveryStep == 4;
+        return recoveryStep == 3;
     }
 
     static boolean exhausted(int recoveryStep) {
