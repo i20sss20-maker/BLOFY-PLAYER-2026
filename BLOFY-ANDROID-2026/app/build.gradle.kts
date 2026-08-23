@@ -4,7 +4,7 @@ plugins {
 
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-// Final TV + FFmpeg validation trigger.
+// Final TV + FFmpeg validation trigger for PR build.
 val portalUrl = providers.gradleProperty("BLOFY_BASE_URL")
     .orElse(providers.environmentVariable("BLOFY_BASE_URL"))
     .orElse("https://blofy-player-2026-production.up.railway.app")
