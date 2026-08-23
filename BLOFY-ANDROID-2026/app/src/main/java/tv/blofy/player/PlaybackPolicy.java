@@ -3,15 +3,14 @@ package tv.blofy.player;
 import java.util.Locale;
 
 /**
- * Playback policy intentionally mirrors the simple/stable IPTV behaviour we
- * observed in 7 Max: direct playback first, TS for Xtream live by default,
- * bounded reconnects, then a TS/HLS format fallback.
+ * Playback recovery policy modeled on the stable behaviour observed in 7 Max:
+ * direct TS first, retry, switch transport, then try HLS with the same two
+ * transports before surfacing an error.
  */
 final class PlaybackPolicy {
     static final int INITIAL_STARTUP_TIMEOUT_MS = 15_000;
     static final int RETRY_STARTUP_TIMEOUT_MS = 20_000;
-    static final int SAME_FORMAT_RETRIES = 2;
-    static final int MAX_RECOVERY_STEPS = 3;
+    static final int MAX_RECOVERY_STEPS = 4;
 
     private PlaybackPolicy() {}
 
@@ -59,12 +58,31 @@ final class PlaybackPolicy {
         return recoveryStep > 0 ? RETRY_STARTUP_TIMEOUT_MS : INITIAL_STARTUP_TIMEOUT_MS;
     }
 
-    static boolean shouldRetrySameFormat(int recoveryStep) {
-        return recoveryStep <= SAME_FORMAT_RETRIES;
+    /** step 0/1/3 use Player1 HTTP; step 2/4 use Cronet Player2. */
+    static boolean useCronet(int recoveryStep) {
+        return recoveryStep == 2 || recoveryStep == 4;
     }
 
+    static boolean shouldRetrySameFormat(int recoveryStep) {
+        return recoveryStep == 1 || recoveryStep == 2;
+    }
+
+    /** After Default HTTP + retry + Cronet on TS, switch to HLS. */
     static boolean shouldTryAlternateLiveFormat(int recoveryStep) {
-        return recoveryStep == MAX_RECOVERY_STEPS;
+        return recoveryStep == 3;
+    }
+
+    /** After switching format, step 4 retries that format through Cronet. */
+    static boolean shouldRetryAlternateFormat(int recoveryStep) {
+        return recoveryStep == 4;
+    }
+
+    static boolean exhausted(int recoveryStep) {
+        return recoveryStep > MAX_RECOVERY_STEPS;
+    }
+
+    static String transportName(int recoveryStep) {
+        return useCronet(recoveryStep) ? "cronet" : "default-http";
     }
 
     static String directPlaybackUrl(String signedNativeUrl) {
