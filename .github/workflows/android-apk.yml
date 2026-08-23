@@ -66,18 +66,16 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Verify native metadata fix
+      - name: Verify fast playback and complete catalog fix
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'void putMetadata(String key, String value)' \
-            BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
-          ! grep -q 'void metadata(String key, String value)' \
-            BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
-          grep -q 'sync_state", "complete"' \
-            BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q 'page_size=" + REQUESTED_PAGE_SIZE' \
-            BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q 'private static final int VERSION = 3' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
+          grep -q '"complete".equals(database.metadata("sync_state", ""))' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
+          grep -q 'setLoadControl(loadControl)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'return recoveryStep == 0 || recoveryStep == 2' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
+          grep -q 'importByCategories' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q '2026.08.23.9-7max-fast' BLOFY-ANDROID-2026/app/build.gradle.kts
 
       - name: Create Gradle wrapper
         working-directory: BLOFY-ANDROID-2026
@@ -147,7 +145,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-NATIVE-APK",
-            "version": "2026.08.23.8-7max-syncfix"
+            "version": "2026.08.23.9-7max-fast"
           }
           EOF
           git add .ci/native-apk-status.json
