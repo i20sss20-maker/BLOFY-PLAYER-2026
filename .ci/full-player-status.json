@@ -1,0 +1,9 @@
+{
+  "workflow": "Build BLOFY FULL Player APK",
+  "status": "failure",
+  "run_id": 32611817492,
+  "run_attempt": 1,
+  "source_sha": "ad99134d4f15f1f4ff4e33065dc8e979b438e17f",
+  "artifact": "BLOFY-PLAYER-7MAX-FULL-APK",
+  "version": "2026.08.23.4-7maxfull"
+}
