@@ -116,7 +116,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-NATIVE-APK",
-            "version": "2026.08.23.7-7max-audit"
+            "version": "2026.08.23.8-7max-syncfix"
           }
           EOF
           git add .ci/native-apk-status.json
