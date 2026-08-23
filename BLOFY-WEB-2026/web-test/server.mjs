@@ -26,7 +26,7 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
-const APP_VERSION = "2026.08.23.6";
+const APP_VERSION = "2026.08.23.8";
 const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
@@ -216,7 +216,7 @@ async function categoriesFor(session, type) {
 
 async function catalogFor(session, type, query) {
   const page = boundedInteger(query.get("page"), 1, 1, 1_000_000);
-  const pageSize = boundedInteger(query.get("page_size"), 60, 30, 500);
+  const pageSize = boundedInteger(query.get("page_size"), 60, 30, 2000);
   const category = query.get("category") || "";
   const search = query.get("search") || "";
   let rows;
@@ -271,7 +271,10 @@ function signedNativePath(rawUrl, lifetime = 7200) {
 
 async function handleApi(req, res, url) {
   const nativeRequest = url.pathname.startsWith("/api/native-");
-  if (limited(req, nativeRequest ? 1200 : 120, 60_000, nativeRequest ? "native" : "api")) {
+  const syncRequest = req.method === "GET" && (url.pathname === "/api/catalog" || url.pathname === "/api/categories");
+  const requestLimit = nativeRequest ? 1200 : syncRequest ? 1800 : 120;
+  const rateNamespace = nativeRequest ? "native" : syncRequest ? "sync" : "api";
+  if (limited(req, requestLimit, 60_000, rateNamespace)) {
     return json(res, 429, { error: "طلبات كثيرة، حاول بعد دقيقة." }, securityHeaders());
   }
 
