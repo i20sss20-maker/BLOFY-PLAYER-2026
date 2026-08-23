@@ -16,8 +16,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 202608232
-        versionName = "2026.08.23.2-7maxcore"
+        versionCode = 202608233
+        versionName = "2026.08.23.3-7maxfull"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 
@@ -57,10 +57,8 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("com.google.zxing:core:3.5.4")
 
-    // Media3's FFmpeg decoder is not published on Google Maven. The dedicated
-    // full-player workflow builds the matching 1.11.0 AAR locally. Normal APK
-    // builds remain valid without it; DefaultRenderersFactory simply uses the
-    // platform audio decoder and decoder fallback.
+    // Full workflow builds the matching Media3 FFmpeg Audio AAR locally.
+    // The regular build still works when this optional extension is absent.
     val ffmpegDecoderAar = file("libs/media3-decoder-ffmpeg-release.aar")
     if (ffmpegDecoderAar.exists()) {
         implementation(files(ffmpegDecoderAar))
