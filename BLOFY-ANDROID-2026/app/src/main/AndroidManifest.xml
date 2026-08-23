@@ -8,6 +8,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <application
+        android:name=".BlofyApplication"
         android:allowBackup="false"
         android:banner="@drawable/tv_banner"
         android:hardwareAccelerated="true"
