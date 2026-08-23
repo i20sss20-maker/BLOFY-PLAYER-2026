@@ -140,7 +140,20 @@ jobs:
 
       - name: Run Android lint
         working-directory: BLOFY-ANDROID-2026
-        run: ./gradlew --no-daemon lintDebug
+        shell: bash
+        run: |
+          set +e
+          ./gradlew --no-daemon lintDebug
+          rc=$?
+          REPORT="app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt"
+          echo "===== FULL ANDROID LINT REPORT ====="
+          if [ -f "$REPORT" ]; then
+            cat "$REPORT"
+          else
+            echo "Lint text report not found at $REPORT"
+          fi
+          echo "===== END FULL ANDROID LINT REPORT ====="
+          exit $rc
 
       - name: Verify final APK
         shell: bash
