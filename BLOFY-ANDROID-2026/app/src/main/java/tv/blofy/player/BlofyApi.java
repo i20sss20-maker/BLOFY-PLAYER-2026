@@ -52,7 +52,23 @@ final class BlofyApi {
         return pairToken == null || pairToken.isEmpty() ? url : url + "&pair_token=" + encode(pairToken);
     }
 
-    JSONObject get(String path) throws Exception { return request("GET", path, null); }
+    JSONObject get(String path) throws Exception {
+        JSONObject result = request("GET", path, null);
+        // The native-link endpoint authorizes the device and returns a short-lived
+        // BLOFY redirect. Resolve that redirect here with BLOFY cookies/identity,
+        // but DO NOT follow it with HttpURLConnection. Media3 receives only the
+        // provider URL, so BLOFY credentials are never forwarded to the provider
+        // and media bytes never pass through Railway.
+        if (path.startsWith("/api/native-link/")) {
+            String playbackPath = result.optString("url", "");
+            if (playbackPath.startsWith("/api/native-play")) {
+                result.put("url", resolveNativePlaybackRedirect(playbackPath));
+                result.put("mode", "direct-provider");
+            }
+        }
+        return result;
+    }
+
     JSONObject delete(String path) throws Exception { return request("DELETE", path, null); }
     JSONObject post(String path, JSONObject body) throws Exception { return request("POST", path, body); }
 
@@ -77,6 +93,28 @@ final class BlofyApi {
             throw new ApiException(status, message);
         }
         return result;
+    }
+
+    private String resolveNativePlaybackRedirect(String path) throws Exception {
+        HttpURLConnection connection = open(path, "GET");
+        connection.setInstanceFollowRedirects(false);
+        connection.setRequestProperty("Accept", "*/*");
+        int status = connection.getResponseCode();
+        captureCookies(connection);
+        String location = connection.getHeaderField("Location");
+        connection.disconnect();
+
+        if (status < 300 || status >= 400 || location == null || location.isEmpty()) {
+            throw new ApiException(status, "تعذر استخراج رابط المصدر المباشر من BLOFY.");
+        }
+
+        URL target = new URL(location);
+        String scheme = target.getProtocol();
+        if (target.getHost() == null || target.getHost().isEmpty()
+                || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+            throw new ApiException(403, "رابط المصدر المباشر غير صالح.");
+        }
+        return target.toString();
     }
 
     byte[] image(String path) throws Exception {
