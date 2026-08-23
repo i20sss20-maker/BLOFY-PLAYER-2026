@@ -2,9 +2,16 @@ package tv.blofy.player;
 
 import java.util.Locale;
 
+/**
+ * Playback policy intentionally mirrors the simple/stable IPTV behaviour we
+ * observed in 7 Max: direct playback first, TS for Xtream live by default,
+ * bounded reconnects, then a TS/HLS format fallback.
+ */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 60_000;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 90_000;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 15_000;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 20_000;
+    static final int SAME_FORMAT_RETRIES = 2;
+    static final int MAX_RECOVERY_STEPS = 3;
 
     private PlaybackPolicy() {}
 
@@ -19,6 +26,15 @@ final class PlaybackPolicy {
 
     static boolean isHls(String extension) {
         return "m3u8".equals(normalizeExtension(extension, ""));
+    }
+
+    static boolean isTransportStream(String extension) {
+        String ext = normalizeExtension(extension, "");
+        return "ts".equals(ext) || "mts".equals(ext) || "m2ts".equals(ext);
+    }
+
+    static String alternateLiveExtension(String extension) {
+        return isHls(extension) ? "ts" : "m3u8";
     }
 
     static String mimeType(String extension) {
@@ -39,8 +55,16 @@ final class PlaybackPolicy {
         }
     }
 
-    static int startupTimeoutMs(int connectionAttempt) {
-        return connectionAttempt > 0 ? RETRY_STARTUP_TIMEOUT_MS : INITIAL_STARTUP_TIMEOUT_MS;
+    static int startupTimeoutMs(int recoveryStep) {
+        return recoveryStep > 0 ? RETRY_STARTUP_TIMEOUT_MS : INITIAL_STARTUP_TIMEOUT_MS;
+    }
+
+    static boolean shouldRetrySameFormat(int recoveryStep) {
+        return recoveryStep <= SAME_FORMAT_RETRIES;
+    }
+
+    static boolean shouldTryAlternateLiveFormat(int recoveryStep) {
+        return recoveryStep == MAX_RECOVERY_STEPS;
     }
 
     static String directPlaybackUrl(String signedNativeUrl) {
