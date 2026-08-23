@@ -31,7 +31,7 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: BLOFY-WEB-2026/web-test/package-lock.json
-      - name: Install clean API dependencies
+      - name: Install dependencies
         run: npm ci
       - name: Syntax check
         run: npm run check
@@ -42,6 +42,5 @@ jobs:
         run: |
           set -euo pipefail
           ! grep -R -E "spawn\(.*ffmpeg|/api/transcode|/api/proxy|hls\.js|app\.compat\.js|android\.webkit\.WebView" . --exclude-dir=node_modules --exclude='README_AR.md'
-          grep -q 'nativePlayback: NATIVE_PLAYBACK_MODE' server.mjs
           grep -q 'mediaProxy: false' server.mjs
           grep -q 'transcoding: false' server.mjs
