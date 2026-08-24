@@ -43,8 +43,11 @@ final class PlaybackPolicy {
             case "mp4":
             case "m4v":
             case "mov": return "video/mp4";
-            case "mkv": return "video/x-matroska";
-            case "webm": return "video/webm";
+            // Many IPTV panels return MKV/WebM with generic or incorrect HTTP
+            // Content-Type. Let Media3 sniff EBML/container bytes instead of
+            // forcing a type that can select the wrong extractor too early.
+            case "mkv":
+            case "webm": return null;
             case "ts":
             case "mts":
             case "m2ts": return "video/mp2t";
