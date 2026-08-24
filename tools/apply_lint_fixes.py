@@ -163,9 +163,3 @@ text = replace_required(
 path.write_text(text, encoding='utf-8')
 
 print('BLOFY lint fixes applied: predictive back, API 23 progress, Media3 opt-in, TV key handling')
-
-# Apply the runtime overhaul only after all generated theme/lint passes, so the
-# final compiled sources preserve provider ordering, lazy paging and the split
-# Live/VOD playback strategy.
-exec(compile(Path('tools/apply_runtime_overhaul.py').read_text(encoding='utf-8'),
-             'tools/apply_runtime_overhaul.py', 'exec'))
