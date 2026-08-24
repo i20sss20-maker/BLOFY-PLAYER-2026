@@ -41,6 +41,7 @@ final class LivePreviewController {
         view.setKeepScreenOn(false);
         view.setFocusable(false);
         view.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        ensurePlayer();
     }
 
     PlayerView view() { return view; }
@@ -62,10 +63,11 @@ final class LivePreviewController {
                 JSONObject result = api.get("/api/native-link/live/" + BlofyApi.encode(item.id)
                         + "?ext=" + BlofyApi.encode(ext));
                 String url = result.optString("url", "");
+                String resolvedExt = PlaybackPolicy.normalizeExtension(result.optString("extension", ext), ext);
                 if (!url.startsWith("http")) return;
                 main.post(() -> {
                     if (token != generation.get()) return;
-                    open(url);
+                    open(url, resolvedExt);
                 });
             } catch (Exception ignored) {
                 // Preview is optional; never block channel navigation because of it.
@@ -73,12 +75,13 @@ final class LivePreviewController {
         });
     }
 
-    private void open(String url) {
-        releasePlayer();
+    private void ensurePlayer() {
+        if (player != null) return;
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(4_500)
-                .setReadTimeoutMs(8_000);
+                .setReadTimeoutMs(8_000)
+                .setUserAgent("BLOFY-ANDROID-PREVIEW/" + BuildConfig.VERSION_NAME);
         DefaultDataSource.Factory data = new DefaultDataSource.Factory(context, http);
         DefaultLoadControl load = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(1_000, 9_000, 250, 750)
@@ -90,22 +93,28 @@ final class LivePreviewController {
                 .build();
         player.setVolume(0f);
         view.setPlayer(player);
-        player.setMediaItem(MediaItem.fromUri(url));
-        player.prepare();
-        player.play();
     }
 
-    private void releasePlayer() {
-        if (player == null) return;
-        view.setPlayer(null);
-        player.release();
-        player = null;
+    private void open(String url, String extension) {
+        ensurePlayer();
+        MediaItem.Builder item = new MediaItem.Builder().setUri(url);
+        String mime = PlaybackPolicy.mimeType(extension);
+        if (mime != null) item.setMimeType(mime);
+        player.stop();
+        player.clearMediaItems();
+        player.setMediaItem(item.build());
+        player.prepare();
+        player.play();
     }
 
     void release() {
         generation.incrementAndGet();
         if (pending != null) main.removeCallbacks(pending);
-        releasePlayer();
+        if (player != null) {
+            view.setPlayer(null);
+            player.release();
+            player = null;
+        }
         network.shutdownNow();
     }
 }
