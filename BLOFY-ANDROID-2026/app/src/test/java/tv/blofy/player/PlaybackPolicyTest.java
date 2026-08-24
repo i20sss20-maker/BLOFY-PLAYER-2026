@@ -43,7 +43,7 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void recoveryUsesHttpFirstThenCronetThenAlternateFormat() {
-        // Fast/default path: platform HTTP first, then Cronet, then alternate TS/HLS.
+        // Final verification: platform HTTP first, then Cronet, then alternate TS/HLS.
         assertFalse(PlaybackPolicy.useCronet(0));
         assertTrue(PlaybackPolicy.useCronet(1));
         assertFalse(PlaybackPolicy.useCronet(2));
