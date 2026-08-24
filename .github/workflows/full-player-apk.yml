@@ -17,7 +17,6 @@ on:
       - "tools/apply_final_tv_theme.py"
       - "tools/apply_lint_fixes.py"
       - "tools/apply_runtime_overhaul.py"
-      - "tools/apply_crash_guard.py"
 
 permissions:
   contents: write
@@ -51,7 +50,6 @@ jobs:
           python3 tools/apply_final_tv_theme.py
           python3 tools/apply_lint_fixes.py
           python3 tools/apply_runtime_overhaul.py
-          python3 tools/apply_crash_guard.py
           grep -q '2026.08.23.12-final-tv' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'BLOFY LIVE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q '24_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
@@ -59,8 +57,6 @@ jobs:
           grep -q '@OptIn(markerClass = UnstableApi.class)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'sort_order ASC' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
-          grep -q 'player-init-guard' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'livePreview.stop' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -221,7 +217,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-FINAL-TV-FFMPEG-APK",
-            "version": "2026.08.24.2-crash-guard"
+            "version": "2026.08.24.3-runtime-overhaul"
           }
           EOF
           git add .ci/full-player-status.json
