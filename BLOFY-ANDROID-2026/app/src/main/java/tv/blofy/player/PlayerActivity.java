@@ -41,20 +41,15 @@ import androidx.media3.ui.PlayerView;
 
 import org.json.JSONObject;
 
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * BLOFY playback core v2.
- *
- * Stable IPTV strategy inspired by the behaviour observed in 7 Max, without
- * copying its source code: direct provider playback, Xtream TS first, Media3
- * defaults, Player1 (Default HTTP), Player2 (Cronet), renderer fallback,
- * behind-live-window recovery and TS/HLS fallback.
- */
+/** BLOFY native playback core. */
 @UnstableApi
 public final class PlayerActivity extends Activity implements Player.Listener {
     private static final String TAG = "BlofyPlayback";
+    private static final long LIVE_STABLE_WINDOW_MS = 2_500L;
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_ID = "id";
@@ -78,7 +73,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private long resumePosition;
     private int recoveryStep;
     private boolean resolving;
-    private boolean stickyCronet;
+    private boolean firstFrameRendered;
     private long playbackStartedAtMs;
 
     private final ExecutorService network = Executors.newSingleThreadExecutor();
@@ -86,10 +81,21 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
 
     private final Runnable playbackTimeout = () -> {
-        if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
+        if (player == null || firstFrameRendered) return;
         Log.w(TAG, "startup-timeout kind=" + kind + " ext=" + extension
-                + " step=" + recoveryStep + " transport=" + activeTransportName());
-        recoverFromFailure("انتهت مهلة بدء التشغيل");
+                + " step=" + recoveryStep + " state=" + player.getPlaybackState()
+                + " transport=" + activeTransportName());
+        recoverFromFailure(player.getPlaybackState() == Player.STATE_READY
+                ? "لم تظهر صورة الفيديو"
+                : "انتهت مهلة بدء التشغيل");
+    };
+
+    private final Runnable markPlaybackStable = () -> {
+        if (player == null || !firstFrameRendered || !player.isPlaying()) return;
+        rememberSuccessfulTransport();
+        recoveryStep = preferredRecoveryStep();
+        Log.i(TAG, "stable kind=" + kind + " ext=" + extension
+                + " transport=" + activeTransportName());
     };
 
     @Override
@@ -103,6 +109,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         extension = PlaybackPolicy.normalizeExtension(
                 getIntent().getStringExtra(EXTRA_EXTENSION),
                 isLiveKind(kind) ? "ts" : "mp4");
+        recoveryStep = preferredRecoveryStep();
 
         buildUi();
         hideSystemUi();
@@ -136,12 +143,34 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return isLiveKind(kind);
     }
 
+    private boolean isUltraHd() {
+        String value = title == null ? "" : title.toUpperCase(Locale.US);
+        return value.contains("4K") || value.contains("UHD") || value.contains("2160");
+    }
+
     private boolean useCronetNow() {
         return PlaybackPolicy.useCronet(recoveryStep);
     }
 
     private String activeTransportName() {
         return useCronetNow() ? "cronet" : "default-http";
+    }
+
+    private String transportPreferenceKey() {
+        return "transport_" + kind + "_" + PlaybackPolicy.normalizeExtension(extension, "auto");
+    }
+
+    private int preferredRecoveryStep() {
+        if (kind == null || extension == null) return 0;
+        return getSharedPreferences("blofy_playback", MODE_PRIVATE)
+                .getBoolean(transportPreferenceKey(), false) ? 1 : 0;
+    }
+
+    private void rememberSuccessfulTransport() {
+        getSharedPreferences("blofy_playback", MODE_PRIVATE)
+                .edit()
+                .putBoolean(transportPreferenceKey(), useCronetNow())
+                .apply();
     }
 
     private int dp(int value) {
@@ -221,9 +250,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void schedulePlaybackTimeout() {
         playbackHandler.removeCallbacks(playbackTimeout);
-        playbackHandler.postDelayed(
-                playbackTimeout,
-                PlaybackPolicy.startupTimeoutMs(recoveryStep));
+        int timeout = PlaybackPolicy.startupTimeoutMs(recoveryStep);
+        if (isUltraHd()) timeout += 2_500;
+        playbackHandler.postDelayed(playbackTimeout, timeout);
     }
 
     private void resolvePlaybackLink() {
@@ -284,9 +313,38 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return PlaybackTransportFactory.create(this, useCronetNow(), cronetExecutor);
     }
 
+    private DefaultLoadControl createLoadControl() {
+        int minBuffer;
+        int maxBuffer;
+        int playbackBuffer;
+        int rebuffer;
+        if (isLive() && isUltraHd()) {
+            minBuffer = 10_000;
+            maxBuffer = 50_000;
+            playbackBuffer = 1_200;
+            rebuffer = 5_000;
+        } else if (isLive()) {
+            minBuffer = 2_500;
+            maxBuffer = 18_000;
+            playbackBuffer = 600;
+            rebuffer = 1_800;
+        } else {
+            minBuffer = 12_000;
+            maxBuffer = 60_000;
+            playbackBuffer = 900;
+            rebuffer = 2_500;
+        }
+        return new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(minBuffer, maxBuffer, playbackBuffer, rebuffer)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
+    }
+
     private void initializePlayer() {
         if (player != null || !validUrl(url)) return;
 
+        firstFrameRendered = false;
+        playbackHandler.removeCallbacks(markPlaybackStable);
         DataSource.Factory dataSourceFactory = createDataSourceFactory();
         int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
                 | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
@@ -300,18 +358,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
 
-        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(
-                        isLive() ? 10_000 : 20_000,
-                        isLive() ? 45_000 : 60_000,
-                        isLive() ? 1_000 : 1_500,
-                        isLive() ? 3_500 : 3_000)
-                .setPrioritizeTimeOverSizeThresholds(true)
-                .build();
-
         player = new ExoPlayer.Builder(this, renderers)
                 .setMediaSourceFactory(mediaSourceFactory)
-                .setLoadControl(loadControl)
+                .setLoadControl(createLoadControl())
                 .build();
         player.addListener(this);
         player.setAudioAttributes(new AudioAttributes.Builder()
@@ -337,7 +386,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
         playbackStartedAtMs = SystemClock.elapsedRealtime();
         Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep
-                + " transport=" + activeTransportName());
+                + " uhd=" + isUltraHd() + " transport=" + activeTransportName());
         player.setMediaSource(mediaSource, Math.max(0, resumePosition));
         player.prepare();
         player.play();
@@ -350,13 +399,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private void recoverFromFailure(String reason) {
         if (isFinishing() || isDestroyed()) return;
         playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
         recoveryStep += 1;
         Log.w(TAG, "recover reason=" + reason + " step=" + recoveryStep + " ext=" + extension
                 + " nextTransport=" + PlaybackPolicy.transportName(recoveryStep));
         releasePlayer();
 
         if (PlaybackPolicy.shouldRetrySameFormat(recoveryStep)) {
-            reopenResolvedSource();
+            reopenResolvedSource(false);
             return;
         }
 
@@ -369,19 +419,23 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         }
 
         if (isLive() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
-            reopenResolvedSource();
+            reopenResolvedSource(false);
             return;
         }
 
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        errorText.setText("تعذر تشغيل المصدر بعد Player1 وPlayer2. آخر سبب: " + reason
+        errorText.setText("تعذر تشغيل المصدر. آخر سبب: " + reason
                 + "\nالصيغة: " + extension + "\nالنقل: " + activeTransportName());
         retryButton.setText("إعادة المحاولة من البداية");
         retryButton.requestFocus();
     }
 
-    private void reopenResolvedSource() {
+    private void reopenResolvedSource(boolean forceResolve) {
+        if (!forceResolve && validUrl(url)) {
+            initializePlayer();
+            return;
+        }
         if (!id.isEmpty()) {
             url = null;
             resolvePlaybackLink();
@@ -391,28 +445,26 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private void manualRetry() {
-        recoveryStep = 0;
-        stickyCronet = false;
+        recoveryStep = preferredRecoveryStep();
         releasePlayer();
-        reopenResolvedSource();
+        reopenResolvedSource(!validUrl(url));
     }
 
     @Override
     public void onPlaybackStateChanged(int playbackState) {
         if (playbackState == Player.STATE_BUFFERING) {
-            progress.setVisibility(View.VISIBLE);
+            if (!firstFrameRendered) progress.setVisibility(View.VISIBLE);
             return;
         }
 
         if (playbackState == Player.STATE_READY) {
-            playbackHandler.removeCallbacks(playbackTimeout);
-            progress.setVisibility(View.GONE);
             long readyMs = playbackStartedAtMs == 0
                     ? -1
                     : SystemClock.elapsedRealtime() - playbackStartedAtMs;
             Log.i(TAG, "ready kind=" + kind + " ext=" + extension + " ms=" + readyMs
+                    + " firstFrame=" + firstFrameRendered
                     + " transport=" + activeTransportName());
-            recoveryStep = 0;
+            if (firstFrameRendered) progress.setVisibility(View.GONE);
             titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
             return;
         }
@@ -426,14 +478,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     @Override
     public void onRenderedFirstFrame() {
         if (playbackStartedAtMs == 0) return;
+        firstFrameRendered = true;
+        playbackHandler.removeCallbacks(playbackTimeout);
+        progress.setVisibility(View.GONE);
         long firstFrameMs = SystemClock.elapsedRealtime() - playbackStartedAtMs;
         Log.i(TAG, "first-frame kind=" + kind + " ext=" + extension + " ms=" + firstFrameMs
                 + " transport=" + activeTransportName());
+        playbackHandler.removeCallbacks(markPlaybackStable);
+        playbackHandler.postDelayed(markPlaybackStable, isLive() ? LIVE_STABLE_WINDOW_MS : 500L);
     }
 
     @Override
     public void onPlayerError(PlaybackException error) {
         playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
         Log.w(TAG, "player-error code=" + error.errorCode + " name=" + error.getErrorCodeName()
                 + " ext=" + extension + " transport=" + activeTransportName(), error);
 
@@ -444,6 +502,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 player.seekToDefaultPosition();
                 player.prepare();
                 player.play();
+                firstFrameRendered = false;
                 schedulePlaybackTimeout();
                 return;
             } catch (Exception ignored) {
@@ -474,12 +533,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void releasePlayer() {
         playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
         if (player == null) return;
         savePosition();
         playerView.setPlayer(null);
         player.removeListener(this);
         player.release();
         player = null;
+        firstFrameRendered = false;
         playbackStartedAtMs = 0;
     }
 
