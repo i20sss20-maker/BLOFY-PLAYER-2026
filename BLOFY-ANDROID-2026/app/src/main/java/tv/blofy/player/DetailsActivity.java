@@ -214,11 +214,11 @@ public final class DetailsActivity extends Activity {
 
     private void play(String id, String title, String type, String extension) {
         database.addHistory(item.type, item.id);
-        Intent player = new Intent(this, PlayerActivity.class);
-        player.putExtra(PlayerActivity.EXTRA_ID, id);
-        player.putExtra(PlayerActivity.EXTRA_TITLE, title);
-        player.putExtra(PlayerActivity.EXTRA_KIND, type);
-        player.putExtra(PlayerActivity.EXTRA_EXTENSION, extension);
+        Intent player = new Intent(this, VodPlayerActivity.class);
+        player.putExtra(VodPlayerActivity.EXTRA_ID, id);
+        player.putExtra(VodPlayerActivity.EXTRA_TITLE, title);
+        player.putExtra(VodPlayerActivity.EXTRA_KIND, type);
+        player.putExtra(VodPlayerActivity.EXTRA_EXTENSION, extension);
         startActivity(player);
     }
 
