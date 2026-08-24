@@ -2,135 +2,43 @@ from pathlib import Path
 
 ROOT = Path('BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player')
 
-
-def req(text, old, new, label):
-    if old not in text:
-        raise SystemExit(f'{label}: pattern not found')
-    return text.replace(old, new, 1)
-
-# PlayerActivity: never allow a Java-side player init/release exception to close
-# the Activity. Keep the user inside the player and expose Retry instead.
 p = ROOT / 'PlayerActivity.java'
 s = p.read_text(encoding='utf-8')
 
-s = req(s,
-'''    private void initializePlayer() {
-        if (player != null || !validUrl(url)) return;
+if 'player-init-guard' not in s:
+    old = '''    private void initializePlayer() {\n        if (player != null || !validUrl(url)) return;\n\n        DataSource.Factory dataSourceFactory = createDataSourceFactory();'''
+    if old in s:
+        s = s.replace(old, '''    private void initializePlayer() {\n        if (player != null || !validUrl(url)) return;\n        try {\n\n        DataSource.Factory dataSourceFactory = createDataSourceFactory();''', 1)
+    old = '''        schedulePlaybackTimeout();\n    }\n\n    private void recoverFromFailure(String reason) {'''
+    if old in s:
+        s = s.replace(old, '''        schedulePlaybackTimeout();\n        } catch (Throwable fatalPlayerError) {\n            Log.e(TAG, "player-init-guard kind=" + kind + " ext=" + extension, fatalPlayerError);\n            safeReleasePlayer();\n            progress.setVisibility(View.GONE);\n            errorPanel.setVisibility(View.VISIBLE);\n            errorText.setText("تعذر بدء المشغل بدون إغلاق التطبيق.\\n" + fatalPlayerError.getClass().getSimpleName());\n            retryButton.setText("إعادة المحاولة");\n            retryButton.requestFocus();\n        }\n    }\n\n    private void recoverFromFailure(String reason) {''', 1)
 
-        DataSource.Factory dataSourceFactory = createDataSourceFactory();''',
-'''    private void initializePlayer() {
-        if (player != null || !validUrl(url)) return;
-        try {
+if 'private void safeReleasePlayer()' not in s:
+    old = '''    private void releasePlayer() {\n        playbackHandler.removeCallbacks(playbackTimeout);\n        if (player == null) return;\n        savePosition();\n        playerView.setPlayer(null);\n        player.removeListener(this);\n        player.release();\n        player = null;\n        playbackStartedAtMs = 0;\n    }'''
+    if old in s:
+        s = s.replace(old, old + '''\n\n    private void safeReleasePlayer() {\n        try { releasePlayer(); }\n        catch (Throwable releaseError) {\n            Log.e(TAG, "player-release-guard", releaseError);\n            try { if (playerView != null) playerView.setPlayer(null); } catch (Throwable ignored) {}\n            try { if (player != null) player.release(); } catch (Throwable ignored) {}\n            player = null;\n            playbackStartedAtMs = 0;\n        }\n    }''', 1)
 
-        DataSource.Factory dataSourceFactory = createDataSourceFactory();''', 'player init guard start')
-
-s = req(s,
-'''        schedulePlaybackTimeout();
-    }
-
-    private void recoverFromFailure(String reason) {''',
-'''        schedulePlaybackTimeout();
-        } catch (Throwable fatalPlayerError) {
-            Log.e(TAG, "player-init-guard kind=" + kind + " ext=" + extension, fatalPlayerError);
-            safeReleasePlayer();
-            progress.setVisibility(View.GONE);
-            errorPanel.setVisibility(View.VISIBLE);
-            errorText.setText("تعذر بدء المشغل بدون إغلاق التطبيق.\\n" + fatalPlayerError.getClass().getSimpleName());
-            retryButton.setText("إعادة المحاولة");
-            retryButton.requestFocus();
-        }
-    }
-
-    private void recoverFromFailure(String reason) {''', 'player init guard end')
-
-# Replace raw release calls on recovery/manual retry with safe release.
-s = s.replace('        releasePlayer();\n\n        if (PlaybackPolicy.shouldRetrySameFormat',
-              '        safeReleasePlayer();\n\n        if (PlaybackPolicy.shouldRetrySameFormat')
-s = s.replace('        releasePlayer();\n        reopenResolvedSource();',
-              '        safeReleasePlayer();\n        reopenResolvedSource();')
-
-s = req(s,
-'''    private void releasePlayer() {
-        playbackHandler.removeCallbacks(playbackTimeout);
-        if (player == null) return;
-        savePosition();
-        playerView.setPlayer(null);
-        player.removeListener(this);
-        player.release();
-        player = null;
-        playbackStartedAtMs = 0;
-    }''',
-'''    private void releasePlayer() {
-        playbackHandler.removeCallbacks(playbackTimeout);
-        if (player == null) return;
-        savePosition();
-        playerView.setPlayer(null);
-        player.removeListener(this);
-        player.release();
-        player = null;
-        playbackStartedAtMs = 0;
-    }
-
-    private void safeReleasePlayer() {
-        try { releasePlayer(); }
-        catch (Throwable releaseError) {
-            Log.e(TAG, "player-release-guard", releaseError);
-            try { if (playerView != null) playerView.setPlayer(null); } catch (Throwable ignored) {}
-            try { if (player != null) player.release(); } catch (Throwable ignored) {}
-            player = null;
-            playbackStartedAtMs = 0;
-        }
-    }''', 'safe release helper')
-
-s = s.replace('        releasePlayer();\n        super.onStop();',
-              '        safeReleasePlayer();\n        super.onStop();')
-
-# A transient READY->BUFFERING state must not immediately rotate formats or leave
-# the screen. Give live a short grace window and VOD more time to refill.
-s = s.replace('playbackHandler.postDelayed(playbackTimeout, isLive() ? 9_000L : 18_000L);',
-              'playbackHandler.postDelayed(playbackTimeout, isLive() ? 12_000L : 25_000L);')
-
+s = s.replace('        releasePlayer();\n\n        if (PlaybackPolicy.shouldRetrySameFormat', '        safeReleasePlayer();\n\n        if (PlaybackPolicy.shouldRetrySameFormat')
+s = s.replace('        releasePlayer();\n        reopenResolvedSource();', '        safeReleasePlayer();\n        reopenResolvedSource();')
+s = s.replace('        releasePlayer();\n        super.onStop();', '        safeReleasePlayer();\n        super.onStop();')
+s = s.replace('playbackHandler.postDelayed(playbackTimeout, isLive() ? 9_000L : 18_000L);', 'playbackHandler.postDelayed(playbackTimeout, isLive() ? 12_000L : 25_000L);')
 p.write_text(s, encoding='utf-8')
 
-# Preview: release decoder/network resources whenever full-screen playback opens.
 p = ROOT / 'LivePreviewController.java'
 s = p.read_text(encoding='utf-8')
-s = req(s,
-'''    void release() {
-        handler.removeCallbacksAndMessages(null);
-        generation++;
-        releasePlayer();
-        worker.shutdownNow();
-        cronetExecutor.shutdownNow();
-    }''',
-'''    void stop() {
-        handler.removeCallbacksAndMessages(null);
-        generation++;
-        releasePlayer();
-        title.setText("معاينة القناة");
-    }
-
-    void release() {
-        stop();
-        worker.shutdownNow();
-        cronetExecutor.shutdownNow();
-    }''', 'preview stop')
+if '    void stop() {' not in s:
+    old = '''    void release() {\n        handler.removeCallbacksAndMessages(null);\n        generation++;\n        releasePlayer();\n        worker.shutdownNow();\n        cronetExecutor.shutdownNow();\n    }'''
+    if old in s:
+        s = s.replace(old, '''    void stop() {\n        handler.removeCallbacksAndMessages(null);\n        generation++;\n        releasePlayer();\n        title.setText("معاينة القناة");\n    }\n\n    void release() {\n        stop();\n        worker.shutdownNow();\n        cronetExecutor.shutdownNow();\n    }''', 1)
 p.write_text(s, encoding='utf-8')
 
-# SevenMaxActivity: do not keep a second decoder alive behind PlayerActivity.
 p = ROOT / 'SevenMaxActivity.java'
 s = p.read_text(encoding='utf-8')
-s = req(s,
-'''    private void play(BlofyModels.Media item) {
-        database.addHistory(item.type,item.id);''',
-'''    private void play(BlofyModels.Media item) {
-        if (livePreview != null) livePreview.stop();
-        database.addHistory(item.type,item.id);''', 'stop preview before fullscreen')
-
-# Also free preview on Activity stop (home/background/full-screen player).
-s = s.replace('    @Override protected void onDestroy(){ if(livePreview!=null)livePreview.release(); database.close(); super.onDestroy(); }',
-'''    @Override protected void onStop(){ if(livePreview!=null)livePreview.stop(); super.onStop(); }
-    @Override protected void onDestroy(){ if(livePreview!=null)livePreview.release(); database.close(); super.onDestroy(); }''')
+needle = '''    private void play(BlofyModels.Media item) {\n        database.addHistory(item.type,item.id);'''
+if 'if (livePreview != null) livePreview.stop();' not in s and needle in s:
+    s = s.replace(needle, '''    private void play(BlofyModels.Media item) {\n        if (livePreview != null) livePreview.stop();\n        database.addHistory(item.type,item.id);''', 1)
+if 'protected void onStop(){ if(livePreview!=null)livePreview.stop();' not in s:
+    s = s.replace('    @Override protected void onDestroy(){ if(livePreview!=null)livePreview.release(); database.close(); super.onDestroy(); }', '    @Override protected void onStop(){ if(livePreview!=null)livePreview.stop(); super.onStop(); }\n    @Override protected void onDestroy(){ if(livePreview!=null)livePreview.release(); database.close(); super.onDestroy(); }')
 p.write_text(s, encoding='utf-8')
 
-print('BLOFY crash guard applied: safe player init/release + preview decoder handoff')
+print('BLOFY crash guard applied safely')
