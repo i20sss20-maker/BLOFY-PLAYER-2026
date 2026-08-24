@@ -75,6 +75,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private int recoveryStep;
     private boolean resolving;
     private boolean firstFrameRendered;
+    private boolean warmLiveSwitchPending;
     private long playbackStartedAtMs;
 
     private final ExecutorService network = Executors.newSingleThreadExecutor();
@@ -124,9 +125,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return value == null || value.isEmpty() ? fallback : value;
     }
 
-    private static boolean isLiveKind(String value) {
-        return "live".equals(value);
-    }
+    private static boolean isLiveKind(String value) { return "live".equals(value); }
 
     private static boolean validUrl(String value) {
         if (value == null || value.isEmpty()) return false;
@@ -135,14 +134,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             String scheme = uri.getScheme();
             return uri.getHost() != null
                     && ("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme));
-        } catch (Exception ignored) {
-            return false;
-        }
+        } catch (Exception ignored) { return false; }
     }
 
-    private boolean isLive() {
-        return isLiveKind(kind);
-    }
+    private boolean isLive() { return isLiveKind(kind); }
 
     private boolean isUltraHd() {
         String value = title == null ? "" : title.toUpperCase(Locale.US);
@@ -165,13 +160,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return "auto".equals(playerSetting(SettingsActivity.KEY_STREAM, "auto"));
     }
 
-    private boolean useCronetNow() {
-        return PlaybackPolicy.useCronet(recoveryStep);
-    }
-
-    private String activeTransportName() {
-        return useCronetNow() ? "cronet" : "default-http";
-    }
+    private boolean useCronetNow() { return PlaybackPolicy.useCronet(recoveryStep); }
+    private String activeTransportName() { return useCronetNow() ? "cronet" : "default-http"; }
 
     private String transportPreferenceKey() {
         return "transport_" + kind + "_" + PlaybackPolicy.normalizeExtension(extension, "auto");
@@ -185,14 +175,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void rememberSuccessfulTransport() {
         getSharedPreferences("blofy_playback", MODE_PRIVATE)
-                .edit()
-                .putBoolean(transportPreferenceKey(), useCronetNow())
-                .apply();
+                .edit().putBoolean(transportPreferenceKey(), useCronetNow()).apply();
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
@@ -205,8 +191,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
         playerView.setKeepScreenOn(true);
         playerView.setFocusable(true);
-        root.addView(playerView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+        root.addView(playerView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
         titleView = new TextView(this);
@@ -217,12 +202,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         titleView.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         titleView.setPadding(dp(24), dp(12), dp(24), dp(12));
         titleView.setBackgroundColor(Color.argb(175, 8, 7, 14));
-        root.addView(titleView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(58), Gravity.TOP));
+        root.addView(titleView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58), Gravity.TOP));
 
         progress = new ProgressBar(this);
-        progress.setIndeterminateTintList(
-                android.content.res.ColorStateList.valueOf(Color.rgb(154, 88, 255)));
+        progress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.rgb(154, 88, 255)));
         root.addView(progress, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
 
         errorPanel = new LinearLayout(this);
@@ -231,7 +214,6 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         errorPanel.setPadding(dp(24), dp(20), dp(24), dp(20));
         errorPanel.setBackgroundColor(Color.argb(225, 10, 9, 18));
         errorPanel.setVisibility(View.GONE);
-
         TextView errorTitle = new TextView(this);
         errorTitle.setText("تعذر تشغيل المصدر");
         errorTitle.setTextColor(Color.WHITE);
@@ -239,34 +221,26 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         errorTitle.setTypeface(errorTitle.getTypeface(), android.graphics.Typeface.BOLD);
         errorTitle.setGravity(Gravity.CENTER);
         errorPanel.addView(errorTitle);
-
         errorText = new TextView(this);
         errorText.setTextColor(Color.rgb(184, 181, 197));
         errorText.setTextSize(14);
         errorText.setGravity(Gravity.CENTER);
         errorText.setPadding(0, dp(10), 0, dp(14));
-        errorPanel.addView(errorText,
-                new LinearLayout.LayoutParams(dp(560), ViewGroup.LayoutParams.WRAP_CONTENT));
-
+        errorPanel.addView(errorText, new LinearLayout.LayoutParams(dp(560), ViewGroup.LayoutParams.WRAP_CONTENT));
         retryButton = new Button(this);
         retryButton.setText("إعادة الاتصال");
         retryButton.setTextColor(Color.WHITE);
         retryButton.setTextSize(15);
         retryButton.setAllCaps(false);
-        retryButton.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(Color.rgb(124, 50, 255)));
+        retryButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(124, 50, 255)));
         retryButton.setOnClickListener(view -> manualRetry());
         errorPanel.addView(retryButton, new LinearLayout.LayoutParams(dp(240), dp(54)));
-
-        root.addView(errorPanel, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER));
+        root.addView(errorPanel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
 
         if (isLive()) {
             liveOverlay = new LiveChannelOverlay(this, this::switchLiveChannel);
-            root.addView(liveOverlay.view(), new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
+            root.addView(liveOverlay.view(), new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT));
         }
         setContentView(root);
@@ -285,32 +259,34 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         resolving = true;
         progress.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.GONE);
-
         network.execute(() -> {
             try {
                 String apiType = "series".equals(kind) ? "episode" : kind;
-                JSONObject data = new BlofyApi(this).get(
-                        "/api/native-link/" + BlofyApi.encode(apiType) + "/" + BlofyApi.encode(id)
-                                + "?ext=" + BlofyApi.encode(extension));
+                JSONObject data = new BlofyApi(this).get("/api/native-link/" + BlofyApi.encode(apiType) + "/"
+                        + BlofyApi.encode(id) + "?ext=" + BlofyApi.encode(extension));
                 String resolved = data.optString("url", "");
                 if (!resolved.startsWith("/api/native-play") && !resolved.startsWith("http")) {
                     throw new Exception("الخادم لم يُصدر رابط تشغيل مباشر صحيحًا.");
                 }
-
-                url = resolved.startsWith("http")
-                        ? resolved
+                url = resolved.startsWith("http") ? resolved
                         : BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + resolved;
                 extension = configuredExtension(PlaybackPolicy.normalizeExtension(
                         data.optString("extension", extension), extension));
-
                 runOnUiThread(() -> {
                     resolving = false;
                     prepareResolvedUrl();
-                    initializePlayer();
+                    if (warmLiveSwitchPending && player != null && isLive()) {
+                        warmLiveSwitchPending = false;
+                        replaceLiveSourceOnWarmPlayer();
+                    } else {
+                        warmLiveSwitchPending = false;
+                        initializePlayer();
+                    }
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     resolving = false;
+                    warmLiveSwitchPending = false;
                     showResolveError(error.getMessage());
                 });
             }
@@ -319,10 +295,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void prepareResolvedUrl() {
         if (!validUrl(url)) return;
-        resumePosition = isLive()
-                ? 0
-                : getSharedPreferences("blofy_positions", MODE_PRIVATE)
-                    .getLong(positionKey(), 0);
+        resumePosition = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE)
+                .getLong(positionKey(), 0);
     }
 
     private void showResolveError(String message) {
@@ -340,94 +314,70 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private DefaultLoadControl createLoadControl() {
         String mode = playerSetting(SettingsActivity.KEY_BUFFER, "auto");
-        int minBuffer;
-        int maxBuffer;
-        int playbackBuffer;
-        int rebuffer;
-
+        int minBuffer, maxBuffer, playbackBuffer, rebuffer;
         if ("fast".equals(mode) && isLive() && !isUltraHd()) {
-            minBuffer = 1_500;
-            maxBuffer = 10_000;
-            playbackBuffer = 350;
-            rebuffer = 1_000;
+            minBuffer = 1_500; maxBuffer = 10_000; playbackBuffer = 350; rebuffer = 1_000;
         } else if ("stable".equals(mode) || (isLive() && isUltraHd())) {
             minBuffer = isLive() ? 12_000 : 18_000;
             maxBuffer = isLive() ? 60_000 : 90_000;
             playbackBuffer = isLive() ? 1_500 : 1_800;
             rebuffer = isLive() ? 6_000 : 4_000;
         } else if (isLive()) {
-            minBuffer = 2_500;
-            maxBuffer = 18_000;
-            playbackBuffer = 600;
-            rebuffer = 1_800;
+            minBuffer = 2_500; maxBuffer = 18_000; playbackBuffer = 600; rebuffer = 1_800;
         } else {
-            minBuffer = 12_000;
-            maxBuffer = 60_000;
-            playbackBuffer = 900;
-            rebuffer = 2_500;
+            minBuffer = 12_000; maxBuffer = 60_000; playbackBuffer = 900; rebuffer = 2_500;
         }
-        return new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(minBuffer, maxBuffer, playbackBuffer, rebuffer)
-                .setPrioritizeTimeOverSizeThresholds(true)
-                .build();
+        return new DefaultLoadControl.Builder().setBufferDurationsMs(minBuffer, maxBuffer, playbackBuffer, rebuffer)
+                .setPrioritizeTimeOverSizeThresholds(true).build();
+    }
+
+    private MediaSource createCurrentMediaSource() {
+        DataSource.Factory dataSourceFactory = createDataSourceFactory();
+        int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+                | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
+        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory().setTsExtractorFlags(tsFlags);
+        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory);
+        MediaItem.Builder itemBuilder = new MediaItem.Builder()
+                .setUri(PlaybackPolicy.directPlaybackUrl(url)).setMediaId(title);
+        String mimeType = PlaybackPolicy.mimeType(extension);
+        if (mimeType != null) itemBuilder.setMimeType(mimeType);
+        MediaItem item = itemBuilder.build();
+        return PlaybackPolicy.isHls(extension)
+                ? new HlsMediaSource.Factory(dataSourceFactory)
+                    .setExtractorFactory(new DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+                : mediaSourceFactory.createMediaSource(item);
     }
 
     private void initializePlayer() {
         if (player != null || !validUrl(url)) return;
-
         firstFrameRendered = false;
         playbackHandler.removeCallbacks(markPlaybackStable);
         DataSource.Factory dataSourceFactory = createDataSourceFactory();
         int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
                 | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
-
-        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory()
-                .setTsExtractorFlags(tsFlags);
-        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(
-                dataSourceFactory, extractorsFactory);
-
+        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory().setTsExtractorFlags(tsFlags);
+        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory);
         String decoderMode = playerSetting(SettingsActivity.KEY_DECODER, "auto");
         boolean strictHardware = "hardware".equals(decoderMode);
         int extensionMode = "software".equals(decoderMode)
                 ? DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 : DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON;
         DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
-                .setEnableDecoderFallback(!strictHardware)
-                .setExtensionRendererMode(extensionMode);
-
-        player = new ExoPlayer.Builder(this, renderers)
-                .setMediaSourceFactory(mediaSourceFactory)
-                .setLoadControl(createLoadControl())
-                .build();
+                .setEnableDecoderFallback(!strictHardware).setExtensionRendererMode(extensionMode);
+        player = new ExoPlayer.Builder(this, renderers).setMediaSourceFactory(mediaSourceFactory)
+                .setLoadControl(createLoadControl()).build();
         player.addListener(this);
-        player.setAudioAttributes(new AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                .build(), true);
+        player.setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
         player.setHandleAudioBecomingNoisy(true);
         player.setWakeMode(C.WAKE_MODE_NETWORK);
         playerView.setPlayer(player);
-
-        MediaItem.Builder itemBuilder = new MediaItem.Builder()
-                .setUri(PlaybackPolicy.directPlaybackUrl(url))
-                .setMediaId(title);
-        String mimeType = PlaybackPolicy.mimeType(extension);
-        if (mimeType != null) itemBuilder.setMimeType(mimeType);
-        MediaItem item = itemBuilder.build();
-
-        MediaSource mediaSource = PlaybackPolicy.isHls(extension)
-                ? new HlsMediaSource.Factory(dataSourceFactory)
-                    .setExtractorFactory(new DefaultHlsExtractorFactory(tsFlags, true))
-                    .createMediaSource(item)
-                : mediaSourceFactory.createMediaSource(item);
-
         playbackStartedAtMs = SystemClock.elapsedRealtime();
         Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep
                 + " uhd=" + isUltraHd() + " transport=" + activeTransportName()
                 + " stream=" + playerSetting(SettingsActivity.KEY_STREAM, "auto")
-                + " buffer=" + playerSetting(SettingsActivity.KEY_BUFFER, "auto")
-                + " decoder=" + decoderMode);
-        player.setMediaSource(mediaSource, Math.max(0, resumePosition));
+                + " buffer=" + playerSetting(SettingsActivity.KEY_BUFFER, "auto") + " decoder=" + decoderMode);
+        player.setMediaSource(createCurrentMediaSource(), Math.max(0, resumePosition));
         player.prepare();
         player.play();
         progress.setVisibility(View.VISIBLE);
@@ -436,17 +386,39 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         schedulePlaybackTimeout();
     }
 
+    private void replaceLiveSourceOnWarmPlayer() {
+        if (player == null || !validUrl(url)) { initializePlayer(); return; }
+        try {
+            firstFrameRendered = false;
+            playbackHandler.removeCallbacks(playbackTimeout);
+            playbackHandler.removeCallbacks(markPlaybackStable);
+            playbackStartedAtMs = SystemClock.elapsedRealtime();
+            player.setMediaSource(createCurrentMediaSource(), true);
+            player.prepare();
+            player.play();
+            progress.setVisibility(View.VISIBLE);
+            errorPanel.setVisibility(View.GONE);
+            playerView.requestFocus();
+            schedulePlaybackTimeout();
+            Log.i(TAG, "warm-live-switch id=" + id + " ext=" + extension + " transport=" + activeTransportName());
+        } catch (Throwable error) {
+            Log.w(TAG, "warm-live-switch-failed fallback=rebuild", error);
+            releasePlayer();
+            initializePlayer();
+        }
+    }
+
     private void switchLiveChannel(BlofyModels.Media media) {
         if (!isLive() || media == null || media.id.equals(id)) return;
         playbackHandler.removeCallbacks(playbackTimeout);
         playbackHandler.removeCallbacks(markPlaybackStable);
-        releasePlayer();
         id = media.id;
         title = media.name;
         extension = configuredExtension(PlaybackPolicy.normalizeExtension(media.extension, "ts"));
         url = null;
         resumePosition = 0;
         recoveryStep = preferredRecoveryStep();
+        warmLiveSwitchPending = player != null;
         titleView.setText(title);
         titleView.setVisibility(View.VISIBLE);
         progress.setVisibility(View.VISIBLE);
@@ -462,12 +434,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         Log.w(TAG, "recover reason=" + reason + " step=" + recoveryStep + " ext=" + extension
                 + " nextTransport=" + PlaybackPolicy.transportName(recoveryStep));
         releasePlayer();
-
-        if (PlaybackPolicy.shouldRetrySameFormat(recoveryStep)) {
-            reopenResolvedSource(false);
-            return;
-        }
-
+        if (PlaybackPolicy.shouldRetrySameFormat(recoveryStep)) { reopenResolvedSource(false); return; }
         if (isLive() && allowAlternateLiveFormat()
                 && PlaybackPolicy.shouldTryAlternateLiveFormat(recoveryStep) && !id.isEmpty()) {
             extension = PlaybackPolicy.alternateLiveExtension(extension);
@@ -476,66 +443,49 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             resolvePlaybackLink();
             return;
         }
-
         if (isLive() && allowAlternateLiveFormat() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
-            reopenResolvedSource(false);
-            return;
+            reopenResolvedSource(false); return;
         }
-
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        errorText.setText("تعذر تشغيل المصدر. آخر سبب: " + reason
-                + "\nالصيغة: " + extension + "\nالنقل: " + activeTransportName());
+        errorText.setText("تعذر تشغيل المصدر. آخر سبب: " + reason + "\nالصيغة: " + extension
+                + "\nالنقل: " + activeTransportName());
         retryButton.setText("إعادة المحاولة من البداية");
         retryButton.requestFocus();
     }
 
     private void reopenResolvedSource(boolean forceResolve) {
-        if (!forceResolve && validUrl(url)) {
-            initializePlayer();
-            return;
-        }
-        if (!id.isEmpty()) {
-            url = null;
-            resolvePlaybackLink();
-        } else {
-            initializePlayer();
-        }
+        if (!forceResolve && validUrl(url)) { initializePlayer(); return; }
+        if (!id.isEmpty()) { url = null; resolvePlaybackLink(); } else { initializePlayer(); }
     }
 
     private void manualRetry() {
         recoveryStep = preferredRecoveryStep();
+        warmLiveSwitchPending = false;
         releasePlayer();
         reopenResolvedSource(!validUrl(url));
     }
 
-    @Override
-    public void onPlaybackStateChanged(int playbackState) {
+    @Override public void onPlaybackStateChanged(int playbackState) {
         if (playbackState == Player.STATE_BUFFERING) {
             if (!firstFrameRendered) progress.setVisibility(View.VISIBLE);
             return;
         }
-
         if (playbackState == Player.STATE_READY) {
-            long readyMs = playbackStartedAtMs == 0
-                    ? -1
-                    : SystemClock.elapsedRealtime() - playbackStartedAtMs;
+            long readyMs = playbackStartedAtMs == 0 ? -1 : SystemClock.elapsedRealtime() - playbackStartedAtMs;
             Log.i(TAG, "ready kind=" + kind + " ext=" + extension + " ms=" + readyMs
-                    + " firstFrame=" + firstFrameRendered
-                    + " transport=" + activeTransportName());
+                    + " firstFrame=" + firstFrameRendered + " transport=" + activeTransportName());
             if (firstFrameRendered) progress.setVisibility(View.GONE);
             titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
             return;
         }
-
         if (playbackState == Player.STATE_ENDED) {
             progress.setVisibility(View.GONE);
             if (isLive()) recoverFromFailure("انتهى اتصال البث المباشر");
         }
     }
 
-    @Override
-    public void onRenderedFirstFrame() {
+    @Override public void onRenderedFirstFrame() {
         if (playbackStartedAtMs == 0) return;
         firstFrameRendered = true;
         playbackHandler.removeCallbacks(playbackTimeout);
@@ -547,16 +497,12 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playbackHandler.postDelayed(markPlaybackStable, isLive() ? LIVE_STABLE_WINDOW_MS : 500L);
     }
 
-    @Override
-    public void onPlayerError(PlaybackException error) {
+    @Override public void onPlayerError(PlaybackException error) {
         playbackHandler.removeCallbacks(playbackTimeout);
         playbackHandler.removeCallbacks(markPlaybackStable);
         Log.w(TAG, "player-error code=" + error.errorCode + " name=" + error.getErrorCodeName()
                 + " ext=" + extension + " transport=" + activeTransportName(), error);
-
-        if (isLive()
-                && error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW
-                && player != null) {
+        if (isLive() && error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && player != null) {
             try {
                 player.seekToDefaultPosition();
                 player.prepare();
@@ -564,11 +510,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 firstFrameRendered = false;
                 schedulePlaybackTimeout();
                 return;
-            } catch (Exception ignored) {
-                // Fall through to normal reconnect.
-            }
+            } catch (Exception ignored) {}
         }
-
         recoverFromFailure(error.getErrorCodeName());
     }
 
@@ -583,16 +526,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         long duration = player.getDuration();
         if (duration > 0 && position > duration - 30_000) position = 0;
         position = Math.max(0, position);
-        getSharedPreferences("blofy_positions", MODE_PRIVATE)
-                .edit()
-                .putLong(positionKey(), position)
-                .apply();
+        getSharedPreferences("blofy_positions", MODE_PRIVATE).edit().putLong(positionKey(), position).apply();
         resumePosition = position;
     }
 
     private void releasePlayer() {
         playbackHandler.removeCallbacks(playbackTimeout);
         playbackHandler.removeCallbacks(markPlaybackStable);
+        warmLiveSwitchPending = false;
         if (player == null) return;
         savePosition();
         playerView.setPlayer(null);
@@ -603,67 +544,51 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playbackStartedAtMs = 0;
     }
 
-    @Override
-    protected void onStart() {
+    @Override protected void onStart() {
         super.onStart();
         if (validUrl(url)) initializePlayer();
     }
 
-    @Override
-    protected void onStop() {
+    @Override protected void onStop() {
         releasePlayer();
         super.onStop();
     }
 
-    @Override
-    public boolean dispatchKeyEvent(KeyEvent event) {
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             switch (event.getKeyCode()) {
                 case KeyEvent.KEYCODE_BACK:
                     if (liveOverlay != null && liveOverlay.isVisible()) {
-                        liveOverlay.hide();
-                        playerView.requestFocus();
-                        return true;
+                        liveOverlay.hide(); playerView.requestFocus(); return true;
                     }
-                    finish();
-                    return true;
+                    finish(); return true;
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
                     if (isLive() && liveOverlay != null && !liveOverlay.isVisible()) {
-                        liveOverlay.show(id);
-                        return true;
+                        liveOverlay.show(id); return true;
                     }
                     break;
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                    if (player != null) {
-                        if (player.isPlaying()) player.pause(); else player.play();
-                    }
+                    if (player != null) { if (player.isPlaying()) player.pause(); else player.play(); }
                     return true;
                 case KeyEvent.KEYCODE_MEDIA_PLAY:
-                    if (player != null) player.play();
-                    return true;
+                    if (player != null) player.play(); return true;
                 case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                    if (player != null) player.pause();
-                    return true;
-                default:
-                    break;
+                    if (player != null) player.pause(); return true;
+                default: break;
             }
         }
         return super.dispatchKeyEvent(event);
     }
 
-    @Override
-    public void onBackPressed() {
+    @Override public void onBackPressed() {
         if (liveOverlay != null && liveOverlay.isVisible()) {
-            liveOverlay.hide();
-            playerView.requestFocus();
-            return;
+            liveOverlay.hide(); playerView.requestFocus(); return;
         }
         finish();
     }
 
-    @Override
-    protected void onDestroy() {
+    @Override protected void onDestroy() {
         playbackHandler.removeCallbacksAndMessages(null);
         if (liveOverlay != null) liveOverlay.close();
         network.shutdownNow();
@@ -676,22 +601,17 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
                 controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                controller.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             }
         } else {
-            getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         }
     }
 
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) hideSystemUi();
     }
