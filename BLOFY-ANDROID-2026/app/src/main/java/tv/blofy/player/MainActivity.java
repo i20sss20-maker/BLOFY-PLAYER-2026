@@ -134,7 +134,7 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(BlofyUi.isTv(this) ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         page.setGravity(Gravity.CENTER);
-        page.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        page.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         page.setPadding(dp(28), dp(24), dp(28), dp(24));
 
         LinearLayout device = devicePanel();
@@ -144,6 +144,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
+        form.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         form.setPadding(dp(26), dp(22), dp(26), dp(22));
         form.setBackground(BlofyUi.panel(this, Color.argb(235, 13, 13, 25), 20, Color.rgb(48, 42, 72)));
         form.addView(BlofyUi.brand(this, "P L A Y E R  •  N A T I V E"));
@@ -411,34 +412,10 @@ public final class MainActivity extends Activity {
 
     private void showHome() {
         screen = "home";
-        root.removeAllViews();
-        LinearLayout page = basePage("الرئيسية", database.metadata("server_name", "BLOFY PLAYER"));
-        TextView welcome = BlofyUi.title(this, "مرحبًا بك في BLOFY PLAYER", 27);
-        page.addView(welcome);
-        TextView subtitle = BlofyUi.text(this, "اختر قسمك واستمتع بتشغيل Native سريع عبر Media3", 14, BlofyUi.MUTED);
-        page.addView(subtitle);
-
-        GridLayout grid = new GridLayout(this);
-        int columns = BlofyUi.isTv(this) ? 3 : 2;
-        grid.setColumnCount(columns);
-        grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
-        grid.setUseDefaultMargins(true);
-        addHomeCard(grid, "📡", "بث مباشر", database.count("live") + " قناة", () -> showCatalog("live", false, false));
-        addHomeCard(grid, "🎬", "أفلام", database.count("movies") + " فيلم", () -> showCatalog("movies", false, false));
-        addHomeCard(grid, "▣", "مسلسلات", database.count("series") + " مسلسل", () -> showCatalog("series", false, false));
-        addHomeCard(grid, "♥", "المفضلة", "محتواك المحفوظ", () -> showCatalog("", true, false));
-        addHomeCard(grid, "◷", "سجل المشاهدة", "تابع من حيث توقفت", () -> showCatalog("", false, true));
-        addHomeCard(grid, "⚙", "الإعدادات", "الجهاز والباقة والتشغيل", this::showSettings);
-        LinearLayout.LayoutParams gridParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        gridParams.topMargin = dp(18);
-        page.addView(grid, gridParams);
-
-        TextView profile = BlofyUi.text(this, "طريقة التشغيل: " + database.metadata("playback_profile", "Media3 مباشر"), 13, BlofyUi.PURPLE_LIGHT);
-        LinearLayout.LayoutParams profileParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        profileParams.topMargin = dp(14);
-        page.addView(profile, profileParams);
-        wrapPage(page);
-        main.postDelayed(this::focusFirstAction, 100);
+        Intent intent = new Intent(this, SevenMaxActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
+        finish();
     }
 
     private LinearLayout basePage(String title, String subtitle) {

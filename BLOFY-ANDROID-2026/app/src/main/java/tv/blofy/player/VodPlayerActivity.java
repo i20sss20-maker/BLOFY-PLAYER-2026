@@ -1,7 +1,10 @@
 package tv.blofy.player;
 
 import android.app.Activity;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -67,6 +70,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private TextView engineView;
     private TextView timeView;
     private TextView errorText;
+    private TextView retryButton;
     private SeekBar seekBar;
 
     private String id;
@@ -131,7 +135,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackgroundColor(Color.rgb(3, 3, 8));
 
         vlcSurface = new SurfaceView(this);
         vlcSurface.setVisibility(View.GONE);
@@ -147,73 +151,126 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
         spinner = new ProgressBar(this);
         spinner.setIndeterminateTintList(BlofyUi.progressColors());
-        root.addView(spinner, new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.CENTER));
+        spinner.setElevation(dp(8));
+        root.addView(spinner, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER));
 
         controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.VERTICAL);
         controls.setGravity(Gravity.BOTTOM);
-        controls.setPadding(dp(34), dp(16), dp(34), dp(22));
-        controls.setBackgroundColor(Color.argb(215, 8, 10, 15));
+        controls.setPadding(dp(40), dp(18), dp(40), dp(16));
+        controls.setBackground(playerControlsGradient());
+
+        View accent = new View(this);
+        accent.setBackgroundColor(BlofyUi.PURPLE);
+        LinearLayout.LayoutParams accentParams = new LinearLayout.LayoutParams(dp(88), dp(3));
+        accentParams.bottomMargin = dp(8);
+        controls.addView(accent, accentParams);
 
         LinearLayout heading = new LinearLayout(this);
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        titleView = BlofyUi.title(this, title, 18);
+        titleView = BlofyUi.title(this, title, 20);
         titleView.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         titleView.setTextDirection(View.TEXT_DIRECTION_LTR);
-        heading.addView(titleView, new LinearLayout.LayoutParams(0, dp(42), 1));
-        engineView = BlofyUi.text(this, "Media3", 12, BlofyUi.MUTED);
-        engineView.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        titleView.setMaxLines(1);
+        heading.addView(titleView, new LinearLayout.LayoutParams(0, dp(44), 1));
+        engineView = BlofyUi.text(this, "Media3", 11, BlofyUi.PURPLE_LIGHT);
+        engineView.setGravity(Gravity.CENTER);
         engineView.setTextDirection(View.TEXT_DIRECTION_LTR);
-        heading.addView(engineView, new LinearLayout.LayoutParams(dp(160), dp(42)));
-        controls.addView(heading, new LinearLayout.LayoutParams(-1, dp(42)));
+        engineView.setMaxLines(1);
+        engineView.setPadding(dp(14), 0, dp(14), 0);
+        engineView.setBackground(cinemaPanel(Color.argb(220, 24, 17, 43), 18, 1, Color.rgb(102, 49, 190)));
+        LinearLayout.LayoutParams engineParams = new LinearLayout.LayoutParams(dp(220), dp(34));
+        engineParams.leftMargin = dp(16);
+        heading.addView(engineView, engineParams);
+        controls.addView(heading, new LinearLayout.LayoutParams(-1, dp(44)));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView rewind = transportBadge("−10");
+        row.addView(rewind, new LinearLayout.LayoutParams(dp(46), dp(34)));
+
         seekBar = new SeekBar(this);
         seekBar.setMax(1000);
         seekBar.setFocusable(false);
-        row.addView(seekBar, new LinearLayout.LayoutParams(0, dp(44), 1));
-        timeView = BlofyUi.text(this, "00:00 / 00:00", 13, Color.WHITE);
+        seekBar.setProgressTintList(ColorStateList.valueOf(BlofyUi.PURPLE));
+        seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(Color.rgb(69, 67, 78)));
+        seekBar.setThumbTintList(ColorStateList.valueOf(BlofyUi.PURPLE_LIGHT));
+        LinearLayout.LayoutParams seekParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+        seekParams.leftMargin = dp(8);
+        seekParams.rightMargin = dp(8);
+        row.addView(seekBar, seekParams);
+
+        TextView forward = transportBadge("+10");
+        row.addView(forward, new LinearLayout.LayoutParams(dp(46), dp(34)));
+
+        timeView = BlofyUi.text(this, "00:00  /  00:00", 12, Color.WHITE);
         timeView.setGravity(Gravity.CENTER);
         timeView.setTextDirection(View.TEXT_DIRECTION_LTR);
-        row.addView(timeView, new LinearLayout.LayoutParams(dp(190), dp(44)));
-        controls.addView(row, new LinearLayout.LayoutParams(-1, dp(52)));
+        timeView.setBackground(cinemaPanel(Color.argb(170, 12, 12, 19), 14, 1, Color.rgb(58, 56, 68)));
+        LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(dp(174), dp(34));
+        timeParams.leftMargin = dp(12);
+        row.addView(timeView, timeParams);
+        controls.addView(row, new LinearLayout.LayoutParams(-1, dp(50)));
 
+        LinearLayout footer = new LinearLayout(this);
+        footer.setOrientation(LinearLayout.HORIZONTAL);
+        footer.setGravity(Gravity.CENTER_VERTICAL);
         TextView hints = BlofyUi.text(this,
-                "◀▶ ±10ث   •   ضغط مطول ±60ث   •   OK تشغيل/إيقاف   •   ↑ صوت   •   ↓ ترجمة",
-                13, BlofyUi.MUTED);
+                "◀ ▶  تقديم وتأخير   •   ضغط مطول 60ث   •   OK تشغيل وإيقاف   •   ↑ صوت   •   ↓ ترجمة",
+                12, BlofyUi.MUTED);
         hints.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        controls.addView(hints, new LinearLayout.LayoutParams(-1, dp(36)));
+        footer.addView(hints, new LinearLayout.LayoutParams(0, dp(34), 1));
+        TextView signature = BlofyUi.text(this, "BLOFY  •  CINEMA", 10, BlofyUi.PURPLE_LIGHT);
+        signature.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        signature.setTextDirection(View.TEXT_DIRECTION_LTR);
+        footer.addView(signature, new LinearLayout.LayoutParams(dp(170), dp(34)));
+        controls.addView(footer, new LinearLayout.LayoutParams(-1, dp(34)));
 
-        root.addView(controls, new FrameLayout.LayoutParams(-1, dp(170), Gravity.BOTTOM));
+        root.addView(controls, new FrameLayout.LayoutParams(-1, dp(202), Gravity.BOTTOM));
 
         errorPanel = new LinearLayout(this);
         errorPanel.setOrientation(LinearLayout.VERTICAL);
         errorPanel.setGravity(Gravity.CENTER);
-        errorPanel.setPadding(dp(28), dp(22), dp(28), dp(22));
-        errorPanel.setBackground(BlofyUi.panel(this, Color.argb(245, 20, 23, 30), 4, Color.WHITE));
+        errorPanel.setPadding(dp(38), dp(30), dp(38), dp(30));
+        errorPanel.setBackground(cinemaPanel(Color.argb(250, 12, 11, 20), 22, 2, Color.rgb(112, 50, 214)));
+        errorPanel.setElevation(dp(20));
         errorPanel.setVisibility(View.GONE);
-        TextView errorTitle = BlofyUi.title(this, "تعذر تشغيل الفيديو", 22);
+
+        TextView errorMark = BlofyUi.title(this, "!", 22);
+        errorMark.setGravity(Gravity.CENTER);
+        errorMark.setTextColor(BlofyUi.PURPLE_LIGHT);
+        errorMark.setBackground(cinemaPanel(Color.rgb(37, 20, 62), 22, 1, BlofyUi.PURPLE));
+        errorPanel.addView(errorMark, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        TextView errorTitle = BlofyUi.title(this, "تعذر تشغيل المحتوى", 24);
         errorTitle.setGravity(Gravity.CENTER);
-        errorPanel.addView(errorTitle);
+        LinearLayout.LayoutParams errorTitleParams = new LinearLayout.LayoutParams(-1, dp(52));
+        errorTitleParams.topMargin = dp(8);
+        errorPanel.addView(errorTitle, errorTitleParams);
         errorText = BlofyUi.text(this, "", 14, BlofyUi.MUTED);
         errorText.setGravity(Gravity.CENTER);
-        errorPanel.addView(errorText, new LinearLayout.LayoutParams(dp(650), -2));
-        TextView retry = BlofyUi.navChip(this, "إعادة المحاولة");
-        retry.setGravity(Gravity.CENTER);
-        retry.setOnClickListener(v -> {
+        errorText.setLineSpacing(0, 1.18f);
+        errorPanel.addView(errorText, new LinearLayout.LayoutParams(dp(620), -2));
+
+        retryButton = BlofyUi.title(this, "↻   إعادة المحاولة", 15);
+        retryButton.setGravity(Gravity.CENTER);
+        retryButton.setFocusable(true);
+        retryButton.setClickable(true);
+        retryButton.setBackground(retryButtonBackground());
+        retryButton.setOnClickListener(v -> {
             attempt = 0;
             useCronet = false;
             usingVlc = false;
             releaseAllEngines();
             if (validUrl(resolvedUrl)) openMedia3(); else resolve();
         });
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(dp(240), dp(54));
-        rp.topMargin = dp(18);
-        errorPanel.addView(retry, rp);
-        root.addView(errorPanel, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(dp(260), dp(56));
+        rp.topMargin = dp(22);
+        errorPanel.addView(retryButton, rp);
+        root.addView(errorPanel, new FrameLayout.LayoutParams(dp(720), -2, Gravity.CENTER));
 
         setContentView(root);
         showControls();
@@ -411,7 +468,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         controls.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.VISIBLE);
         errorText.setText(message == null ? "حدث خطأ أثناء التشغيل" : message);
-        errorPanel.requestFocus();
+        if (retryButton != null) retryButton.requestFocus();
     }
 
     @Override public void onPlaybackStateChanged(int state) {
@@ -502,6 +559,15 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             boolean longPress = event.getRepeatCount() >= 2;
+            if (errorPanel != null && errorPanel.getVisibility() == View.VISIBLE
+                    && (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_CENTER
+                    || event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                if (event.getRepeatCount() == 0 && retryButton != null) {
+                    retryButton.requestFocus();
+                    retryButton.performClick();
+                }
+                return true;
+            }
             switch (event.getKeyCode()) {
                 case KeyEvent.KEYCODE_DPAD_LEFT:
                     seekBy(longPress ? -60_000 : -10_000);
@@ -598,6 +664,42 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private static String formatTime(long ms) {
         if (ms <= 0) return "00:00";
         return DateUtils.formatElapsedTime(ms / 1000L);
+    }
+
+    private GradientDrawable playerControlsGradient() {
+        return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{
+                Color.argb(0, 4, 4, 10),
+                Color.argb(218, 8, 7, 16),
+                Color.argb(252, 5, 5, 11)
+        });
+    }
+
+    private GradientDrawable cinemaPanel(int fill, int radiusDp, int strokeDp, int stroke) {
+        GradientDrawable panel = new GradientDrawable();
+        panel.setColor(fill);
+        panel.setCornerRadius(dp(radiusDp));
+        if (strokeDp > 0) panel.setStroke(dp(strokeDp), stroke);
+        return panel;
+    }
+
+    private StateListDrawable retryButtonBackground() {
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed},
+                cinemaPanel(Color.rgb(102, 31, 207), 14, 2, Color.WHITE));
+        states.addState(new int[]{android.R.attr.state_focused},
+                cinemaPanel(Color.rgb(126, 45, 238), 14, 3, Color.rgb(208, 177, 255)));
+        states.addState(new int[]{},
+                cinemaPanel(Color.rgb(91, 28, 184), 14, 1, Color.rgb(151, 90, 244)));
+        return states;
+    }
+
+    private TextView transportBadge(String label) {
+        TextView badge = BlofyUi.text(this, label, 11, Color.WHITE);
+        badge.setGravity(Gravity.CENTER);
+        badge.setTextDirection(View.TEXT_DIRECTION_LTR);
+        badge.setFocusable(false);
+        badge.setBackground(cinemaPanel(Color.argb(185, 20, 19, 29), 17, 1, Color.rgb(72, 68, 86)));
+        return badge;
     }
 
     private int dp(int value) { return BlofyUi.dp(this, value); }

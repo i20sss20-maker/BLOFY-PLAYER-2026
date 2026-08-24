@@ -88,78 +88,110 @@ public final class DetailsActivity extends Activity {
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(30), dp(24), dp(30), dp(28));
+        page.setPadding(dp(28), dp(20), dp(28), dp(26));
+        page.setBackground(BlofyUi.screenGradient());
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        Button back = BlofyUi.button(this, "← رجوع", false);
-        back.setOnClickListener(v -> finish());
-        top.addView(back, new LinearLayout.LayoutParams(dp(130), dp(52)));
+        top.addView(BlofyUi.brand(this, "P L A Y E R"), new LinearLayout.LayoutParams(dp(230), dp(60)));
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        top.addView(BlofyUi.brand(this, "P L A Y E R"), new LinearLayout.LayoutParams(dp(230), dp(64)));
-        page.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));
+        Button back = BlofyUi.button(this, "رجوع  ←", false);
+        back.setOnClickListener(v -> finish());
+        top.addView(back, new LinearLayout.LayoutParams(dp(132), dp(48)));
+        page.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(66)));
 
-        LinearLayout hero = new LinearLayout(this);
-        hero.setOrientation(LinearLayout.HORIZONTAL);
-        hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(26), dp(24), dp(26), dp(24));
-        hero.setBackground(BlofyUi.panel(this, Color.argb(235, 11, 16, 26), 8, Color.rgb(50, 58, 78)));
+        FrameLayout hero = new FrameLayout(this);
+        hero.setClipToOutline(true);
+        hero.setBackground(BlofyUi.panel(this, BlofyUi.PANEL, 18, BlofyUi.STROKE));
 
-        ImageView poster = new ImageView(this);
-        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        images.load(poster, detail.image.isEmpty() ? item.image : detail.image);
-        hero.addView(poster, new LinearLayout.LayoutParams(dp(250), dp(360)));
+        ImageView backdrop = new ImageView(this);
+        backdrop.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        String heroImage = detail.backdrop.isEmpty() ? item.backdrop : detail.backdrop;
+        if (heroImage.isEmpty()) heroImage = detail.image.isEmpty() ? item.image : detail.image;
+        images.load(backdrop, heroImage);
+        hero.addView(backdrop, match());
+
+        View scrim = new View(this);
+        scrim.setBackground(BlofyUi.heroScrim());
+        hero.addView(scrim, match());
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
-        info.setPadding(dp(30), 0, dp(10), 0);
-        TextView title = BlofyUi.title(this, detail.name.isEmpty() ? item.name : detail.name, 30);
-        title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        title.setTextDirection(View.TEXT_DIRECTION_LTR);
-        info.addView(title);
+        info.setGravity(Gravity.CENTER_VERTICAL);
+        info.setPadding(dp(38), dp(24), dp(18), dp(24));
+        info.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
-        TextView meta = BlofyUi.text(this, join(detail.year, detail.genre,
-                detail.rating.isEmpty() ? "" : "★ " + detail.rating, detail.duration), 14, BlofyUi.PURPLE_LIGHT);
-        meta.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        meta.setTextDirection(View.TEXT_DIRECTION_LTR);
-        info.addView(meta);
+        TextView eyebrow = BlofyUi.title(this,
+                "series".equals(detail.type) ? "مسلسل مميز" : "فيلم مميز", 14);
+        eyebrow.setTextColor(BlofyUi.PURPLE_LIGHT);
+        eyebrow.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        info.addView(eyebrow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
+
+        TextView title = BlofyUi.title(this, detail.name.isEmpty() ? item.name : detail.name, 36);
+        title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        title.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+        title.setMaxLines(2);
+        info.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(90)));
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        chips.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        addMetaChip(chips, detail.year);
+        addMetaChip(chips, detail.genre);
+        addMetaChip(chips, detail.rating.isEmpty() ? "" : "★ " + detail.rating);
+        addMetaChip(chips, detail.duration);
+        info.addView(chips, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
 
         TextView description = BlofyUi.text(this,
                 detail.description.isEmpty() ? "لا يوجد وصف متاح." : detail.description,
-                15, BlofyUi.MUTED);
-        description.setGravity(Gravity.LEFT | Gravity.TOP);
-        description.setMaxLines(7);
+                15, Color.rgb(219, 216, 226));
+        description.setGravity(Gravity.RIGHT | Gravity.TOP);
+        description.setTextDirection(View.TEXT_DIRECTION_RTL);
+        description.setLineSpacing(0, 1.15f);
+        description.setMaxLines(6);
         LinearLayout.LayoutParams descriptionParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
-        descriptionParams.topMargin = dp(12);
+        descriptionParams.topMargin = dp(8);
         info.addView(description, descriptionParams);
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        actions.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         Button primary = BlofyUi.button(this,
-                "series".equals(detail.type) ? "▶  مشاهدة المواسم" : "▶  تشغيل الفيلم", true);
+                "series".equals(detail.type) ? "▶  المواسم والحلقات" : "▶  شاهد الآن", true);
         primary.setOnClickListener(v -> {
             if ("series".equals(detail.type)) showSeasons(detail);
             else play(detail.id, detail.name, "movies", detail.extension);
         });
-        actions.addView(primary, new LinearLayout.LayoutParams(dp(265), dp(58)));
-        Button favorite = BlofyUi.button(this, "★  المفضلة", false);
+        actions.addView(primary, new LinearLayout.LayoutParams(dp(245), dp(56)));
+        Button favorite = BlofyUi.button(this, "♡  أضف للمفضلة", false);
         favorite.setOnClickListener(v -> {
             database.toggleFavorite(item.type, item.id);
             ToastBridge.show(this, "تم تحديث المفضلة");
         });
-        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(180), dp(58));
+        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(190), dp(56));
         favoriteParams.leftMargin = dp(12);
         actions.addView(favorite, favoriteParams);
-        info.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(70)));
+        info.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(66)));
 
-        hero.addView(info, new LinearLayout.LayoutParams(0, dp(360), 1));
+        FrameLayout.LayoutParams infoParams = new FrameLayout.LayoutParams(dp(680),
+                ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        hero.addView(info, infoParams);
         LinearLayout.LayoutParams heroParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
-        heroParams.topMargin = dp(12);
+        heroParams.topMargin = dp(8);
         page.addView(hero, heroParams);
         root.addView(page, match());
         primary.requestFocus();
+    }
+
+    private void addMetaChip(LinearLayout row, String value) {
+        if (value == null || value.trim().isEmpty()) return;
+        TextView chip = BlofyUi.chip(this, value.trim());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30));
+        params.rightMargin = dp(7);
+        row.addView(chip, params);
     }
 
     private void showSeasons(BlofyModels.Detail detail) {
@@ -167,31 +199,39 @@ public final class DetailsActivity extends Activity {
         root.removeAllViews();
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(26), dp(22), dp(26), dp(26));
+        page.setPadding(dp(28), dp(20), dp(28), dp(26));
+        page.setBackground(BlofyUi.screenGradient());
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        Button back = BlofyUi.button(this, "← التفاصيل", false);
-        back.setOnClickListener(v -> showDetail(detail));
-        top.addView(back, new LinearLayout.LayoutParams(dp(150), dp(52)));
-        TextView title = BlofyUi.title(this, detail.name, 24);
+        top.addView(BlofyUi.brand(this, "P L A Y E R"), new LinearLayout.LayoutParams(dp(230), dp(58)));
+        TextView title = BlofyUi.title(this, detail.name + "   •   المواسم والحلقات", 23);
         title.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        title.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         top.addView(title, new LinearLayout.LayoutParams(0, dp(58), 1));
-        page.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(68)));
+        Button back = BlofyUi.button(this, "التفاصيل  ←", false);
+        back.setOnClickListener(v -> showDetail(detail));
+        top.addView(back, new LinearLayout.LayoutParams(dp(150), dp(48)));
+        page.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(66)));
 
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.HORIZONTAL);
+        body.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
 
         RecyclerView seasons = new RecyclerView(this);
         seasons.setLayoutManager(new LinearLayoutManager(this));
         seasons.setItemAnimator(null);
-        seasons.setBackground(BlofyUi.panel(this, Color.rgb(11, 17, 27), 5, Color.rgb(50, 58, 76)));
+        seasons.setPadding(dp(10), dp(10), dp(10), dp(10));
+        seasons.setClipToPadding(false);
+        seasons.setBackground(BlofyUi.panel(this, Color.argb(225, 12, 10, 23), 16, BlofyUi.STROKE));
 
         RecyclerView episodes = new RecyclerView(this);
         episodes.setLayoutManager(new LinearLayoutManager(this));
         episodes.setItemAnimator(null);
         episodes.setItemViewCacheSize(12);
+        episodes.setPadding(dp(6), 0, dp(6), 0);
+        episodes.setClipToPadding(false);
         EpisodeAdapter episodeAdapter = new EpisodeAdapter(detail.name);
         episodes.setAdapter(episodeAdapter);
 
@@ -201,9 +241,9 @@ public final class DetailsActivity extends Activity {
         });
         seasons.setAdapter(seasonAdapter);
 
-        body.addView(seasons, new LinearLayout.LayoutParams(dp(285), ViewGroup.LayoutParams.MATCH_PARENT));
+        body.addView(seasons, new LinearLayout.LayoutParams(dp(270), ViewGroup.LayoutParams.MATCH_PARENT));
         LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
-        ep.leftMargin = dp(12);
+        ep.leftMargin = dp(16);
         body.addView(episodes, ep);
         page.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         root.addView(page, match());
@@ -273,20 +313,33 @@ public final class DetailsActivity extends Activity {
     private final class SeasonAdapter extends RecyclerView.Adapter<SeasonAdapter.Holder> {
         private final List<BlofyModels.Season> rows;
         private final SeasonListener listener;
+        private int selected = 0;
         SeasonAdapter(List<BlofyModels.Season> rows, SeasonListener listener) {
             this.rows = rows == null ? new ArrayList<>() : rows;
             this.listener = listener;
         }
         @Override public Holder onCreateViewHolder(ViewGroup parent, int viewType) {
             Button button = BlofyUi.button(parent.getContext(), "", false);
-            button.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-            button.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+            button.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+            button.setTextDirection(View.TEXT_DIRECTION_RTL);
+            RecyclerView.LayoutParams params = new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
+            params.setMargins(dp(3), dp(4), dp(3), dp(4));
+            button.setLayoutParams(params);
             return new Holder(button);
         }
         @Override public void onBindViewHolder(Holder holder, int position) {
             BlofyModels.Season season = rows.get(position);
-            holder.button.setText("Season " + season.number + "   •   " + season.episodes.size() + " حلقة");
-            holder.button.setOnClickListener(v -> listener.selected(season));
+            holder.button.setText("الموسم " + season.number + "   •   " + season.episodes.size() + " حلقة");
+            holder.button.setBackground(BlofyUi.focusDrawable(DetailsActivity.this,
+                    position == selected ? Color.rgb(55, 20, 103) : Color.TRANSPARENT,
+                    BlofyUi.PANEL_SOFT, BlofyUi.PURPLE_LIGHT));
+            holder.button.setOnClickListener(v -> {
+                int old = selected;
+                selected = holder.getBindingAdapterPosition();
+                if (old >= 0) notifyItemChanged(old);
+                if (selected >= 0) notifyItemChanged(selected);
+                listener.selected(season);
+            });
         }
         @Override public int getItemCount() { return rows.size(); }
         final class Holder extends RecyclerView.ViewHolder {
@@ -310,17 +363,19 @@ public final class DetailsActivity extends Activity {
             card.setFocusable(true);
             card.setClickable(true);
             card.setPadding(dp(10), dp(8), dp(12), dp(8));
-            card.setBackground(BlofyUi.focusDrawable(DetailsActivity.this, Color.rgb(14, 20, 30), Color.rgb(61, 43, 90), Color.WHITE));
+            card.setBackground(BlofyUi.focusDrawable(DetailsActivity.this,
+                    Color.argb(220, 14, 12, 26), BlofyUi.PANEL_SOFT, BlofyUi.PURPLE_LIGHT));
             ImageView image = new ImageView(parent.getContext());
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            card.addView(image, new LinearLayout.LayoutParams(dp(180), dp(94)));
-            TextView text = BlofyUi.title(parent.getContext(), "", 14);
-            text.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-            text.setTextDirection(View.TEXT_DIRECTION_LTR);
-            LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, dp(94), 1);
+            card.addView(image, new LinearLayout.LayoutParams(dp(210), dp(104)));
+            TextView text = BlofyUi.title(parent.getContext(), "", 15);
+            text.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+            text.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+            text.setMaxLines(2);
+            LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, dp(104), 1);
             textParams.leftMargin = dp(16);
             card.addView(text, textParams);
-            RecyclerView.LayoutParams params = new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(112));
+            RecyclerView.LayoutParams params = new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(124));
             params.setMargins(dp(5), dp(4), dp(5), dp(4));
             card.setLayoutParams(params);
             return new Holder(card, image, text);
@@ -328,7 +383,8 @@ public final class DetailsActivity extends Activity {
         @Override public void onBindViewHolder(Holder holder, int position) {
             BlofyModels.Episode episode = rows.get(position);
             String name = episode.title == null || episode.title.isEmpty() ? "Episode " + episode.number : episode.title;
-            holder.text.setText("" + episode.number + "   " + name + (episode.duration.isEmpty() ? "" : "   •   " + episode.duration));
+            holder.text.setText("الحلقة " + episode.number + "   •   " + name
+                    + (episode.duration.isEmpty() ? "" : "\n" + episode.duration));
             images.load(holder.image, episode.image);
             holder.card.setOnClickListener(v -> play(episode.id, seriesName + " — " + name, "episode", episode.extension));
         }

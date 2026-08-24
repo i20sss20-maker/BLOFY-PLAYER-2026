@@ -2,6 +2,7 @@ package tv.blofy.player;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -81,6 +82,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final ExecutorService cronetExecutor = Executors.newCachedThreadPool();
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hideTitle = () -> {
+        if (titleView != null) titleView.setVisibility(View.GONE);
+    };
 
     private final Runnable playbackTimeout = () -> {
         if (player == null || firstFrameRendered) return;
@@ -185,8 +189,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         root.setBackgroundColor(Color.BLACK);
 
         playerView = new PlayerView(this);
-        playerView.setUseController(true);
-        playerView.setControllerAutoShow(true);
+        boolean useMedia3Controller = !isLive();
+        playerView.setUseController(useMedia3Controller);
+        playerView.setControllerAutoShow(useMedia3Controller);
         playerView.setControllerShowTimeoutMs(4500);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
         playerView.setKeepScreenOn(true);
@@ -194,55 +199,81 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         root.addView(playerView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
-        titleView = new TextView(this);
+        titleView = BlofyUi.title(this, title, 20);
         titleView.setText(title);
-        titleView.setTextColor(Color.WHITE);
-        titleView.setTextSize(17);
-        titleView.setTypeface(titleView.getTypeface(), android.graphics.Typeface.BOLD);
         titleView.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        titleView.setPadding(dp(24), dp(12), dp(24), dp(12));
-        titleView.setBackgroundColor(Color.argb(175, 8, 7, 14));
-        root.addView(titleView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58), Gravity.TOP));
+        titleView.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+        titleView.setPadding(dp(32), dp(10), dp(32), dp(24));
+        titleView.setShadowLayer(dp(5), 0, dp(2), Color.BLACK);
+        GradientDrawable titleGradient = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{
+                        Color.argb(235, 6, 3, 12),
+                        Color.argb(190, 25, 12, 45),
+                        Color.argb(85, 34, 15, 57),
+                        Color.TRANSPARENT
+                });
+        titleView.setBackground(titleGradient);
+        FrameLayout.LayoutParams titleParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(96), Gravity.TOP);
+        root.addView(titleView, titleParams);
 
         progress = new ProgressBar(this);
-        progress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.rgb(154, 88, 255)));
+        progress.setIndeterminateTintList(BlofyUi.progressColors());
         root.addView(progress, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
-
-        errorPanel = new LinearLayout(this);
-        errorPanel.setOrientation(LinearLayout.VERTICAL);
-        errorPanel.setGravity(Gravity.CENTER);
-        errorPanel.setPadding(dp(24), dp(20), dp(24), dp(20));
-        errorPanel.setBackgroundColor(Color.argb(225, 10, 9, 18));
-        errorPanel.setVisibility(View.GONE);
-        TextView errorTitle = new TextView(this);
-        errorTitle.setText("تعذر تشغيل المصدر");
-        errorTitle.setTextColor(Color.WHITE);
-        errorTitle.setTextSize(21);
-        errorTitle.setTypeface(errorTitle.getTypeface(), android.graphics.Typeface.BOLD);
-        errorTitle.setGravity(Gravity.CENTER);
-        errorPanel.addView(errorTitle);
-        errorText = new TextView(this);
-        errorText.setTextColor(Color.rgb(184, 181, 197));
-        errorText.setTextSize(14);
-        errorText.setGravity(Gravity.CENTER);
-        errorText.setPadding(0, dp(10), 0, dp(14));
-        errorPanel.addView(errorText, new LinearLayout.LayoutParams(dp(560), ViewGroup.LayoutParams.WRAP_CONTENT));
-        retryButton = new Button(this);
-        retryButton.setText("إعادة الاتصال");
-        retryButton.setTextColor(Color.WHITE);
-        retryButton.setTextSize(15);
-        retryButton.setAllCaps(false);
-        retryButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(124, 50, 255)));
-        retryButton.setOnClickListener(view -> manualRetry());
-        errorPanel.addView(retryButton, new LinearLayout.LayoutParams(dp(240), dp(54)));
-        root.addView(errorPanel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
 
         if (isLive()) {
             liveOverlay = new LiveChannelOverlay(this, this::switchLiveChannel);
-            root.addView(liveOverlay.view(), new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            View overlayView = liveOverlay.view();
+            overlayView.setElevation(dp(20));
+            root.addView(overlayView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT));
         }
+
+        // This full-screen layer is deliberately added last so a fatal error always
+        // wins the focus and z-order over the player chrome and the channel drawer.
+        errorPanel = new LinearLayout(this);
+        errorPanel.setOrientation(LinearLayout.VERTICAL);
+        errorPanel.setGravity(Gravity.CENTER);
+        errorPanel.setPadding(dp(28), dp(28), dp(28), dp(28));
+        errorPanel.setBackgroundColor(Color.argb(205, 3, 2, 8));
+        errorPanel.setClickable(true);
+        errorPanel.setElevation(dp(40));
+        errorPanel.setVisibility(View.GONE);
+
+        LinearLayout modal = new LinearLayout(this);
+        modal.setOrientation(LinearLayout.VERTICAL);
+        modal.setGravity(Gravity.CENTER);
+        modal.setPadding(dp(34), dp(28), dp(34), dp(30));
+        modal.setBackground(BlofyUi.panel(this, Color.rgb(22, 13, 35), 12, Color.rgb(132, 87, 194)));
+
+        TextView errorEyebrow = BlofyUi.text(this, "BLOFY PLAYER", 11, BlofyUi.PURPLE_LIGHT);
+        errorEyebrow.setGravity(Gravity.CENTER);
+        errorEyebrow.setTextDirection(View.TEXT_DIRECTION_LTR);
+        modal.addView(errorEyebrow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+
+        TextView errorTitle = BlofyUi.title(this, "تعذر تشغيل المصدر", 23);
+        errorTitle.setGravity(Gravity.CENTER);
+        modal.addView(errorTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+
+        errorText = BlofyUi.text(this, "", 14, BlofyUi.MUTED);
+        errorText.setGravity(Gravity.CENTER);
+        errorText.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+        errorText.setPadding(dp(8), dp(8), dp(8), dp(18));
+        modal.addView(errorText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        retryButton = BlofyUi.button(this, "إعادة الاتصال", true);
+        retryButton.setOnClickListener(view -> manualRetry());
+        LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(dp(250), dp(58));
+        retryParams.topMargin = dp(4);
+        modal.addView(retryButton, retryParams);
+
+        errorPanel.addView(modal, new LinearLayout.LayoutParams(dp(650), ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(errorPanel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
     }
 
@@ -412,6 +443,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (!isLive() || media == null || media.id.equals(id)) return;
         playbackHandler.removeCallbacks(playbackTimeout);
         playbackHandler.removeCallbacks(markPlaybackStable);
+        playbackHandler.removeCallbacks(hideTitle);
         id = media.id;
         title = media.name;
         extension = configuredExtension(PlaybackPolicy.normalizeExtension(media.extension, "ts"));
@@ -476,7 +508,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             Log.i(TAG, "ready kind=" + kind + " ext=" + extension + " ms=" + readyMs
                     + " firstFrame=" + firstFrameRendered + " transport=" + activeTransportName());
             if (firstFrameRendered) progress.setVisibility(View.GONE);
-            titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
+            playbackHandler.removeCallbacks(hideTitle);
+            playbackHandler.postDelayed(hideTitle, 2500);
             return;
         }
         if (playbackState == Player.STATE_ENDED) {
@@ -533,6 +566,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private void releasePlayer() {
         playbackHandler.removeCallbacks(playbackTimeout);
         playbackHandler.removeCallbacks(markPlaybackStable);
+        playbackHandler.removeCallbacks(hideTitle);
         warmLiveSwitchPending = false;
         if (player == null) return;
         savePosition();
@@ -555,12 +589,31 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        // Modal actions must receive DPAD_CENTER before the live-player shortcut.
+        if (errorPanel != null && errorPanel.getVisibility() == View.VISIBLE) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+                finish();
+                return true;
+            }
+            return super.dispatchKeyEvent(event);
+        }
+
+        // While the drawer is visible, its RecyclerView owns DPAD/OK. Only Back is
+        // handled here so focus can never leak to PlayerView behind the scrim.
+        if (liveOverlay != null && liveOverlay.isVisible()) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+                liveOverlay.hide();
+                playerView.requestFocus();
+                return true;
+            }
+            return super.dispatchKeyEvent(event);
+        }
+
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             switch (event.getKeyCode()) {
                 case KeyEvent.KEYCODE_BACK:
-                    if (liveOverlay != null && liveOverlay.isVisible()) {
-                        liveOverlay.hide(); playerView.requestFocus(); return true;
-                    }
                     finish(); return true;
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:

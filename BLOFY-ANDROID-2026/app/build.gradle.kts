@@ -16,8 +16,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 313
-        versionName = "2026.08.24.5-vod-vlc"
+        versionCode = 314
+        versionName = "2026.08.25.1-cinematic-ui"
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 
