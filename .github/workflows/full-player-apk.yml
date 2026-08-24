@@ -40,23 +40,32 @@ jobs:
       - name: Checkout BLOFY
         uses: actions/checkout@v4
 
-      - name: Apply final BLOFY code passes
+      - name: Prepare BLOFY source
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/apply_sync_fix.py
-          python3 tools/apply_7max_ui.py
-          python3 tools/apply_final_stabilization.py
-          python3 tools/apply_final_tv_theme.py
-          python3 tools/apply_lint_fixes.py
-          python3 tools/apply_runtime_overhaul.py
-          grep -q '2026.08.23.12-final-tv' BLOFY-ANDROID-2026/app/build.gradle.kts
-          grep -q 'BLOFY LIVE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q '24_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'OnBackPressedDispatcher' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q '@OptIn(markerClass = UnstableApi.class)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
-          grep -q 'sort_order ASC' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
+          BRANCH_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          echo "Building branch: ${BRANCH_NAME}"
+          if [ "${BRANCH_NAME}" = "ui/sevenmax-blofy-overhaul" ]; then
+            echo "Overhaul branch: build committed source directly; legacy rewrite passes are disabled."
+            test -f BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+            grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+            grep -q 'POSTER_PAGE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+          else
+            python3 tools/apply_sync_fix.py
+            python3 tools/apply_7max_ui.py
+            python3 tools/apply_final_stabilization.py
+            python3 tools/apply_final_tv_theme.py
+            python3 tools/apply_lint_fixes.py
+            python3 tools/apply_runtime_overhaul.py
+            grep -q '2026.08.23.12-final-tv' BLOFY-ANDROID-2026/app/build.gradle.kts
+            grep -q 'BLOFY LIVE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+            grep -q '24_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+            grep -q 'OnBackPressedDispatcher' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+            grep -q '@OptIn(markerClass = UnstableApi.class)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+            grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+            grep -q 'sort_order ASC' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
+          fi
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -217,7 +226,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-FINAL-TV-FFMPEG-APK",
-            "version": "2026.08.24.3-runtime-overhaul"
+            "version": "2026.08.24.4-sevenmax-blofy-overhaul"
           }
           EOF
           git add .ci/full-player-status.json
