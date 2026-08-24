@@ -42,11 +42,11 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void recoveryUsesCronetFirstThenHttpThenAlternateFormat() {
-        assertTrue(PlaybackPolicy.useCronet(0));
-        assertFalse(PlaybackPolicy.useCronet(1));
-        assertTrue(PlaybackPolicy.useCronet(2));
-        assertFalse(PlaybackPolicy.useCronet(3));
+    public void recoveryUsesHttpFirstThenCronetThenAlternateFormat() {
+        assertFalse(PlaybackPolicy.useCronet(0));
+        assertTrue(PlaybackPolicy.useCronet(1));
+        assertFalse(PlaybackPolicy.useCronet(2));
+        assertTrue(PlaybackPolicy.useCronet(3));
 
         assertTrue(PlaybackPolicy.shouldRetrySameFormat(1));
         assertFalse(PlaybackPolicy.shouldRetrySameFormat(2));
