@@ -64,6 +64,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private TextView titleView;
     private Button retryButton;
     private ExoPlayer player;
+    private LiveChannelOverlay liveOverlay;
 
     private String id;
     private String url;
@@ -245,6 +246,13 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
+
+        if (isLive()) {
+            liveOverlay = new LiveChannelOverlay(this, this::switchLiveChannel);
+            root.addView(liveOverlay.view(), new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
         setContentView(root);
     }
 
@@ -394,6 +402,24 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         errorPanel.setVisibility(View.GONE);
         playerView.requestFocus();
         schedulePlaybackTimeout();
+    }
+
+    private void switchLiveChannel(BlofyModels.Media media) {
+        if (!isLive() || media == null || media.id.equals(id)) return;
+        playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
+        releasePlayer();
+        id = media.id;
+        title = media.name;
+        extension = PlaybackPolicy.normalizeExtension(media.extension, "ts");
+        url = null;
+        resumePosition = 0;
+        recoveryStep = preferredRecoveryStep();
+        titleView.setText(title);
+        titleView.setVisibility(View.VISIBLE);
+        progress.setVisibility(View.VISIBLE);
+        errorPanel.setVisibility(View.GONE);
+        resolvePlaybackLink();
     }
 
     private void recoverFromFailure(String reason) {
@@ -561,8 +587,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             switch (event.getKeyCode()) {
                 case KeyEvent.KEYCODE_BACK:
+                    if (liveOverlay != null && liveOverlay.isVisible()) {
+                        liveOverlay.hide();
+                        playerView.requestFocus();
+                        return true;
+                    }
                     finish();
                     return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                    if (isLive() && liveOverlay != null && !liveOverlay.isVisible()) {
+                        liveOverlay.show(id);
+                        return true;
+                    }
+                    break;
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                     if (player != null) {
                         if (player.isPlaying()) player.pause(); else player.play();
@@ -583,12 +621,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     @Override
     public void onBackPressed() {
+        if (liveOverlay != null && liveOverlay.isVisible()) {
+            liveOverlay.hide();
+            playerView.requestFocus();
+            return;
+        }
         finish();
     }
 
     @Override
     protected void onDestroy() {
         playbackHandler.removeCallbacksAndMessages(null);
+        if (liveOverlay != null) liveOverlay.close();
         network.shutdownNow();
         cronetExecutor.shutdownNow();
         super.onDestroy();
