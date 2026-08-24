@@ -31,8 +31,8 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void fastStartupTimeoutsAreBounded() {
-        assertEquals(6_000, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(8_000, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(3_500, PlaybackPolicy.startupTimeoutMs(0));
+        assertEquals(5_500, PlaybackPolicy.startupTimeoutMs(1));
     }
 
     @Test
