@@ -15,6 +15,8 @@ on:
       - "tools/apply_7max_ui.py"
       - "tools/apply_final_stabilization.py"
       - "tools/apply_final_tv_theme.py"
+      - "tools/apply_lint_fixes.py"
+      - "tools/apply_runtime_overhaul.py"
 
 permissions:
   contents: write
@@ -46,9 +48,15 @@ jobs:
           python3 tools/apply_7max_ui.py
           python3 tools/apply_final_stabilization.py
           python3 tools/apply_final_tv_theme.py
+          python3 tools/apply_lint_fixes.py
+          python3 tools/apply_runtime_overhaul.py
           grep -q '2026.08.23.12-final-tv' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'BLOFY LIVE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q '120_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q '24_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'OnBackPressedDispatcher' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q '@OptIn(markerClass = UnstableApi.class)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+          grep -q 'sort_order ASC' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -140,7 +148,20 @@ jobs:
 
       - name: Run Android lint
         working-directory: BLOFY-ANDROID-2026
-        run: ./gradlew --no-daemon lintDebug
+        shell: bash
+        run: |
+          set +e
+          ./gradlew --no-daemon lintDebug
+          rc=$?
+          REPORT="app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt"
+          echo "===== FULL ANDROID LINT REPORT ====="
+          if [ -f "$REPORT" ]; then
+            cat "$REPORT"
+          else
+            echo "Lint text report not found at $REPORT"
+          fi
+          echo "===== END FULL ANDROID LINT REPORT ====="
+          exit $rc
 
       - name: Verify final APK
         shell: bash
@@ -196,7 +217,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-FINAL-TV-FFMPEG-APK",
-            "version": "2026.08.23.12-final-tv-ffmpeg"
+            "version": "2026.08.24.3-runtime-overhaul"
           }
           EOF
           git add .ci/full-player-status.json

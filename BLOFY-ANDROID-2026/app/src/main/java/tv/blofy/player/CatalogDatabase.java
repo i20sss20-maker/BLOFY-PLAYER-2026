@@ -11,15 +11,17 @@ import java.util.List;
 
 final class CatalogDatabase extends SQLiteOpenHelper {
     private static final String NAME = "blofy_catalog.db";
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
 
     CatalogDatabase(Context context) { super(context.getApplicationContext(), NAME, null, VERSION); }
 
     @Override
     public void onCreate(SQLiteDatabase database) {
-        database.execSQL("CREATE TABLE categories(type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(type,id))");
-        database.execSQL("CREATE TABLE media(type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,image TEXT,backdrop TEXT,category_id TEXT,rating TEXT,year TEXT,extension TEXT,PRIMARY KEY(type,id))");
-        database.execSQL("CREATE INDEX media_type_category ON media(type,category_id,name)");
+        database.execSQL("CREATE TABLE categories(type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(type,id))");
+        database.execSQL("CREATE TABLE media(type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,image TEXT,backdrop TEXT,category_id TEXT,rating TEXT,year TEXT,extension TEXT,sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(type,id))");
+        database.execSQL("CREATE INDEX media_type_category_order ON media(type,category_id,sort_order)");
+        database.execSQL("CREATE INDEX media_type_order ON media(type,sort_order)");
+        database.execSQL("CREATE INDEX media_name_search ON media(type,name)");
         database.execSQL("CREATE TABLE favorites(type TEXT NOT NULL,id TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(type,id))");
         database.execSQL("CREATE TABLE history(type TEXT NOT NULL,id TEXT NOT NULL,watched_at INTEGER NOT NULL,PRIMARY KEY(type,id))");
         database.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
@@ -28,15 +30,23 @@ final class CatalogDatabase extends SQLiteOpenHelper {
     @Override
     public void onUpgrade(SQLiteDatabase database, int oldVersion, int newVersion) {
         if (oldVersion < 3) {
-            // v3 invalidates catalogs that could contain Live only after an interrupted sync.
-            // Favorites/history remain intact; only provider catalog data is refreshed.
             database.delete("categories", null, null);
             database.delete("media", null, null);
-            ContentValues values = new ContentValues();
-            values.put("key", "sync_state");
-            values.put("value", "upgrade_required");
-            database.insertWithOnConflict("metadata", null, values, SQLiteDatabase.CONFLICT_REPLACE);
         }
+        if (oldVersion < 4) {
+            try { database.execSQL("ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"); } catch (Exception ignored) {}
+            try { database.execSQL("ALTER TABLE media ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"); } catch (Exception ignored) {}
+            try { database.execSQL("DROP INDEX IF EXISTS media_type_category"); } catch (Exception ignored) {}
+            database.execSQL("CREATE INDEX IF NOT EXISTS media_type_category_order ON media(type,category_id,sort_order)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS media_type_order ON media(type,sort_order)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS media_name_search ON media(type,name)");
+            database.delete("categories", null, null);
+            database.delete("media", null, null);
+        }
+        ContentValues values = new ContentValues();
+        values.put("key", "sync_state");
+        values.put("value", "upgrade_required");
+        database.insertWithOnConflict("metadata", null, values, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     void beginFreshImport() {
@@ -50,7 +60,9 @@ final class CatalogDatabase extends SQLiteOpenHelper {
     }
 
     void saveCategories(List<BlofyModels.Category> categories) {
+        if (categories == null || categories.isEmpty()) return;
         SQLiteDatabase database = getWritableDatabase();
+        long order = nextOrder(database, "categories", categories.get(0).type);
         database.beginTransaction();
         try {
             for (BlofyModels.Category category : categories) {
@@ -58,14 +70,17 @@ final class CatalogDatabase extends SQLiteOpenHelper {
                 values.put("type", category.type);
                 values.put("id", category.id);
                 values.put("name", category.name);
-                database.insertWithOnConflict("categories", null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                values.put("sort_order", order++);
+                database.insertWithOnConflict("categories", null, values, SQLiteDatabase.CONFLICT_IGNORE);
             }
             database.setTransactionSuccessful();
         } finally { database.endTransaction(); }
     }
 
     void saveMedia(List<BlofyModels.Media> items) {
+        if (items == null || items.isEmpty()) return;
         SQLiteDatabase database = getWritableDatabase();
+        long order = nextOrder(database, "media", items.get(0).type);
         database.beginTransaction();
         try {
             for (BlofyModels.Media item : items) {
@@ -79,15 +94,22 @@ final class CatalogDatabase extends SQLiteOpenHelper {
                 values.put("rating", item.rating);
                 values.put("year", item.year);
                 values.put("extension", item.extension);
-                database.insertWithOnConflict("media", null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                values.put("sort_order", order++);
+                database.insertWithOnConflict("media", null, values, SQLiteDatabase.CONFLICT_IGNORE);
             }
             database.setTransactionSuccessful();
         } finally { database.endTransaction(); }
     }
 
+    private long nextOrder(SQLiteDatabase database, String table, String type) {
+        try (Cursor cursor = database.rawQuery("SELECT COALESCE(MAX(sort_order),-1)+1 FROM " + table + " WHERE type=?", new String[]{type})) {
+            return cursor.moveToFirst() ? cursor.getLong(0) : 0L;
+        }
+    }
+
     List<BlofyModels.Category> categories(String type) {
         List<BlofyModels.Category> result = new ArrayList<>();
-        try (Cursor cursor = getReadableDatabase().query("categories", new String[]{"id", "name"}, "type=?", new String[]{type}, null, null, "name COLLATE NOCASE")) {
+        try (Cursor cursor = getReadableDatabase().query("categories", new String[]{"id", "name"}, "type=?", new String[]{type}, null, null, "sort_order ASC")) {
             while (cursor.moveToNext()) result.add(new BlofyModels.Category(cursor.getString(0), cursor.getString(1), type));
         }
         return result;
@@ -104,7 +126,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         if (category != null && !category.isEmpty()) { where.add("m.category_id=?"); args.add(category); }
         if (search != null && !search.trim().isEmpty()) { where.add("m.name LIKE ?"); args.add("%" + search.trim() + "%"); }
         if (!where.isEmpty()) sql.append("WHERE ").append(android.text.TextUtils.join(" AND ", where)).append(' ');
-        sql.append(historyOnly ? "ORDER BY h.watched_at DESC " : "ORDER BY m.name COLLATE NOCASE ");
+        sql.append(historyOnly ? "ORDER BY h.watched_at DESC " : "ORDER BY m.sort_order ASC ");
         sql.append("LIMIT ? OFFSET ?");
         args.add(String.valueOf(Math.max(1, limit)));
         args.add(String.valueOf(Math.max(0, offset)));
