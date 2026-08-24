@@ -5,6 +5,8 @@ ROOT = Path('BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player')
 
 def req(text, old, new, label):
     if old not in text:
+        if new in text:
+            return text
         raise SystemExit(f'{label}: pattern not found')
     return text.replace(old, new, 1)
 
@@ -78,7 +80,6 @@ s = req(s,
 '''        playbackHandler.postDelayed(
                 playbackTimeout,
                 isLive() ? (recoveryStep == 0 ? 5_500L : 8_000L) : 15_000L);''', 'startup timeout')
-# final stabilization load-control block
 s = req(s,
 '''        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
@@ -106,7 +107,6 @@ s = req(s,
         // of providers expose MKV/MP4 URLs whose actual response/container differs.
         // Media3 sniffing is more reliable and begins playback sooner.
         if (isLive() && mimeType != null) itemBuilder.setMimeType(mimeType);''', 'vod sniffing')
-# buffering watchdog after stabilization: avoid repeatedly re-arming a 15s timeout on VOD
 s = s.replace('playbackHandler.postDelayed(playbackTimeout, isLive() ? 15_000L : 25_000L);',
               'playbackHandler.postDelayed(playbackTimeout, isLive() ? 9_000L : 18_000L);')
 p.write_text(s, encoding='utf-8')
@@ -117,13 +117,11 @@ p.write_text(s, encoding='utf-8')
 # ---------------------------------------------------------------------------
 p = ROOT / 'SevenMaxActivity.java'
 s = p.read_text(encoding='utf-8')
-# imports for preview player controller do not require Media3 imports here.
 s = req(s,
 '''    private String screen = "home";''',
 '''    private String screen = "home";
     private LivePreviewController livePreview;''', 'preview field')
 
-# Replace static logo preview with actual muted mini player.
 old_preview = '''        ImageView logo = new ImageView(this);
         logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         preview.addView(logo, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(190)));'''
@@ -136,7 +134,6 @@ s = req(s,
 '''            livePreview.preview(item);
             play.setEnabled(true);''', 'live preview selection')
 
-# Add paging listeners after adapters are attached.
 s = req(s,
 '''        channels.setAdapter(liveAdapter);''',
 '''        channels.setAdapter(liveAdapter);
@@ -187,14 +184,12 @@ new_poster_head = '''    private final class PosterAdapter extends RecyclerView.
         void loadMore(){ if(end)return; List<BlofyModels.Media> more=database.media(type,category,query,fav,hist,PAGE,rows.size()); if(more.size()<PAGE)end=true; if(more.isEmpty())return; int at=rows.size(); rows.addAll(more); notifyItemRangeInserted(at,more.size()); }'''
 s = req(s, old_poster_head, new_poster_head, 'poster paged adapter')
 
-# Fill settings with useful runtime data instead of an almost empty panel.
 s = s.replace('panel.addView(BlofyUi.text(this, "طريقة التشغيل: " + database.metadata("playback_profile", "Media3 + Cronet"), 15, BlofyUi.MUTED));',
 '''panel.addView(BlofyUi.text(this, "طريقة التشغيل: Live مباشر + VOD HTTP/Range + Media3/FFmpeg", 15, BlofyUi.MUTED));
         panel.addView(BlofyUi.text(this, "ترتيب القوائم: نفس ترتيب السيرفر (بدون فرز أبجدي)", 15, BlofyUi.MUTED));
         panel.addView(BlofyUi.text(this, "التحميل: صفحات خفيفة Lazy Loading لتسريع الحركة", 15, BlofyUi.MUTED));
         panel.addView(BlofyUi.text(this, "الصوت: Media3 + FFmpeg Audio Decoder", 15, BlofyUi.MUTED));''')
 
-# release preview with the screen/activity.
 s = s.replace('    @Override protected void onDestroy(){ database.close(); super.onDestroy(); }',
 '''    @Override protected void onDestroy(){ if(livePreview!=null)livePreview.release(); database.close(); super.onDestroy(); }''')
 p.write_text(s, encoding='utf-8')
