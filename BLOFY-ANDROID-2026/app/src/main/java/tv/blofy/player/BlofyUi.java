@@ -19,21 +19,21 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** BLOFY television design system: SevenMax-style information architecture, BLOFY identity. */
+/** BLOFY TV design system: SevenMax-style structure with BLOFY branding. */
 final class BlofyUi {
-    static final int BLACK = Color.rgb(5, 7, 14);
-    static final int NAVY = Color.rgb(9, 14, 29);
-    static final int PANEL = Color.rgb(15, 21, 38);
-    static final int PANEL_ALT = Color.rgb(23, 31, 52);
-    static final int PANEL_SOFT = Color.rgb(31, 39, 63);
-    static final int PURPLE = Color.rgb(112, 65, 246);
-    static final int PURPLE_LIGHT = Color.rgb(171, 137, 255);
-    static final int CYAN = Color.rgb(74, 210, 235);
-    static final int TEXT = Color.rgb(249, 250, 255);
-    static final int MUTED = Color.rgb(171, 181, 205);
+    static final int BLACK = Color.rgb(15, 18, 22);
+    static final int NAVY = Color.rgb(23, 27, 33);
+    static final int PANEL = Color.rgb(34, 39, 46);
+    static final int PANEL_ALT = Color.rgb(43, 49, 58);
+    static final int PANEL_SOFT = Color.rgb(58, 66, 77);
+    static final int PURPLE = Color.rgb(113, 72, 242);
+    static final int PURPLE_LIGHT = Color.rgb(173, 148, 255);
+    static final int CYAN = Color.rgb(64, 205, 218);
+    static final int TEXT = Color.rgb(250, 250, 252);
+    static final int MUTED = Color.rgb(190, 194, 201);
     static final int SUCCESS = Color.rgb(73, 222, 164);
     static final int ERROR = Color.rgb(255, 103, 135);
-    static final int STROKE = Color.rgb(50, 62, 91);
+    static final int STROKE = Color.rgb(83, 91, 101);
 
     private BlofyUi() {}
 
@@ -71,7 +71,7 @@ final class BlofyUi {
         view.setHintTextColor(MUTED);
         view.setTextSize(15);
         view.setPadding(dp(context, 18), 0, dp(context, 18), 0);
-        view.setBackground(focusDrawable(context, PANEL, PANEL_SOFT, PURPLE_LIGHT));
+        view.setBackground(focusDrawable(context, PANEL, PANEL_SOFT, Color.WHITE));
         view.setInputType(numeric ? InputType.TYPE_CLASS_NUMBER : InputType.TYPE_CLASS_TEXT);
         view.setTextDirection(View.TEXT_DIRECTION_RTL);
         view.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
@@ -88,11 +88,11 @@ final class BlofyUi {
         view.setGravity(Gravity.CENTER);
         view.setPadding(dp(context, 16), 0, dp(context, 16), 0);
         view.setBackground(primary
-                ? focusDrawable(context, PURPLE, Color.rgb(132, 82, 255), Color.WHITE)
-                : focusDrawable(context, PANEL_ALT, PANEL_SOFT, PURPLE_LIGHT));
+                ? focusDrawable(context, PANEL_ALT, Color.rgb(70, 74, 86), Color.WHITE)
+                : focusDrawable(context, PANEL, PANEL_SOFT, Color.WHITE));
         view.setFocusable(true);
         view.setStateListAnimator(null);
-        attachScaleFocus(view, 1.035f);
+        attachScaleFocus(view, 1.018f);
         return view;
     }
 
@@ -101,16 +101,16 @@ final class BlofyUi {
         chip.setGravity(Gravity.CENTER);
         chip.setFocusable(true);
         chip.setClickable(true);
-        chip.setBackground(focusDrawable(context, Color.TRANSPARENT, PANEL_SOFT, PURPLE_LIGHT));
+        chip.setBackground(focusDrawable(context, Color.TRANSPARENT, PANEL_SOFT, Color.WHITE));
         chip.setPadding(dp(context, 18), 0, dp(context, 18), 0);
-        attachScaleFocus(chip, 1.025f);
+        attachScaleFocus(chip, 1.012f);
         return chip;
     }
 
     static Drawable panel(Context context, int color, int radiusDp, int strokeColor) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
-        drawable.setCornerRadius(dp(context, radiusDp));
+        drawable.setCornerRadius(dp(context, Math.min(radiusDp, 5)));
         drawable.setStroke(dp(context, 1), strokeColor);
         return drawable;
     }
@@ -119,11 +119,11 @@ final class BlofyUi {
         StateListDrawable states = new StateListDrawable();
         GradientDrawable focus = new GradientDrawable();
         focus.setColor(focused);
-        focus.setCornerRadius(dp(context, 8));
-        focus.setStroke(dp(context, 3), focusStroke);
+        focus.setCornerRadius(dp(context, 4));
+        focus.setStroke(dp(context, 3), Color.WHITE);
         GradientDrawable idle = new GradientDrawable();
         idle.setColor(normal);
-        idle.setCornerRadius(dp(context, 8));
+        idle.setCornerRadius(dp(context, 4));
         idle.setStroke(dp(context, 1), normal == Color.TRANSPARENT ? Color.TRANSPARENT : STROKE);
         states.addState(new int[]{android.R.attr.state_focused}, focus);
         states.addState(new int[]{android.R.attr.state_pressed}, focus);
@@ -136,9 +136,15 @@ final class BlofyUi {
             private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
             @Override public void draw(android.graphics.Canvas canvas) {
                 paint.setShader(new LinearGradient(0, 0, canvas.getWidth(), canvas.getHeight(),
-                        new int[]{Color.rgb(5, 8, 18), Color.rgb(13, 14, 35), Color.rgb(20, 12, 44), Color.rgb(5, 8, 17)},
-                        new float[]{0f, 0.42f, 0.72f, 1f}, Shader.TileMode.CLAMP));
+                        new int[]{Color.rgb(28, 31, 36), Color.rgb(37, 41, 47), Color.rgb(29, 33, 39), Color.rgb(20, 23, 28)},
+                        new float[]{0f, 0.34f, 0.72f, 1f}, Shader.TileMode.CLAMP));
                 canvas.drawRect(getBounds(), paint);
+                paint.setShader(null);
+                paint.setColor(Color.argb(14, 255, 255, 255));
+                int step = Math.max(7, canvas.getWidth() / 180);
+                for (int x = 0; x < canvas.getWidth(); x += step * 5) {
+                    canvas.drawLine(x, 0, x + canvas.getHeight() / 4f, canvas.getHeight(), paint);
+                }
             }
             @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
             @Override public void setColorFilter(android.graphics.ColorFilter filter) { paint.setColorFilter(filter); }
@@ -155,12 +161,12 @@ final class BlofyUi {
         ImageView logo = new ImageView(context);
         logo.setImageResource(R.drawable.blofy_logo);
         logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        row.addView(logo, new LinearLayout.LayoutParams(dp(context, 54), dp(context, 54)));
+        row.addView(logo, new LinearLayout.LayoutParams(dp(context, 48), dp(context, 48)));
 
         LinearLayout labels = new LinearLayout(context);
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setPadding(dp(context, 8), 0, 0, 0);
-        TextView name = title(context, "BLOFY", 19);
+        TextView name = title(context, "BLOFY", 18);
         name.setTextDirection(View.TEXT_DIRECTION_LTR);
         name.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         TextView player = text(context, subtitle == null ? "P L A Y E R" : subtitle, 9, PURPLE_LIGHT);
@@ -175,8 +181,8 @@ final class BlofyUi {
     static void attachScaleFocus(View view, float scale) {
         view.setOnFocusChangeListener((v, focused) -> {
             float target = focused ? scale : 1f;
-            v.animate().scaleX(target).scaleY(target).setDuration(110).start();
-            v.setElevation(focused ? dp(v.getContext(), 10) : 0);
+            v.animate().scaleX(target).scaleY(target).setDuration(80).start();
+            v.setElevation(focused ? dp(v.getContext(), 7) : 0);
         });
     }
 
