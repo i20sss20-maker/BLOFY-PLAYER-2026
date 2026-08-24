@@ -195,3 +195,7 @@ s = s.replace('    @Override protected void onDestroy(){ database.close(); super
 p.write_text(s, encoding='utf-8')
 
 print('BLOFY runtime overhaul applied: provider order, paging, live preview, VOD sniffing, resumable sync')
+
+# Final pass: playback/network hardening must run after the generated runtime code.
+exec(compile(Path('tools/apply_playback_hardening.py').read_text(encoding='utf-8'),
+             'tools/apply_playback_hardening.py', 'exec'))
