@@ -25,8 +25,11 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void unknownExtensionsAreLeftForMedia3Sniffing() {
+    public void vodEbmlContainersAreLeftForMedia3Sniffing() {
+        assertNull(PlaybackPolicy.mimeType("mkv"));
+        assertNull(PlaybackPolicy.mimeType("webm"));
         assertNull(PlaybackPolicy.mimeType("unknown"));
+        assertEquals("video/mp4", PlaybackPolicy.mimeType("mp4"));
     }
 
     @Test
@@ -43,7 +46,6 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void recoveryUsesHttpFirstThenCronetThenAlternateFormat() {
-        // Fast/default path: platform HTTP first, then Cronet, then alternate TS/HLS.
         assertFalse(PlaybackPolicy.useCronet(0));
         assertTrue(PlaybackPolicy.useCronet(1));
         assertFalse(PlaybackPolicy.useCronet(2));
