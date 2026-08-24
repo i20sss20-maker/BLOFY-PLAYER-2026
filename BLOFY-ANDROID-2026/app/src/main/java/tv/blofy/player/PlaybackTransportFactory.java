@@ -16,10 +16,11 @@ import org.chromium.net.CronetEngine;
 
 import java.util.concurrent.Executor;
 
-/** Builds Player1 (Default HTTP) and Player2 (Google Play Services Cronet). */
+/** Builds BLOFY Player1 (platform HTTP) and Player2 (Google Play Services Cronet). */
 @UnstableApi
 final class PlaybackTransportFactory {
     private static final String TAG = "BlofyTransport";
+    private static final String USER_AGENT = "BLOFY-PLAYER/2026 AndroidTV";
     private static volatile CronetEngine cronetEngine;
     private static volatile boolean cronetInstallStarted;
 
@@ -69,6 +70,9 @@ final class PlaybackTransportFactory {
 
         Log.i(TAG, "transport=default-http");
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setUserAgent(USER_AGENT)
+                .setConnectTimeoutMs(3_500)
+                .setReadTimeoutMs(10_000)
                 .setAllowCrossProtocolRedirects(true);
         return new DefaultDataSource.Factory(context, http);
     }
