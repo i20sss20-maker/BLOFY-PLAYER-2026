@@ -107,9 +107,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         id = valueOr(getIntent().getStringExtra(EXTRA_ID), "");
         title = valueOr(getIntent().getStringExtra(EXTRA_TITLE), "BLOFY PLAYER");
         kind = valueOr(getIntent().getStringExtra(EXTRA_KIND), "movies");
-        extension = PlaybackPolicy.normalizeExtension(
+        extension = configuredExtension(PlaybackPolicy.normalizeExtension(
                 getIntent().getStringExtra(EXTRA_EXTENSION),
-                isLiveKind(kind) ? "ts" : "mp4");
+                isLiveKind(kind) ? "ts" : "mp4"));
         recoveryStep = preferredRecoveryStep();
 
         buildUi();
@@ -147,6 +147,22 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private boolean isUltraHd() {
         String value = title == null ? "" : title.toUpperCase(Locale.US);
         return value.contains("4K") || value.contains("UHD") || value.contains("2160");
+    }
+
+    private String playerSetting(String key, String fallback) {
+        return getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE).getString(key, fallback);
+    }
+
+    private String configuredExtension(String candidate) {
+        if (!isLiveKind(kind)) return candidate;
+        String mode = playerSetting(SettingsActivity.KEY_STREAM, "auto");
+        if ("ts".equals(mode)) return "ts";
+        if ("hls".equals(mode)) return "m3u8";
+        return candidate;
+    }
+
+    private boolean allowAlternateLiveFormat() {
+        return "auto".equals(playerSetting(SettingsActivity.KEY_STREAM, "auto"));
     }
 
     private boolean useCronetNow() {
@@ -260,6 +276,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playbackHandler.removeCallbacks(playbackTimeout);
         int timeout = PlaybackPolicy.startupTimeoutMs(recoveryStep);
         if (isUltraHd()) timeout += 2_500;
+        if ("stable".equals(playerSetting(SettingsActivity.KEY_BUFFER, "auto"))) timeout += 1_500;
         playbackHandler.postDelayed(playbackTimeout, timeout);
     }
 
@@ -283,8 +300,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 url = resolved.startsWith("http")
                         ? resolved
                         : BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + resolved;
-                extension = PlaybackPolicy.normalizeExtension(
-                        data.optString("extension", extension), extension);
+                extension = configuredExtension(PlaybackPolicy.normalizeExtension(
+                        data.optString("extension", extension), extension));
 
                 runOnUiThread(() -> {
                     resolving = false;
@@ -322,15 +339,22 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private DefaultLoadControl createLoadControl() {
+        String mode = playerSetting(SettingsActivity.KEY_BUFFER, "auto");
         int minBuffer;
         int maxBuffer;
         int playbackBuffer;
         int rebuffer;
-        if (isLive() && isUltraHd()) {
-            minBuffer = 10_000;
-            maxBuffer = 50_000;
-            playbackBuffer = 1_200;
-            rebuffer = 5_000;
+
+        if ("fast".equals(mode) && isLive() && !isUltraHd()) {
+            minBuffer = 1_500;
+            maxBuffer = 10_000;
+            playbackBuffer = 350;
+            rebuffer = 1_000;
+        } else if ("stable".equals(mode) || (isLive() && isUltraHd())) {
+            minBuffer = isLive() ? 12_000 : 18_000;
+            maxBuffer = isLive() ? 60_000 : 90_000;
+            playbackBuffer = isLive() ? 1_500 : 1_800;
+            rebuffer = isLive() ? 6_000 : 4_000;
         } else if (isLive()) {
             minBuffer = 2_500;
             maxBuffer = 18_000;
@@ -362,9 +386,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(
                 dataSourceFactory, extractorsFactory);
 
+        String decoderMode = playerSetting(SettingsActivity.KEY_DECODER, "auto");
+        boolean strictHardware = "hardware".equals(decoderMode);
+        int extensionMode = "software".equals(decoderMode)
+                ? DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                : DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON;
         DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
-                .setEnableDecoderFallback(true)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
+                .setEnableDecoderFallback(!strictHardware)
+                .setExtensionRendererMode(extensionMode);
 
         player = new ExoPlayer.Builder(this, renderers)
                 .setMediaSourceFactory(mediaSourceFactory)
@@ -394,7 +423,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
         playbackStartedAtMs = SystemClock.elapsedRealtime();
         Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep
-                + " uhd=" + isUltraHd() + " transport=" + activeTransportName());
+                + " uhd=" + isUltraHd() + " transport=" + activeTransportName()
+                + " stream=" + playerSetting(SettingsActivity.KEY_STREAM, "auto")
+                + " buffer=" + playerSetting(SettingsActivity.KEY_BUFFER, "auto")
+                + " decoder=" + decoderMode);
         player.setMediaSource(mediaSource, Math.max(0, resumePosition));
         player.prepare();
         player.play();
@@ -411,7 +443,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         releasePlayer();
         id = media.id;
         title = media.name;
-        extension = PlaybackPolicy.normalizeExtension(media.extension, "ts");
+        extension = configuredExtension(PlaybackPolicy.normalizeExtension(media.extension, "ts"));
         url = null;
         resumePosition = 0;
         recoveryStep = preferredRecoveryStep();
@@ -436,7 +468,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             return;
         }
 
-        if (isLive() && PlaybackPolicy.shouldTryAlternateLiveFormat(recoveryStep) && !id.isEmpty()) {
+        if (isLive() && allowAlternateLiveFormat()
+                && PlaybackPolicy.shouldTryAlternateLiveFormat(recoveryStep) && !id.isEmpty()) {
             extension = PlaybackPolicy.alternateLiveExtension(extension);
             url = null;
             Log.i(TAG, "live-format-fallback ext=" + extension + " transport=" + activeTransportName());
@@ -444,7 +477,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             return;
         }
 
-        if (isLive() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
+        if (isLive() && allowAlternateLiveFormat() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
             reopenResolvedSource(false);
             return;
         }
