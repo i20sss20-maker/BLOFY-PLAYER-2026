@@ -164,8 +164,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         String token = UUID.randomUUID().toString();
         database.beginTransaction();
         try {
-            database.delete("categories_staging", null, null);
-            database.delete("media_staging", null, null);
+            resetStagingTables(database);
             putMetadata(database, "sync_state", "in_progress");
             database.setTransactionSuccessful();
         } finally { database.endTransaction(); }
@@ -210,8 +209,9 @@ final class CatalogDatabase extends SQLiteOpenHelper {
             // low-power TV on the final import frame for several minutes. The
             // catalog already stores normalized names and uses them directly,
             // so committing the playable package must not wait for FTS.
-            database.delete("categories_staging", "import_token=?", new String[]{importToken});
-            database.delete("media_staging", "import_token=?", new String[]{importToken});
+            // Leave the staging pages in place after the atomic swap. The next
+            // import drops the staging tables in one operation, which is much
+            // faster than deleting tens of thousands of rows on this screen.
             putMetadata(database, "active_source_id", cleanSource);
             putMetadata(database, "source_identity", cleanSource);
             putMetadata(database, "server_name", serverName);
@@ -232,10 +232,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         SQLiteDatabase database = getWritableDatabase();
         database.beginTransaction();
         try {
-            if (importToken != null) {
-                database.delete("categories_staging", "import_token=?", new String[]{importToken});
-                database.delete("media_staging", "import_token=?", new String[]{importToken});
-            }
+            resetStagingTables(database);
             putMetadata(database, "sync_state", "failed");
             database.setTransactionSuccessful();
         } finally { database.endTransaction(); }
@@ -530,6 +527,12 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         database.delete("media_fts", "source_id=?", new String[]{source});
         database.execSQL("INSERT INTO media_fts(source_id,type,id,search_name) " +
                 "SELECT source_id,type,id,search_name FROM media WHERE source_id=?", new Object[]{source});
+    }
+
+    private static void resetStagingTables(SQLiteDatabase database) {
+        database.execSQL("DROP TABLE IF EXISTS categories_staging");
+        database.execSQL("DROP TABLE IF EXISTS media_staging");
+        createStagingTables(database);
     }
 
     private static void putMetadata(SQLiteDatabase database, String key, String value) {
