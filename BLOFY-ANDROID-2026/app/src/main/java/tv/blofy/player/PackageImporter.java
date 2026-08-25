@@ -71,6 +71,7 @@ final class PackageImporter {
             importType("series", "المسلسلات", 69, 94);
 
             String profile = profile();
+            emit(95, "اعتماد بيانات الباقة", "حفظ القنوات والأفلام والمسلسلات للاستخدام");
             database.commitStagedImport(sourceIdentity, session.serverName, session.kind, profile);
             emit(98, "تجهيز التشغيل", profile);
             emit(100, "اكتملت قراءة الباقة", "Live " + database.count("live")
