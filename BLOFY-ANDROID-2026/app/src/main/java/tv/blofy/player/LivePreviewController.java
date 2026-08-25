@@ -61,6 +61,17 @@ final class LivePreviewController implements Player.Listener {
 
     PlayerView view() { return view; }
 
+    String resolvedUrl(BlofyModels.Media item) {
+        if (item == null) return "";
+        String key = item.id + ":" + PlaybackPolicy.normalizeExtension(item.extension, "ts");
+        Resolved value = URL_CACHE.get(key);
+        if (value == null || value.expired()) {
+            URL_CACHE.remove(key);
+            return "";
+        }
+        return value.url;
+    }
+
     void setListener(Listener listener) { this.listener = listener; }
 
     void preview(BlofyModels.Media item) {
@@ -76,10 +87,11 @@ final class LivePreviewController implements Player.Listener {
         if (item == null) return;
         String cacheKey = item.id + ":" + PlaybackPolicy.normalizeExtension(item.extension, "ts");
         Resolved cached = URL_CACHE.get(cacheKey);
-        if (cached != null) {
+        if (cached != null && !cached.expired()) {
             if (token == generation.get()) open(cached.url, cached.extension, token);
             return;
         }
+        if (cached != null) URL_CACHE.remove(cacheKey);
         network.execute(() -> {
             try {
                 String ext = PlaybackPolicy.normalizeExtension(item.extension, "ts");
@@ -160,9 +172,13 @@ final class LivePreviewController implements Player.Listener {
     private static final class Resolved {
         final String url;
         final String extension;
+        final long createdAt = android.os.SystemClock.elapsedRealtime();
         Resolved(String url, String extension) {
             this.url = url;
             this.extension = extension;
+        }
+        boolean expired() {
+            return android.os.SystemClock.elapsedRealtime() - createdAt > 10 * 60_000L;
         }
     }
 }
