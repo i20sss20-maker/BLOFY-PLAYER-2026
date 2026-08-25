@@ -8,6 +8,7 @@ import { DeviceProfileStore, persistDeviceSessionFromHeaders } from "./lib/devic
 import { extensionFromUrl, XtreamClient } from "./lib/xtream.mjs";
 import { pageItems, parseM3u } from "./lib/playlist.mjs";
 import { publicCatalogItem, publicSeriesItem } from "./lib/catalog-response.mjs";
+import { enrichMediaDetails } from "./lib/tmdb.mjs";
 import {
   assertSafeUrl,
   clearSessionCookie,
@@ -26,7 +27,7 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
-const APP_VERSION = "2026.08.23.8";
+const APP_VERSION = "2026.08.25.12";
 const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
@@ -237,27 +238,31 @@ async function catalogFor(session, type, query) {
   };
 }
 
-async function sourceFor(session, type, id, extension = "") {
+async function sourceFor(session, type, id, extension = "", variant = "canonical") {
   if (session.kind === "xtream") {
     const client = new XtreamClient(session);
     if (type === "live") {
-      return client.streamUrl("live", id, extension || "ts");
+      return client.streamUrl("live", id, extension || "ts", variant);
     }
     if (type === "episode") {
-      const remembered = recalledDirectSource(session, type, id);
-      if (remembered) return remembered;
-      return client.streamUrl("episode", id, extension || "mp4");
+      if (variant === "direct") {
+        const remembered = recalledDirectSource(session, type, id);
+        if (remembered) return remembered;
+      }
+      return client.streamUrl("episode", id, extension || "mp4", variant);
     }
-    try {
-      const rows = await cached(cacheKey(session, "catalog:movies:"), () => client.catalog("movies"), catalogCacheTtl);
-      const direct = rows.find((item) => String(item.id) === String(id))?.sourceUrl || "";
-      if (direct) return direct;
-    } catch {}
-    try {
-      const movie = await cached(cacheKey(session, `movie:${id}`), () => client.movieInfo(id));
-      if (movie.sourceUrl) return movie.sourceUrl;
-    } catch {}
-    return client.streamUrl("movies", id, extension || "mp4");
+    if (variant === "direct") {
+      try {
+        const rows = await cached(cacheKey(session, "catalog:movies:"), () => client.catalog("movies"), catalogCacheTtl);
+        const direct = rows.find((item) => String(item.id) === String(id))?.sourceUrl || "";
+        if (direct) return direct;
+      } catch {}
+      try {
+        const movie = await cached(cacheKey(session, `movie:${id}`), () => client.movieInfo(id));
+        if (movie.sourceUrl) return movie.sourceUrl;
+      } catch {}
+    }
+    return client.streamUrl("movies", id, extension || "mp4", variant);
   }
   const item = (await loadM3u(session)).find((entry) => String(entry.id) === String(id));
   if (!item) throw new Error("لم يتم العثور على رابط التشغيل.");
@@ -382,6 +387,15 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (req.method === "DELETE" && url.pathname === "/api/device/profile") {
+    const deviceId = String(req.headers["x-blofy-device-id"] || "").trim().toUpperCase();
+    const deviceKey = String(req.headers["x-blofy-device-key"] || "");
+    await deviceProfiles.clearWithDeviceKey(deviceId, deviceKey);
+    return json(res, 200, { ok: true }, {
+      ...securityHeaders(), "set-cookie": clearSessionCookie(),
+    });
+  }
+
   if (url.pathname === "/api/admin/codes" && req.method === "POST") {
     if (!adminAuthorized(req)) return json(res, 401, { error: "رمز إدارة غير صحيح أو ADMIN_TOKEN غير مضبوط." }, securityHeaders());
     const entry = await licenses.createCode(await readJson(req, 8192));
@@ -431,13 +445,18 @@ async function handleApi(req, res, url) {
     const [, type, id] = nativeLinkMatch;
     const fallbackExt = type === "live" ? "ts" : "mp4";
     const extension = String(url.searchParams.get("ext") || fallbackExt).replace(/[^a-zA-Z0-9]/g, "") || fallbackExt;
-    const source = await sourceFor(session, type, id, extension);
+    const requestedVariant = String(url.searchParams.get("variant") || "canonical");
+    const variant = ["canonical", "direct", "no-extension"].includes(requestedVariant)
+      ? requestedVariant : "canonical";
+    const source = await sourceFor(session, type, id, extension, variant);
     const resolvedExtension = extensionFromUrl(source) || extension;
     await assertSafeUrl(source);
     console.log(`[media] direct-link type=${type} id=${id} ext=${resolvedExtension} host=${new URL(source).host}`);
     return json(res, 200, {
       url: signedNativePath(source),
       extension: resolvedExtension,
+      variant,
+      referer: session.kind === "xtream" ? `${new URL(session.serverUrl).origin}/` : `${new URL(source).origin}/`,
       mode: NATIVE_PLAYBACK_MODE,
     }, securityHeaders());
   }
@@ -456,7 +475,9 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && movieMatch) {
     if (session.kind !== "xtream") return json(res, 400, { error: "تفاصيل الفيلم غير متوفرة لهذا النوع من القوائم." }, securityHeaders());
     const client = new XtreamClient(session);
-    const item = await cached(cacheKey(session, `movie:${movieMatch[1]}`), () => client.movieInfo(movieMatch[1]));
+    const rawItem = await cached(cacheKey(session, `movie:${movieMatch[1]}`), () => client.movieInfo(movieMatch[1]));
+    const item = await cached(cacheKey(session, `movie-ar:${movieMatch[1]}`),
+      () => enrichMediaDetails(rawItem, "movies"), 6 * 60 * 60 * 1000);
     const { sourceUrl: _privateSource, ...publicItem } = item;
     return json(res, 200, { ...publicItem, image: item.image || "", backdrop: item.backdrop || "" }, securityHeaders());
   }
@@ -465,7 +486,9 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && seriesMatch) {
     if (session.kind !== "xtream") return json(res, 400, { error: "المواسم والحلقات تحتاج مصدر Xtream Codes." }, securityHeaders());
     const client = new XtreamClient(session);
-    const item = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
+    const rawItem = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
+    const item = await cached(cacheKey(session, `series-ar:${seriesMatch[1]}`),
+      () => enrichMediaDetails(rawItem, "series"), 6 * 60 * 60 * 1000);
     if (!item.seasons.length) return json(res, 404, { error: "لم يرسل مزود القائمة مواسم أو حلقات لهذا المسلسل." }, securityHeaders());
     for (const season of item.seasons) for (const episode of season.episodes) {
       rememberDirectSource(session, "episode", episode.id, episode.sourceUrl);

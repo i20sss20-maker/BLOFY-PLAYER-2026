@@ -77,12 +77,10 @@ public final class MainActivity extends Activity {
                 if (license.usable()) tryRemoteSetup();
                 session = new BlofyModels.Session(api.get("/api/session"));
                 main.post(() -> {
-                    if (!license.usable() || !session.present) showLogin("");
-                    else if ("complete".equals(database.metadata("sync_state", "")) && database.count("live") + database.count("movies") + database.count("series") > 0) showHome();
-                    else importPackage();
+                    showPlaylistHub("");
                 });
             } catch (Exception error) {
-                main.post(() -> showLogin(message(error)));
+                main.post(() -> showPlaylistHub(message(error)));
             }
         });
     }
@@ -126,6 +124,92 @@ public final class MainActivity extends Activity {
         root.addView(content, match());
     }
 
+    /** Quiet first screen: saved playlists only. Credentials live on a separate page. */
+    private void showPlaylistHub(String error) {
+        screen = "playlists";
+        root.removeAllViews();
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(BlofyUi.isTv(this) ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER);
+        page.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        page.setPadding(dp(34), dp(28), dp(34), dp(28));
+
+        LinearLayout device = devicePanel(false);
+        LinearLayout.LayoutParams deviceParams = new LinearLayout.LayoutParams(
+                BlofyUi.isTv(this) ? dp(315) : ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        deviceParams.setMargins(dp(10), dp(10), dp(18), dp(10));
+        page.addView(device, deviceParams);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        content.setPadding(dp(34), dp(30), dp(34), dp(30));
+        content.setBackground(BlofyUi.panel(this, Color.argb(238, 10, 9, 19), 22, BlofyUi.STROKE));
+        content.addView(BlofyUi.brand(this, "P L A Y E R"),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(62)));
+        TextView title = BlofyUi.title(this, "قوائم التشغيل", 29);
+        title.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        content.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        TextView note = BlofyUi.text(this, "اختر قائمتك المحفوظة ثم اضغط اتصال، أو أضف قائمة جديدة.", 14, BlofyUi.MUTED);
+        content.addView(note, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+
+        Button primary;
+        if (session != null && session.present) {
+            LinearLayout saved = new LinearLayout(this);
+            saved.setOrientation(LinearLayout.HORIZONTAL);
+            saved.setGravity(Gravity.CENTER_VERTICAL);
+            saved.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+            saved.setPadding(dp(22), dp(14), dp(22), dp(14));
+            saved.setBackground(BlofyUi.panel(this, Color.argb(230, 20, 16, 35), 18, Color.rgb(76, 48, 116)));
+            LinearLayout labels = new LinearLayout(this);
+            labels.setOrientation(LinearLayout.VERTICAL);
+            TextView playlistName = BlofyUi.title(this,
+                    session.name == null || session.name.isEmpty() ? "قائمتي" : session.name, 20);
+            playlistName.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+            TextView savedLabel = BlofyUi.text(this, "قائمة محفوظة على هذا الجهاز", 12, BlofyUi.MUTED);
+            labels.addView(playlistName, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
+            labels.addView(savedLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+            saved.addView(labels, new LinearLayout.LayoutParams(0, dp(72), 1));
+            primary = BlofyUi.button(this, "اتصال", true);
+            primary.setOnClickListener(v -> {
+                boolean ready = "complete".equals(database.metadata("sync_state", ""))
+                        && database.count("live") + database.count("movies") + database.count("series") > 0;
+                if (ready) showHome(); else importPackage();
+            });
+            saved.addView(primary, new LinearLayout.LayoutParams(dp(155), dp(56)));
+            LinearLayout.LayoutParams savedParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(110));
+            savedParams.setMargins(0, dp(20), 0, dp(18));
+            content.addView(saved, savedParams);
+        } else {
+            TextView empty = BlofyUi.text(this, "لا توجد قائمة تشغيل محفوظة حتى الآن.", 15, BlofyUi.MUTED);
+            empty.setGravity(Gravity.CENTER);
+            content.addView(empty, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(120)));
+            primary = null;
+        }
+
+        Button add = BlofyUi.button(this, "＋  إضافة قائمة تشغيل", primary == null);
+        add.setOnClickListener(v -> showLogin(""));
+        content.addView(add, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)));
+        if (error != null && !error.isEmpty()) {
+            TextView status = BlofyUi.text(this, error, 12, BlofyUi.ERROR);
+            status.setGravity(Gravity.CENTER);
+            content.addView(status, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        }
+
+        LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(
+                BlofyUi.isTv(this) ? 0 : ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, BlofyUi.isTv(this) ? 1f : 0f);
+        contentParams.setMargins(dp(10), dp(10), dp(10), dp(10));
+        page.addView(content, contentParams);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(page);
+        root.addView(scroll, match());
+        (primary == null ? add : primary).requestFocus();
+    }
+
     private void showLogin(String error) {
         screen = "login";
         root.removeAllViews();
@@ -134,16 +218,17 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(BlofyUi.isTv(this) ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         page.setGravity(Gravity.CENTER);
-        page.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        page.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         page.setPadding(dp(28), dp(24), dp(28), dp(24));
 
-        LinearLayout device = devicePanel();
+        LinearLayout device = devicePanel(true);
         LinearLayout.LayoutParams deviceParams = new LinearLayout.LayoutParams(BlofyUi.isTv(this) ? dp(340) : ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         deviceParams.setMargins(dp(10), dp(10), dp(10), dp(10));
         page.addView(device, deviceParams);
 
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
+        form.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         form.setPadding(dp(26), dp(22), dp(26), dp(22));
         form.setBackground(BlofyUi.panel(this, Color.argb(235, 13, 13, 25), 20, Color.rgb(48, 42, 72)));
         form.addView(BlofyUi.brand(this, "P L A Y E R  •  N A T I V E"));
@@ -250,7 +335,7 @@ public final class MainActivity extends Activity {
         }, 100);
     }
 
-    private LinearLayout devicePanel() {
+    private LinearLayout devicePanel(boolean showActivationActions) {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setGravity(Gravity.CENTER);
@@ -263,11 +348,17 @@ public final class MainActivity extends Activity {
         TextView heading = BlofyUi.title(this, "حالة الجهاز", 19);
         heading.setGravity(Gravity.CENTER);
         panel.addView(heading);
-        TextView id = BlofyUi.text(this, api.deviceId(), 13, BlofyUi.TEXT);
+        TextView id = BlofyUi.title(this, DeviceIdentity.displayId(this), 18);
         id.setTextDirection(View.TEXT_DIRECTION_LTR);
         id.setGravity(Gravity.CENTER);
         id.setTextIsSelectable(true);
         panel.addView(id);
+        TextView pairing = BlofyUi.text(this, "رمز الجهاز  " + DeviceIdentity.activationCode(this), 13,
+                BlofyUi.PURPLE_LIGHT);
+        pairing.setTextDirection(View.TEXT_DIRECTION_LTR);
+        pairing.setGravity(Gravity.CENTER);
+        pairing.setTextIsSelectable(true);
+        panel.addView(pairing, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
         String licenseText = license == null ? "جاري التحقق" : license.status + " • " + license.remainingDays + " أيام";
         TextView plan = BlofyUi.text(this, licenseText, 14, license != null && license.usable() ? BlofyUi.SUCCESS : BlofyUi.ERROR);
         plan.setGravity(Gravity.CENTER);
@@ -284,7 +375,8 @@ public final class MainActivity extends Activity {
         qrText.setGravity(Gravity.CENTER);
         panel.addView(qrText);
 
-        EditText code = BlofyUi.input(this, "رمز التفعيل الرقمي", true);
+        if (!showActivationActions) return panel;
+        EditText code = BlofyUi.input(this, "رمز التفعيل", false);
         code.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(12)});
         code.setTag("activation_code");
         LinearLayout.LayoutParams codeParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
@@ -310,7 +402,7 @@ public final class MainActivity extends Activity {
                     session = new BlofyModels.Session(api.get("/api/session"));
                     main.post(() -> {
                         Toast.makeText(this, license.usable() ? "تم تحديث التفعيل" : "الجهاز غير مفعّل", Toast.LENGTH_LONG).show();
-                        if (license.usable() && session.present) importPackage(); else showLogin("");
+                        showPlaylistHub("");
                     });
                 } catch (Exception failure) {
                     main.post(() -> {
@@ -411,34 +503,10 @@ public final class MainActivity extends Activity {
 
     private void showHome() {
         screen = "home";
-        root.removeAllViews();
-        LinearLayout page = basePage("الرئيسية", database.metadata("server_name", "BLOFY PLAYER"));
-        TextView welcome = BlofyUi.title(this, "مرحبًا بك في BLOFY PLAYER", 27);
-        page.addView(welcome);
-        TextView subtitle = BlofyUi.text(this, "اختر قسمك واستمتع بتشغيل Native سريع عبر Media3", 14, BlofyUi.MUTED);
-        page.addView(subtitle);
-
-        GridLayout grid = new GridLayout(this);
-        int columns = BlofyUi.isTv(this) ? 3 : 2;
-        grid.setColumnCount(columns);
-        grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
-        grid.setUseDefaultMargins(true);
-        addHomeCard(grid, "📡", "بث مباشر", database.count("live") + " قناة", () -> showCatalog("live", false, false));
-        addHomeCard(grid, "🎬", "أفلام", database.count("movies") + " فيلم", () -> showCatalog("movies", false, false));
-        addHomeCard(grid, "▣", "مسلسلات", database.count("series") + " مسلسل", () -> showCatalog("series", false, false));
-        addHomeCard(grid, "♥", "المفضلة", "محتواك المحفوظ", () -> showCatalog("", true, false));
-        addHomeCard(grid, "◷", "سجل المشاهدة", "تابع من حيث توقفت", () -> showCatalog("", false, true));
-        addHomeCard(grid, "⚙", "الإعدادات", "الجهاز والباقة والتشغيل", this::showSettings);
-        LinearLayout.LayoutParams gridParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        gridParams.topMargin = dp(18);
-        page.addView(grid, gridParams);
-
-        TextView profile = BlofyUi.text(this, "طريقة التشغيل: " + database.metadata("playback_profile", "Media3 مباشر"), 13, BlofyUi.PURPLE_LIGHT);
-        LinearLayout.LayoutParams profileParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        profileParams.topMargin = dp(14);
-        page.addView(profile, profileParams);
-        wrapPage(page);
-        main.postDelayed(this::focusFirstAction, 100);
+        Intent intent = new Intent(this, SevenMaxActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
+        finish();
     }
 
     private LinearLayout basePage(String title, String subtitle) {
@@ -570,6 +638,7 @@ public final class MainActivity extends Activity {
         player.putExtra(PlayerActivity.EXTRA_TITLE, item.name);
         player.putExtra(PlayerActivity.EXTRA_KIND, item.type);
         player.putExtra(PlayerActivity.EXTRA_EXTENSION, item.extension);
+        player.putExtra(PlayerActivity.EXTRA_CATEGORY_ID, item.categoryId);
         startActivity(player);
     }
 
@@ -624,7 +693,7 @@ public final class MainActivity extends Activity {
             api.clearSession();
             database.beginFreshImport();
             session = new BlofyModels.Session(null);
-            main.post(() -> showLogin(""));
+            main.post(() -> showPlaylistHub(""));
         });
     }
 

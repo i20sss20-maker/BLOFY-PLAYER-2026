@@ -45,6 +45,9 @@ final class BlofyApi {
 
     String baseUrl() { return baseUrl; }
     String deviceId() { return deviceId; }
+    String playbackSessionKey() {
+        return Integer.toHexString(cookieHeader().hashCode());
+    }
     String activationUrl(BlofyModels.License license) {
         String root = license != null && !license.activationUrl.isEmpty() ? license.activationUrl : baseUrl + "/activate";
         String url = root + (root.contains("?") ? "&" : "?") + "device_id=" + encode(deviceId);

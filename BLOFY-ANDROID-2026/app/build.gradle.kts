@@ -4,7 +4,6 @@ plugins {
 
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-// Final TV + FFmpeg validation trigger for PR build.
 val portalUrl = providers.gradleProperty("BLOFY_BASE_URL")
     .orElse(providers.environmentVariable("BLOFY_BASE_URL"))
     .orElse("https://blofy-player-2026-production.up.railway.app")
@@ -17,8 +16,11 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 312
-        versionName = "2026.08.23.12-final-tv"
+        versionCode = 321
+        versionName = "2026.08.25.8-fast-startup"
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 
@@ -57,6 +59,9 @@ dependencies {
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("com.google.zxing:core:3.5.4")
+
+    // Real video fallback for HEVC/H.265/10-bit/4K sources that a device MediaCodec rejects.
+    implementation("org.videolan.android:libvlc-all:3.7.5")
 
     val ffmpegDecoderAar = file("libs/media3-decoder-ffmpeg-release.aar")
     if (ffmpegDecoderAar.exists()) {

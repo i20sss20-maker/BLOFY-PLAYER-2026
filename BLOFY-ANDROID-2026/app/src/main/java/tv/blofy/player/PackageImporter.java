@@ -2,6 +2,13 @@ package tv.blofy.player;
 
 import org.json.JSONObject;
 
+import java.io.EOFException;
+import java.net.ConnectException;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -51,10 +58,16 @@ final class PackageImporter {
         if (!session.present) throw new Exception("لم يتم تسجيل بيانات الباقة بعد.");
 
         emit(12, "تحليل الخادم", "تحديد نوع الباقة وإمكانات التشغيل");
+        String sourceIdentity = sourceIdentity(session);
+        String previousIdentity = database.metadata("source_identity", "");
+        if (!previousIdentity.isEmpty() && !previousIdentity.equals(sourceIdentity)) {
+            database.clearPersonalState();
+        }
         database.beginFreshImport();
         database.putMetadata("sync_state", "in_progress");
         database.putMetadata("server_name", session.serverName);
         database.putMetadata("session_kind", session.kind);
+        database.putMetadata("source_identity", sourceIdentity);
 
         try {
             importType("live", "القنوات المباشرة", 14, 42);
@@ -77,6 +90,21 @@ final class PackageImporter {
         }
     }
 
+    private static String sourceIdentity(BlofyModels.Session session) {
+        String username = session.account == null ? "" : session.account.optString("username",
+                session.account.optString("user", session.account.optString("id", "")));
+        String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder value = new StringBuilder(digest.length * 2);
+            for (byte part : digest) value.append(String.format(Locale.US, "%02x", part & 0xff));
+            return value.toString();
+        } catch (Exception ignored) {
+            return Integer.toHexString(raw.hashCode());
+        }
+    }
+
     private void importType(String type, String label, int start, int end) throws Exception {
         emit(start, "قراءة " + label, "جلب التصنيفات من الخادم");
         List<BlofyModels.Category> categories = BlofyModels.Category.list(
@@ -88,9 +116,6 @@ final class PackageImporter {
         int total = Math.max(0, first.optInt("total", 0));
         int pageSize = Math.max(1, first.optInt("pageSize", 60));
 
-        // Some Xtream panels return an empty global VOD/series list but expose
-        // valid items when category_id is supplied. Use categories as a safe
-        // fallback instead of silently storing 0 Movies/Series.
         if (total == 0 && !"live".equals(type) && !categories.isEmpty()) {
             importByCategories(type, label, categories, start, end);
             return;
@@ -138,7 +163,8 @@ final class PackageImporter {
     }
 
     private JSONObject getWithRetry(String path, boolean catalogRequest) throws Exception {
-        final long[] delays = {1_000L, 3_000L, 8_000L, 15_000L, 32_000L};
+        final long[] httpDelays = {1_000L, 3_000L, 8_000L, 15_000L, 32_000L};
+        final long[] networkDelays = {350L, 900L, 2_000L, 5_000L, 10_000L};
         for (int attempt = 0; ; attempt++) {
             try {
                 if (catalogRequest) lastCatalogRequestAt = System.currentTimeMillis();
@@ -146,11 +172,28 @@ final class PackageImporter {
             } catch (BlofyApi.ApiException error) {
                 boolean retryable = error.status == 429 || error.status == 502
                         || error.status == 503 || error.status == 504;
-                if (!retryable || attempt >= delays.length) throw error;
-                emitRetry(path, error.status, attempt + 1);
-                Thread.sleep(delays[attempt]);
+                if (!retryable || attempt >= httpDelays.length) throw error;
+                emitRetry(path, String.valueOf(error.status), attempt + 1);
+                Thread.sleep(httpDelays[attempt]);
+            } catch (Exception error) {
+                if (!isTransientNetworkError(error) || attempt >= networkDelays.length) throw error;
+                emitRetry(path, "شبكة", attempt + 1);
+                Thread.sleep(networkDelays[attempt]);
             }
         }
+    }
+
+    private static boolean isTransientNetworkError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof SocketTimeoutException
+                    || current instanceof ConnectException
+                    || current instanceof SocketException
+                    || current instanceof UnknownHostException
+                    || current instanceof EOFException) return true;
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void paceLegacyCatalog() throws InterruptedException {
@@ -159,10 +202,10 @@ final class PackageImporter {
         if (wait > 0) Thread.sleep(wait);
     }
 
-    private void emitRetry(String path, int status, int attempt) {
+    private void emitRetry(String path, String reason, int attempt) {
         String area = path.contains("catalog") ? "الكتالوج" : "الخادم";
         emit(0, "إعادة الاتصال بـ " + area,
-                "استجابة " + status + " • محاولة " + attempt + " تلقائيًا");
+                reason + " • محاولة " + attempt + " تلقائيًا");
     }
 
     private void save(List<BlofyModels.Media> items) {
@@ -184,8 +227,8 @@ final class PackageImporter {
         for (String extension : new String[]{"mp4", "mkv", "avi", "mov", "webm"})
             files += extensions.containsKey(extension) ? extensions.get(extension) : 0;
         if (transport >= hls && transport >= files)
-            return "Media3 مباشر • Cronet أولًا • TS سريع";
-        if (hls >= files) return "Media3 مباشر • Cronet أولًا • HLS متكيف";
+            return "Media3 مباشر • HTTP سريع • TS";
+        if (hls >= files) return "Media3 مباشر • HTTP سريع • HLS متكيف";
         return "Media3 مباشر • ملفات فيديو مع دعم الاستكمال";
     }
 
