@@ -1,5 +1,5 @@
-name: Prepare v327 APK handoff
-# One-time private signing handoff for the CI-verified v327 Android package.
+name: Prepare v328 APK handoff
+# One-time private signing handoff for the CI-verified v328 Android package.
 
 on:
   push:
@@ -25,22 +25,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/v327-release /tmp/v327-handoff
-          gh release download v327-unsigned-5ed6c837b4f4 \
+          mkdir -p /tmp/v328-release /tmp/v328-handoff
+          gh release download v328-unsigned-053cb61665d7 \
             --pattern 'BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk' \
-            --dir /tmp/v327-release
-          APK=/tmp/v327-release/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
+            --dir /tmp/v328-release
+          APK=/tmp/v328-release/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
           test -s "$APK"
-          zip -9 -j /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip "$APK"
-          base64 -w 2000000 /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip \
-            | split -d -a 3 -l 1 - /tmp/v327-handoff/chunk-
+          zip -9 -j /tmp/BLOFY-PLAYER-v328-UNSIGNED.zip "$APK"
+          base64 -w 2000000 /tmp/BLOFY-PLAYER-v328-UNSIGNED.zip \
+            | split -d -a 3 -l 1 - /tmp/v328-handoff/chunk-
           {
             printf 'apk_sha256='; sha256sum "$APK" | cut -d' ' -f1
             printf 'apk_size='; stat -c '%s' "$APK"
-            printf 'zip_sha256='; sha256sum /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip | cut -d' ' -f1
-            printf 'zip_size='; stat -c '%s' /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip
-            printf 'chunk_count='; find /tmp/v327-handoff -name 'chunk-*' -type f | wc -l
-          } > /tmp/v327-handoff/manifest.txt
+            printf 'zip_sha256='; sha256sum /tmp/BLOFY-PLAYER-v328-UNSIGNED.zip | cut -d' ' -f1
+            printf 'zip_size='; stat -c '%s' /tmp/BLOFY-PLAYER-v328-UNSIGNED.zip
+            printf 'chunk_count='; find /tmp/v328-handoff -name 'chunk-*' -type f | wc -l
+          } > /tmp/v328-handoff/manifest.txt
 
       - name: Publish private handoff branch
         shell: bash
@@ -48,10 +48,10 @@ jobs:
           set -euo pipefail
           git config user.name blofy-ci
           git config user.email actions@users.noreply.github.com
-          git checkout --orphan v327-apk-handoff
+          git checkout --orphan v328-apk-handoff
           git rm -rf .
-          mkdir -p v327-handoff
-          cp /tmp/v327-handoff/* v327-handoff/
-          git add v327-handoff
-          git commit -m 'ci: prepare v327 unsigned APK handoff'
-          git push --force origin HEAD:refs/heads/v327-apk-handoff
+          mkdir -p v328-handoff
+          cp /tmp/v328-handoff/* v328-handoff/
+          git add v328-handoff
+          git commit -m 'ci: prepare v328 unsigned APK handoff'
+          git push --force origin HEAD:refs/heads/v328-apk-handoff
