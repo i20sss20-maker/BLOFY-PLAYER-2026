@@ -76,20 +76,52 @@ test("Xtream keeps valid direct_source internally and rejects unsafe schemes", a
   client.request = async (action) => action === "get_vod_info"
     ? {
         movie_data: { stream_id: 44, direct_source: "https://cdn.example/movie/44.mkv?token=secret" },
-        info: { name: "Movie" },
+        info: {
+          name: "Movie",
+          cast: "Actor One, Actor Two",
+          imdb_rating: "7.8",
+          release_date: "2026-08-20",
+        },
       }
     : [{ stream_id: 33, name: "Live", direct_source: "https://cdn.example/live/33.m3u8?token=secret" }];
 
   const catalog = await client.catalog("live");
-  assert.equal(catalog[0].sourceUrl, "https://cdn.example/live/33.m3u8?token=secret");
-  assert.equal(catalog[0].extension, "m3u8");
+  assert.equal(catalog[0].sourceUrl, "");
+  assert.equal(catalog[0].extension, "ts");
   const movie = await client.movieInfo("44");
   assert.equal(movie.sourceUrl, "https://cdn.example/movie/44.mkv?token=secret");
+  assert.equal(movie.releaseDate, "2026-08-20");
+  assert.equal(movie.rating, "7.8");
+  assert.equal(movie.ratingSource, "IMDb");
+  assert.deepEqual(movie.cast.map((entry) => entry.name), ["Actor One", "Actor Two"]);
+  assert.deepEqual(movie.ratings[0], { source: "IMDb", value: "7.8" });
+});
+
+test("catalog ratings share a ten-point scale and keep the matching source", async () => {
+  const client = new XtreamClient({ serverUrl: "https://provider.example", username: "user", password: "pass" });
+  client.request = async () => [
+    { stream_id: 1, name: "Provider ten", rating: "9.0", rating_5based: "4.5", year: "2026" },
+    { stream_id: 2, name: "TMDB", rating_5based: "4.5", tmdb_rating: "8.1", added: "2026-08-24" },
+    { stream_id: 3, name: "Provider five", rating_5based: "4.5" },
+    { stream_id: 4, name: "No rating" },
+  ];
+
+  const rows = await client.catalog("movies");
+  assert.deepEqual([rows[0].rating, rows[0].ratingSource, rows[0].releaseDate], ["9", "مزود المحتوى", "2026"]);
+  assert.deepEqual([rows[1].rating, rows[1].ratingSource, rows[1].updatedAt], ["8.1", "TMDB", "2026-08-24"]);
+  assert.deepEqual([rows[2].rating, rows[2].ratingSource], ["9", "مزود المحتوى"]);
+  assert.deepEqual([rows[3].rating, rows[3].ratingSource], ["", ""]);
 });
 
 test("series normalization accepts provider-specific episode identifiers", () => {
   const result = normalizeSeriesInfo({
-    info: { name: "مسلسل اختبار", cover: "https://img.example/cover.jpg" },
+    info: {
+      name: "مسلسل اختبار",
+      cover: "https://img.example/cover.jpg",
+      cast: "ممثل أول، ممثل ثان",
+      tmdb_rating: "8.2",
+      release_date: "2026-08-01",
+    },
     episodes: {
       "2": [{ stream_id: 22, episode_num: "2", name: "الثانية", container_extension: "mkv" }],
       "1": {
@@ -101,6 +133,9 @@ test("series normalization accepts provider-specific episode identifiers", () =>
   assert.deepEqual(result.seasons.map((season) => season.season), ["1", "2"]);
   assert.equal(result.seasons[0].episodes[0].id, "11");
   assert.equal(result.seasons[1].episodes[0].extension, "mkv");
+  assert.equal(result.releaseDate, "2026-08-01");
+  assert.equal(result.ratings[0].source, "TMDB");
+  assert.equal(result.cast.length, 2);
 });
 
 test("series normalization retains a valid private episode direct_source", () => {
@@ -124,4 +159,30 @@ test("series normalization groups flat arrays by season", () => {
   }, "7");
   assert.deepEqual(result.seasons[0].episodes.map((episode) => episode.id), ["1", "2"]);
   assert.equal(result.seasons[1].season, "2");
+});
+
+test("series metadata keeps valid aliases, dates, ratings, and merged cast", () => {
+  const result = normalizeSeriesInfo({
+    info: {
+      name: "Metadata",
+      imdb_rating: "",
+      imdbRating: "9.2",
+      first_air_date: "2025-12-20",
+      last_air_date: "2026-08-25",
+      cast: [],
+      actors: [{ title: "Actor One", profilePath: "/actor-one.jpg", known_for_department: "Acting" }],
+      credits: { cast: [{ name: "Actor Two", photo: "https://img.example/two.jpg", role: "Lead" }] },
+      ratings: { "Rotten Tomatoes": "91%" },
+    },
+    episodes: { "1": [{ id: 1, episode_num: 1, airDate: "2026-08-25" }] },
+  }, "metadata");
+
+  assert.equal(result.rating, "9.2");
+  assert.equal(result.ratingSource, "IMDb");
+  assert.equal(result.releaseDate, "2025-12-20");
+  assert.equal(result.updatedAt, "2026-08-25");
+  assert.equal(result.seasons[0].episodes[0].airDate, "2026-08-25");
+  assert.deepEqual(result.cast.map((entry) => entry.name), ["Actor One", "Actor Two"]);
+  assert.equal(result.cast[0].image, "https://image.tmdb.org/t/p/w185/actor-one.jpg");
+  assert.ok(result.ratings.some((entry) => entry.source === "Rotten Tomatoes" && entry.value === "91%"));
 });

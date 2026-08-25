@@ -2,6 +2,7 @@ package tv.blofy.player;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -41,20 +42,15 @@ import androidx.media3.ui.PlayerView;
 
 import org.json.JSONObject;
 
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * BLOFY playback core v2.
- *
- * Stable IPTV strategy inspired by the behaviour observed in 7 Max, without
- * copying its source code: direct provider playback, Xtream TS first, Media3
- * defaults, Player1 (Default HTTP), Player2 (Cronet), renderer fallback,
- * behind-live-window recovery and TS/HLS fallback.
- */
+/** BLOFY native playback core. */
 @UnstableApi
 public final class PlayerActivity extends Activity implements Player.Listener {
     private static final String TAG = "BlofyPlayback";
+    private static final long LIVE_STABLE_WINDOW_MS = 2_500L;
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_ID = "id";
@@ -69,6 +65,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private TextView titleView;
     private Button retryButton;
     private ExoPlayer player;
+    private LiveChannelOverlay liveOverlay;
 
     private String id;
     private String url;
@@ -78,18 +75,33 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private long resumePosition;
     private int recoveryStep;
     private boolean resolving;
-    private boolean stickyCronet;
+    private boolean firstFrameRendered;
+    private boolean warmLiveSwitchPending;
     private long playbackStartedAtMs;
 
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final ExecutorService cronetExecutor = Executors.newCachedThreadPool();
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hideTitle = () -> {
+        if (titleView != null) titleView.setVisibility(View.GONE);
+    };
 
     private final Runnable playbackTimeout = () -> {
-        if (player == null || player.getPlaybackState() == Player.STATE_READY) return;
+        if (player == null || firstFrameRendered) return;
         Log.w(TAG, "startup-timeout kind=" + kind + " ext=" + extension
-                + " step=" + recoveryStep + " transport=" + activeTransportName());
-        recoverFromFailure("انتهت مهلة بدء التشغيل");
+                + " step=" + recoveryStep + " state=" + player.getPlaybackState()
+                + " transport=" + activeTransportName());
+        recoverFromFailure(player.getPlaybackState() == Player.STATE_READY
+                ? "لم تظهر صورة الفيديو"
+                : "انتهت مهلة بدء التشغيل");
+    };
+
+    private final Runnable markPlaybackStable = () -> {
+        if (player == null || !firstFrameRendered || !player.isPlaying()) return;
+        rememberSuccessfulTransport();
+        recoveryStep = preferredRecoveryStep();
+        Log.i(TAG, "stable kind=" + kind + " ext=" + extension
+                + " transport=" + activeTransportName());
     };
 
     @Override
@@ -100,9 +112,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         id = valueOr(getIntent().getStringExtra(EXTRA_ID), "");
         title = valueOr(getIntent().getStringExtra(EXTRA_TITLE), "BLOFY PLAYER");
         kind = valueOr(getIntent().getStringExtra(EXTRA_KIND), "movies");
-        extension = PlaybackPolicy.normalizeExtension(
+        extension = configuredExtension(PlaybackPolicy.normalizeExtension(
                 getIntent().getStringExtra(EXTRA_EXTENSION),
-                isLiveKind(kind) ? "ts" : "mp4");
+                isLiveKind(kind) ? "ts" : "mp4"));
+        recoveryStep = preferredRecoveryStep();
 
         buildUi();
         hideSystemUi();
@@ -116,9 +129,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return value == null || value.isEmpty() ? fallback : value;
     }
 
-    private static boolean isLiveKind(String value) {
-        return "live".equals(value);
-    }
+    private static boolean isLiveKind(String value) { return "live".equals(value); }
 
     private static boolean validUrl(String value) {
         if (value == null || value.isEmpty()) return false;
@@ -127,103 +138,151 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             String scheme = uri.getScheme();
             return uri.getHost() != null
                     && ("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme));
-        } catch (Exception ignored) {
-            return false;
-        }
+        } catch (Exception ignored) { return false; }
     }
 
-    private boolean isLive() {
-        return isLiveKind(kind);
+    private boolean isLive() { return isLiveKind(kind); }
+
+    private boolean isUltraHd() {
+        String value = title == null ? "" : title.toUpperCase(Locale.US);
+        return value.contains("4K") || value.contains("UHD") || value.contains("2160");
     }
 
-    private boolean useCronetNow() {
-        return PlaybackPolicy.useCronet(recoveryStep);
+    private String playerSetting(String key, String fallback) {
+        return getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE).getString(key, fallback);
     }
 
-    private String activeTransportName() {
-        return useCronetNow() ? "cronet" : "default-http";
+    private String configuredExtension(String candidate) {
+        if (!isLiveKind(kind)) return candidate;
+        String mode = playerSetting(SettingsActivity.KEY_STREAM, "auto");
+        if ("ts".equals(mode)) return "ts";
+        if ("hls".equals(mode)) return "m3u8";
+        return candidate;
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+    private boolean allowAlternateLiveFormat() {
+        return "auto".equals(playerSetting(SettingsActivity.KEY_STREAM, "auto"));
     }
+
+    private boolean useCronetNow() { return PlaybackPolicy.useCronet(recoveryStep); }
+    private String activeTransportName() { return useCronetNow() ? "cronet" : "default-http"; }
+
+    private String transportPreferenceKey() {
+        return "transport_" + kind + "_" + PlaybackPolicy.normalizeExtension(extension, "auto");
+    }
+
+    private int preferredRecoveryStep() {
+        if (kind == null || extension == null) return 0;
+        return getSharedPreferences("blofy_playback", MODE_PRIVATE)
+                .getBoolean(transportPreferenceKey(), false) ? 1 : 0;
+    }
+
+    private void rememberSuccessfulTransport() {
+        getSharedPreferences("blofy_playback", MODE_PRIVATE)
+                .edit().putBoolean(transportPreferenceKey(), useCronetNow()).apply();
+    }
+
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
 
         playerView = new PlayerView(this);
-        playerView.setUseController(true);
-        playerView.setControllerAutoShow(true);
+        boolean useMedia3Controller = !isLive();
+        playerView.setUseController(useMedia3Controller);
+        playerView.setControllerAutoShow(useMedia3Controller);
         playerView.setControllerShowTimeoutMs(4500);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
         playerView.setKeepScreenOn(true);
         playerView.setFocusable(true);
-        root.addView(playerView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+        root.addView(playerView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
-        titleView = new TextView(this);
+        titleView = BlofyUi.title(this, title, 20);
         titleView.setText(title);
-        titleView.setTextColor(Color.WHITE);
-        titleView.setTextSize(17);
-        titleView.setTypeface(titleView.getTypeface(), android.graphics.Typeface.BOLD);
         titleView.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        titleView.setPadding(dp(24), dp(12), dp(24), dp(12));
-        titleView.setBackgroundColor(Color.argb(175, 8, 7, 14));
-        root.addView(titleView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(58), Gravity.TOP));
+        titleView.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+        titleView.setPadding(dp(32), dp(10), dp(32), dp(24));
+        titleView.setShadowLayer(dp(5), 0, dp(2), Color.BLACK);
+        GradientDrawable titleGradient = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{
+                        Color.argb(235, 6, 3, 12),
+                        Color.argb(190, 25, 12, 45),
+                        Color.argb(85, 34, 15, 57),
+                        Color.TRANSPARENT
+                });
+        titleView.setBackground(titleGradient);
+        FrameLayout.LayoutParams titleParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(96), Gravity.TOP);
+        root.addView(titleView, titleParams);
 
         progress = new ProgressBar(this);
-        progress.setIndeterminateTintList(
-                android.content.res.ColorStateList.valueOf(Color.rgb(154, 88, 255)));
+        progress.setIndeterminateTintList(BlofyUi.progressColors());
         root.addView(progress, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
 
+        if (isLive()) {
+            liveOverlay = new LiveChannelOverlay(this, this::switchLiveChannel);
+            View overlayView = liveOverlay.view();
+            overlayView.setElevation(dp(20));
+            root.addView(overlayView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+
+        // This full-screen layer is deliberately added last so a fatal error always
+        // wins the focus and z-order over the player chrome and the channel drawer.
         errorPanel = new LinearLayout(this);
         errorPanel.setOrientation(LinearLayout.VERTICAL);
         errorPanel.setGravity(Gravity.CENTER);
-        errorPanel.setPadding(dp(24), dp(20), dp(24), dp(20));
-        errorPanel.setBackgroundColor(Color.argb(225, 10, 9, 18));
+        errorPanel.setPadding(dp(28), dp(28), dp(28), dp(28));
+        errorPanel.setBackgroundColor(Color.argb(205, 3, 2, 8));
+        errorPanel.setClickable(true);
+        errorPanel.setElevation(dp(40));
         errorPanel.setVisibility(View.GONE);
 
-        TextView errorTitle = new TextView(this);
-        errorTitle.setText("تعذر تشغيل المصدر");
-        errorTitle.setTextColor(Color.WHITE);
-        errorTitle.setTextSize(21);
-        errorTitle.setTypeface(errorTitle.getTypeface(), android.graphics.Typeface.BOLD);
+        LinearLayout modal = new LinearLayout(this);
+        modal.setOrientation(LinearLayout.VERTICAL);
+        modal.setGravity(Gravity.CENTER);
+        modal.setPadding(dp(34), dp(28), dp(34), dp(30));
+        modal.setBackground(BlofyUi.panel(this, Color.rgb(22, 13, 35), 12, Color.rgb(132, 87, 194)));
+
+        TextView errorEyebrow = BlofyUi.text(this, "BLOFY PLAYER", 11, BlofyUi.PURPLE_LIGHT);
+        errorEyebrow.setGravity(Gravity.CENTER);
+        errorEyebrow.setTextDirection(View.TEXT_DIRECTION_LTR);
+        modal.addView(errorEyebrow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+
+        TextView errorTitle = BlofyUi.title(this, "تعذر تشغيل المصدر", 23);
         errorTitle.setGravity(Gravity.CENTER);
-        errorPanel.addView(errorTitle);
+        modal.addView(errorTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
 
-        errorText = new TextView(this);
-        errorText.setTextColor(Color.rgb(184, 181, 197));
-        errorText.setTextSize(14);
+        errorText = BlofyUi.text(this, "", 14, BlofyUi.MUTED);
         errorText.setGravity(Gravity.CENTER);
-        errorText.setPadding(0, dp(10), 0, dp(14));
-        errorPanel.addView(errorText,
-                new LinearLayout.LayoutParams(dp(560), ViewGroup.LayoutParams.WRAP_CONTENT));
+        errorText.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+        errorText.setPadding(dp(8), dp(8), dp(8), dp(18));
+        modal.addView(errorText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        retryButton = new Button(this);
-        retryButton.setText("إعادة الاتصال");
-        retryButton.setTextColor(Color.WHITE);
-        retryButton.setTextSize(15);
-        retryButton.setAllCaps(false);
-        retryButton.setBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(Color.rgb(124, 50, 255)));
+        retryButton = BlofyUi.button(this, "إعادة الاتصال", true);
         retryButton.setOnClickListener(view -> manualRetry());
-        errorPanel.addView(retryButton, new LinearLayout.LayoutParams(dp(240), dp(54)));
+        LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(dp(250), dp(58));
+        retryParams.topMargin = dp(4);
+        modal.addView(retryButton, retryParams);
 
-        root.addView(errorPanel, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER));
+        errorPanel.addView(modal, new LinearLayout.LayoutParams(dp(650), ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(errorPanel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
     }
 
     private void schedulePlaybackTimeout() {
         playbackHandler.removeCallbacks(playbackTimeout);
-        playbackHandler.postDelayed(
-                playbackTimeout,
-                PlaybackPolicy.startupTimeoutMs(recoveryStep));
+        int timeout = PlaybackPolicy.startupTimeoutMs(recoveryStep);
+        if (isUltraHd()) timeout += 2_500;
+        if ("stable".equals(playerSetting(SettingsActivity.KEY_BUFFER, "auto"))) timeout += 1_500;
+        playbackHandler.postDelayed(playbackTimeout, timeout);
     }
 
     private void resolvePlaybackLink() {
@@ -231,32 +290,34 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         resolving = true;
         progress.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.GONE);
-
         network.execute(() -> {
             try {
                 String apiType = "series".equals(kind) ? "episode" : kind;
-                JSONObject data = new BlofyApi(this).get(
-                        "/api/native-link/" + BlofyApi.encode(apiType) + "/" + BlofyApi.encode(id)
-                                + "?ext=" + BlofyApi.encode(extension));
+                JSONObject data = new BlofyApi(this).get("/api/native-link/" + BlofyApi.encode(apiType) + "/"
+                        + BlofyApi.encode(id) + "?ext=" + BlofyApi.encode(extension));
                 String resolved = data.optString("url", "");
                 if (!resolved.startsWith("/api/native-play") && !resolved.startsWith("http")) {
                     throw new Exception("الخادم لم يُصدر رابط تشغيل مباشر صحيحًا.");
                 }
-
-                url = resolved.startsWith("http")
-                        ? resolved
+                url = resolved.startsWith("http") ? resolved
                         : BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + resolved;
-                extension = PlaybackPolicy.normalizeExtension(
-                        data.optString("extension", extension), extension);
-
+                extension = configuredExtension(PlaybackPolicy.normalizeExtension(
+                        data.optString("extension", extension), extension));
                 runOnUiThread(() -> {
                     resolving = false;
                     prepareResolvedUrl();
-                    initializePlayer();
+                    if (warmLiveSwitchPending && player != null && isLive()) {
+                        warmLiveSwitchPending = false;
+                        replaceLiveSourceOnWarmPlayer();
+                    } else {
+                        warmLiveSwitchPending = false;
+                        initializePlayer();
+                    }
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     resolving = false;
+                    warmLiveSwitchPending = false;
                     showResolveError(error.getMessage());
                 });
             }
@@ -265,10 +326,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void prepareResolvedUrl() {
         if (!validUrl(url)) return;
-        resumePosition = isLive()
-                ? 0
-                : getSharedPreferences("blofy_positions", MODE_PRIVATE)
-                    .getLong(positionKey(), 0);
+        resumePosition = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE)
+                .getLong(positionKey(), 0);
     }
 
     private void showResolveError(String message) {
@@ -284,61 +343,72 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return PlaybackTransportFactory.create(this, useCronetNow(), cronetExecutor);
     }
 
-    private void initializePlayer() {
-        if (player != null || !validUrl(url)) return;
+    private DefaultLoadControl createLoadControl() {
+        String mode = playerSetting(SettingsActivity.KEY_BUFFER, "auto");
+        int minBuffer, maxBuffer, playbackBuffer, rebuffer;
+        if ("fast".equals(mode) && isLive() && !isUltraHd()) {
+            minBuffer = 1_500; maxBuffer = 10_000; playbackBuffer = 350; rebuffer = 1_000;
+        } else if ("stable".equals(mode) || (isLive() && isUltraHd())) {
+            minBuffer = isLive() ? 12_000 : 18_000;
+            maxBuffer = isLive() ? 60_000 : 90_000;
+            playbackBuffer = isLive() ? 1_500 : 1_800;
+            rebuffer = isLive() ? 6_000 : 4_000;
+        } else if (isLive()) {
+            minBuffer = 2_500; maxBuffer = 18_000; playbackBuffer = 600; rebuffer = 1_800;
+        } else {
+            minBuffer = 12_000; maxBuffer = 60_000; playbackBuffer = 900; rebuffer = 2_500;
+        }
+        return new DefaultLoadControl.Builder().setBufferDurationsMs(minBuffer, maxBuffer, playbackBuffer, rebuffer)
+                .setPrioritizeTimeOverSizeThresholds(true).build();
+    }
 
+    private MediaSource createCurrentMediaSource() {
         DataSource.Factory dataSourceFactory = createDataSourceFactory();
         int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
                 | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
-
-        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory()
-                .setTsExtractorFlags(tsFlags);
-        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(
-                dataSourceFactory, extractorsFactory);
-
-        DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
-                .setEnableDecoderFallback(true)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
-
-        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(
-                        isLive() ? 10_000 : 20_000,
-                        isLive() ? 45_000 : 60_000,
-                        isLive() ? 1_000 : 1_500,
-                        isLive() ? 3_500 : 3_000)
-                .setPrioritizeTimeOverSizeThresholds(true)
-                .build();
-
-        player = new ExoPlayer.Builder(this, renderers)
-                .setMediaSourceFactory(mediaSourceFactory)
-                .setLoadControl(loadControl)
-                .build();
-        player.addListener(this);
-        player.setAudioAttributes(new AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                .build(), true);
-        player.setHandleAudioBecomingNoisy(true);
-        player.setWakeMode(C.WAKE_MODE_NETWORK);
-        playerView.setPlayer(player);
-
+        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory().setTsExtractorFlags(tsFlags);
+        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory);
         MediaItem.Builder itemBuilder = new MediaItem.Builder()
-                .setUri(PlaybackPolicy.directPlaybackUrl(url))
-                .setMediaId(title);
+                .setUri(PlaybackPolicy.directPlaybackUrl(url)).setMediaId(title);
         String mimeType = PlaybackPolicy.mimeType(extension);
         if (mimeType != null) itemBuilder.setMimeType(mimeType);
         MediaItem item = itemBuilder.build();
-
-        MediaSource mediaSource = PlaybackPolicy.isHls(extension)
+        return PlaybackPolicy.isHls(extension)
                 ? new HlsMediaSource.Factory(dataSourceFactory)
-                    .setExtractorFactory(new DefaultHlsExtractorFactory(tsFlags, true))
-                    .createMediaSource(item)
+                    .setExtractorFactory(new DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
                 : mediaSourceFactory.createMediaSource(item);
+    }
 
+    private void initializePlayer() {
+        if (player != null || !validUrl(url)) return;
+        firstFrameRendered = false;
+        playbackHandler.removeCallbacks(markPlaybackStable);
+        DataSource.Factory dataSourceFactory = createDataSourceFactory();
+        int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+                | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
+        DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory().setTsExtractorFlags(tsFlags);
+        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory);
+        String decoderMode = playerSetting(SettingsActivity.KEY_DECODER, "auto");
+        boolean strictHardware = "hardware".equals(decoderMode);
+        int extensionMode = "software".equals(decoderMode)
+                ? DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                : DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON;
+        DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
+                .setEnableDecoderFallback(!strictHardware).setExtensionRendererMode(extensionMode);
+        player = new ExoPlayer.Builder(this, renderers).setMediaSourceFactory(mediaSourceFactory)
+                .setLoadControl(createLoadControl()).build();
+        player.addListener(this);
+        player.setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
+        player.setHandleAudioBecomingNoisy(true);
+        player.setWakeMode(C.WAKE_MODE_NETWORK);
+        playerView.setPlayer(player);
         playbackStartedAtMs = SystemClock.elapsedRealtime();
         Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep
-                + " transport=" + activeTransportName());
-        player.setMediaSource(mediaSource, Math.max(0, resumePosition));
+                + " uhd=" + isUltraHd() + " transport=" + activeTransportName()
+                + " stream=" + playerSetting(SettingsActivity.KEY_STREAM, "auto")
+                + " buffer=" + playerSetting(SettingsActivity.KEY_BUFFER, "auto") + " decoder=" + decoderMode);
+        player.setMediaSource(createCurrentMediaSource(), Math.max(0, resumePosition));
         player.prepare();
         player.play();
         progress.setVisibility(View.VISIBLE);
@@ -347,110 +417,134 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         schedulePlaybackTimeout();
     }
 
+    private void replaceLiveSourceOnWarmPlayer() {
+        if (player == null || !validUrl(url)) { initializePlayer(); return; }
+        try {
+            firstFrameRendered = false;
+            playbackHandler.removeCallbacks(playbackTimeout);
+            playbackHandler.removeCallbacks(markPlaybackStable);
+            playbackStartedAtMs = SystemClock.elapsedRealtime();
+            player.setMediaSource(createCurrentMediaSource(), true);
+            player.prepare();
+            player.play();
+            progress.setVisibility(View.VISIBLE);
+            errorPanel.setVisibility(View.GONE);
+            playerView.requestFocus();
+            schedulePlaybackTimeout();
+            Log.i(TAG, "warm-live-switch id=" + id + " ext=" + extension + " transport=" + activeTransportName());
+        } catch (Throwable error) {
+            Log.w(TAG, "warm-live-switch-failed fallback=rebuild", error);
+            releasePlayer();
+            initializePlayer();
+        }
+    }
+
+    private void switchLiveChannel(BlofyModels.Media media) {
+        if (!isLive() || media == null || media.id.equals(id)) return;
+        playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
+        playbackHandler.removeCallbacks(hideTitle);
+        id = media.id;
+        title = media.name;
+        extension = configuredExtension(PlaybackPolicy.normalizeExtension(media.extension, "ts"));
+        url = null;
+        resumePosition = 0;
+        recoveryStep = preferredRecoveryStep();
+        warmLiveSwitchPending = player != null;
+        titleView.setText(title);
+        titleView.setVisibility(View.VISIBLE);
+        progress.setVisibility(View.VISIBLE);
+        errorPanel.setVisibility(View.GONE);
+        resolvePlaybackLink();
+    }
+
     private void recoverFromFailure(String reason) {
         if (isFinishing() || isDestroyed()) return;
         playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
         recoveryStep += 1;
         Log.w(TAG, "recover reason=" + reason + " step=" + recoveryStep + " ext=" + extension
                 + " nextTransport=" + PlaybackPolicy.transportName(recoveryStep));
         releasePlayer();
-
-        if (PlaybackPolicy.shouldRetrySameFormat(recoveryStep)) {
-            reopenResolvedSource();
-            return;
-        }
-
-        if (isLive() && PlaybackPolicy.shouldTryAlternateLiveFormat(recoveryStep) && !id.isEmpty()) {
+        if (PlaybackPolicy.shouldRetrySameFormat(recoveryStep)) { reopenResolvedSource(false); return; }
+        if (isLive() && allowAlternateLiveFormat()
+                && PlaybackPolicy.shouldTryAlternateLiveFormat(recoveryStep) && !id.isEmpty()) {
             extension = PlaybackPolicy.alternateLiveExtension(extension);
             url = null;
             Log.i(TAG, "live-format-fallback ext=" + extension + " transport=" + activeTransportName());
             resolvePlaybackLink();
             return;
         }
-
-        if (isLive() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
-            reopenResolvedSource();
-            return;
+        if (isLive() && allowAlternateLiveFormat() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
+            reopenResolvedSource(false); return;
         }
-
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        errorText.setText("تعذر تشغيل المصدر بعد Player1 وPlayer2. آخر سبب: " + reason
-                + "\nالصيغة: " + extension + "\nالنقل: " + activeTransportName());
+        errorText.setText("تعذر تشغيل المصدر. آخر سبب: " + reason + "\nالصيغة: " + extension
+                + "\nالنقل: " + activeTransportName());
         retryButton.setText("إعادة المحاولة من البداية");
         retryButton.requestFocus();
     }
 
-    private void reopenResolvedSource() {
-        if (!id.isEmpty()) {
-            url = null;
-            resolvePlaybackLink();
-        } else {
-            initializePlayer();
-        }
+    private void reopenResolvedSource(boolean forceResolve) {
+        if (!forceResolve && validUrl(url)) { initializePlayer(); return; }
+        if (!id.isEmpty()) { url = null; resolvePlaybackLink(); } else { initializePlayer(); }
     }
 
     private void manualRetry() {
-        recoveryStep = 0;
-        stickyCronet = false;
+        recoveryStep = preferredRecoveryStep();
+        warmLiveSwitchPending = false;
         releasePlayer();
-        reopenResolvedSource();
+        reopenResolvedSource(!validUrl(url));
     }
 
-    @Override
-    public void onPlaybackStateChanged(int playbackState) {
+    @Override public void onPlaybackStateChanged(int playbackState) {
         if (playbackState == Player.STATE_BUFFERING) {
-            progress.setVisibility(View.VISIBLE);
+            if (!firstFrameRendered) progress.setVisibility(View.VISIBLE);
             return;
         }
-
         if (playbackState == Player.STATE_READY) {
-            playbackHandler.removeCallbacks(playbackTimeout);
-            progress.setVisibility(View.GONE);
-            long readyMs = playbackStartedAtMs == 0
-                    ? -1
-                    : SystemClock.elapsedRealtime() - playbackStartedAtMs;
+            long readyMs = playbackStartedAtMs == 0 ? -1 : SystemClock.elapsedRealtime() - playbackStartedAtMs;
             Log.i(TAG, "ready kind=" + kind + " ext=" + extension + " ms=" + readyMs
-                    + " transport=" + activeTransportName());
-            recoveryStep = 0;
-            titleView.postDelayed(() -> titleView.setVisibility(View.GONE), 2500);
+                    + " firstFrame=" + firstFrameRendered + " transport=" + activeTransportName());
+            if (firstFrameRendered) progress.setVisibility(View.GONE);
+            playbackHandler.removeCallbacks(hideTitle);
+            playbackHandler.postDelayed(hideTitle, 2500);
             return;
         }
-
         if (playbackState == Player.STATE_ENDED) {
             progress.setVisibility(View.GONE);
             if (isLive()) recoverFromFailure("انتهى اتصال البث المباشر");
         }
     }
 
-    @Override
-    public void onRenderedFirstFrame() {
+    @Override public void onRenderedFirstFrame() {
         if (playbackStartedAtMs == 0) return;
+        firstFrameRendered = true;
+        playbackHandler.removeCallbacks(playbackTimeout);
+        progress.setVisibility(View.GONE);
         long firstFrameMs = SystemClock.elapsedRealtime() - playbackStartedAtMs;
         Log.i(TAG, "first-frame kind=" + kind + " ext=" + extension + " ms=" + firstFrameMs
                 + " transport=" + activeTransportName());
+        playbackHandler.removeCallbacks(markPlaybackStable);
+        playbackHandler.postDelayed(markPlaybackStable, isLive() ? LIVE_STABLE_WINDOW_MS : 500L);
     }
 
-    @Override
-    public void onPlayerError(PlaybackException error) {
+    @Override public void onPlayerError(PlaybackException error) {
         playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
         Log.w(TAG, "player-error code=" + error.errorCode + " name=" + error.getErrorCodeName()
                 + " ext=" + extension + " transport=" + activeTransportName(), error);
-
-        if (isLive()
-                && error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW
-                && player != null) {
+        if (isLive() && error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && player != null) {
             try {
                 player.seekToDefaultPosition();
                 player.prepare();
                 player.play();
+                firstFrameRendered = false;
                 schedulePlaybackTimeout();
                 return;
-            } catch (Exception ignored) {
-                // Fall through to normal reconnect.
-            }
+            } catch (Exception ignored) {}
         }
-
         recoverFromFailure(error.getErrorCodeName());
     }
 
@@ -465,69 +559,91 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         long duration = player.getDuration();
         if (duration > 0 && position > duration - 30_000) position = 0;
         position = Math.max(0, position);
-        getSharedPreferences("blofy_positions", MODE_PRIVATE)
-                .edit()
-                .putLong(positionKey(), position)
-                .apply();
+        getSharedPreferences("blofy_positions", MODE_PRIVATE).edit().putLong(positionKey(), position).apply();
         resumePosition = position;
     }
 
     private void releasePlayer() {
         playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
+        playbackHandler.removeCallbacks(hideTitle);
+        warmLiveSwitchPending = false;
         if (player == null) return;
         savePosition();
         playerView.setPlayer(null);
         player.removeListener(this);
         player.release();
         player = null;
+        firstFrameRendered = false;
         playbackStartedAtMs = 0;
     }
 
-    @Override
-    protected void onStart() {
+    @Override protected void onStart() {
         super.onStart();
         if (validUrl(url)) initializePlayer();
     }
 
-    @Override
-    protected void onStop() {
+    @Override protected void onStop() {
         releasePlayer();
         super.onStop();
     }
 
-    @Override
-    public boolean dispatchKeyEvent(KeyEvent event) {
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        // Modal actions must receive DPAD_CENTER before the live-player shortcut.
+        if (errorPanel != null && errorPanel.getVisibility() == View.VISIBLE) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+                finish();
+                return true;
+            }
+            return super.dispatchKeyEvent(event);
+        }
+
+        // While the drawer is visible, its RecyclerView owns DPAD/OK. Only Back is
+        // handled here so focus can never leak to PlayerView behind the scrim.
+        if (liveOverlay != null && liveOverlay.isVisible()) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+                liveOverlay.hide();
+                playerView.requestFocus();
+                return true;
+            }
+            return super.dispatchKeyEvent(event);
+        }
+
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             switch (event.getKeyCode()) {
                 case KeyEvent.KEYCODE_BACK:
-                    finish();
-                    return true;
-                case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                    if (player != null) {
-                        if (player.isPlaying()) player.pause(); else player.play();
+                    finish(); return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                    if (isLive() && liveOverlay != null && !liveOverlay.isVisible()) {
+                        liveOverlay.show(id); return true;
                     }
+                    break;
+                case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                    if (player != null) { if (player.isPlaying()) player.pause(); else player.play(); }
                     return true;
                 case KeyEvent.KEYCODE_MEDIA_PLAY:
-                    if (player != null) player.play();
-                    return true;
+                    if (player != null) player.play(); return true;
                 case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                    if (player != null) player.pause();
-                    return true;
-                default:
-                    break;
+                    if (player != null) player.pause(); return true;
+                default: break;
             }
         }
         return super.dispatchKeyEvent(event);
     }
 
-    @Override
-    public void onBackPressed() {
+    @Override public void onBackPressed() {
+        if (liveOverlay != null && liveOverlay.isVisible()) {
+            liveOverlay.hide(); playerView.requestFocus(); return;
+        }
         finish();
     }
 
-    @Override
-    protected void onDestroy() {
+    @Override protected void onDestroy() {
         playbackHandler.removeCallbacksAndMessages(null);
+        if (liveOverlay != null) liveOverlay.close();
         network.shutdownNow();
         cronetExecutor.shutdownNow();
         super.onDestroy();
@@ -538,22 +654,17 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
                 controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                controller.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             }
         } else {
-            getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         }
     }
 
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) hideSystemUi();
     }

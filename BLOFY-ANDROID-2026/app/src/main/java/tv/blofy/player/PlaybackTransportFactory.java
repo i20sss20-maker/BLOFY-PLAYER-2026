@@ -14,12 +14,15 @@ import com.google.android.gms.net.CronetProviderInstaller;
 
 import org.chromium.net.CronetEngine;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.Executor;
 
-/** Builds Player1 (Default HTTP) and Player2 (Google Play Services Cronet). */
+/** Builds BLOFY platform HTTP and Google Play Services Cronet transports. */
 @UnstableApi
 final class PlaybackTransportFactory {
     private static final String TAG = "BlofyTransport";
+    private static final String USER_AGENT = "BLOFY-PLAYER/2026 AndroidTV";
     private static volatile CronetEngine cronetEngine;
     private static volatile boolean cronetInstallStarted;
 
@@ -56,6 +59,11 @@ final class PlaybackTransportFactory {
     }
 
     static DataSource.Factory create(Context context, boolean preferCronet, Executor executor) {
+        return create(context, preferCronet, executor, 3_500, 10_000);
+    }
+
+    static DataSource.Factory create(Context context, boolean preferCronet, Executor executor,
+                                     int connectTimeoutMs, int readTimeoutMs) {
         if (preferCronet) {
             CronetEngine engine = cronetEngine;
             if (engine != null) {
@@ -67,9 +75,17 @@ final class PlaybackTransportFactory {
             Log.w(TAG, "transport=cronet-unavailable fallback=default-http");
         }
 
-        Log.i(TAG, "transport=default-http");
+        Log.i(TAG, "transport=default-http connect=" + connectTimeoutMs + " read=" + readTimeoutMs);
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Accept", "*/*");
+        headers.put("Accept-Encoding", "identity");
+        headers.put("Connection", "keep-alive");
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true);
+                .setUserAgent(USER_AGENT)
+                .setConnectTimeoutMs(connectTimeoutMs)
+                .setReadTimeoutMs(readTimeoutMs)
+                .setAllowCrossProtocolRedirects(true)
+                .setDefaultRequestProperties(headers);
         return new DefaultDataSource.Factory(context, http);
     }
 }

@@ -3,13 +3,13 @@ package tv.blofy.player;
 import java.util.Locale;
 
 /**
- * Fast IPTV recovery policy: start Live through Cronet, fall back to the
- * platform HTTP stack, then try the alternate Live container. This keeps the
- * proven Media3/direct-provider path while avoiding long duplicate retries.
+ * BLOFY playback recovery policy.
+ * Start with the platform HTTP stack (fastest on the tested TV/server), retry
+ * with Cronet, then for Live only try the alternate TS/HLS container.
  */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 6_000;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 8_000;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 3_500;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 5_500;
     static final int MAX_RECOVERY_STEPS = 3;
 
     private PlaybackPolicy() {}
@@ -43,8 +43,11 @@ final class PlaybackPolicy {
             case "mp4":
             case "m4v":
             case "mov": return "video/mp4";
-            case "mkv": return "video/x-matroska";
-            case "webm": return "video/webm";
+            // Many IPTV panels return MKV/WebM with generic or incorrect HTTP
+            // Content-Type. Let Media3 sniff EBML/container bytes instead of
+            // forcing a type that can select the wrong extractor too early.
+            case "mkv":
+            case "webm": return null;
             case "ts":
             case "mts":
             case "m2ts": return "video/mp2t";
@@ -58,22 +61,22 @@ final class PlaybackPolicy {
         return recoveryStep > 0 ? RETRY_STARTUP_TIMEOUT_MS : INITIAL_STARTUP_TIMEOUT_MS;
     }
 
-    /** step 0/2 use Cronet; step 1/3 use platform HTTP. */
+    /** step 0/2 use platform HTTP; step 1/3 use Cronet. */
     static boolean useCronet(int recoveryStep) {
-        return recoveryStep == 0 || recoveryStep == 2;
+        return recoveryStep == 1 || recoveryStep == 3;
     }
 
-    /** One same-format fallback only: Cronet -> platform HTTP. */
+    /** One same-format fallback only: platform HTTP -> Cronet. */
     static boolean shouldRetrySameFormat(int recoveryStep) {
         return recoveryStep == 1;
     }
 
-    /** After both transports on the original format, switch TS <-> HLS. */
+    /** After both transports on the original Live format, switch TS <-> HLS. */
     static boolean shouldTryAlternateLiveFormat(int recoveryStep) {
         return recoveryStep == 2;
     }
 
-    /** Retry the alternate format once through platform HTTP. */
+    /** Retry alternate Live format once through Cronet. */
     static boolean shouldRetryAlternateFormat(int recoveryStep) {
         return recoveryStep == 3;
     }
