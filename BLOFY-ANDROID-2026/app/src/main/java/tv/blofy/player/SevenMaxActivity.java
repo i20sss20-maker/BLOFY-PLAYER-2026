@@ -439,7 +439,8 @@ public final class SevenMaxActivity extends Activity {
         state.setTextDirection(View.TEXT_DIRECTION_RTL);
         card.addView(state, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(24)));
 
-        TextView device = BlofyUi.text(this, DeviceIdentity.id(this), 9, BlofyUi.PURPLE_LIGHT);
+        TextView device = BlofyUi.text(this, DeviceIdentity.displayId(this)
+                + "  •  " + DeviceIdentity.activationCode(this), 9, BlofyUi.PURPLE_LIGHT);
         device.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         device.setTextDirection(View.TEXT_DIRECTION_LTR);
         device.setSingleLine(true);
@@ -619,21 +620,44 @@ public final class SevenMaxActivity extends Activity {
         columns.addView(previewPanel, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.MATCH_PARENT, 1));
 
+        final String[] previewedId = {""};
         liveAdapter.listener = item -> {
+            previewedId[0] = item.id;
             channelName.setText(item.name);
             if (livePreview != null) livePreview.preview(item);
         };
         catAdapter.listener = category -> {
-            liveAdapter.firstPageLoaded = () -> channels.requestFocus();
+            liveAdapter.firstPageLoaded = () -> {
+                boolean autoplay = !"off".equals(getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
+                        .getString(SettingsActivity.KEY_AUTOPLAY_LIVE, "on"));
+                if (autoplay && !liveAdapter.rows.isEmpty() && liveAdapter.listener != null) {
+                    liveAdapter.listener.selected(liveAdapter.rows.get(0));
+                }
+                channels.requestFocus();
+            };
             liveAdapter.reload(category.id, search.getText().toString());
         };
         bindLiveSearch(search, value -> {
-            liveAdapter.firstPageLoaded = null;
+            liveAdapter.firstPageLoaded = () -> {
+                boolean autoplay = !"off".equals(getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
+                        .getString(SettingsActivity.KEY_AUTOPLAY_LIVE, "on"));
+                if (autoplay && !liveAdapter.rows.isEmpty() && liveAdapter.listener != null) {
+                    liveAdapter.listener.selected(liveAdapter.rows.get(0));
+                }
+            };
             liveAdapter.reload(liveAdapter.category, value);
         });
 
         page.addView(columns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         shell.content.addView(page, match());
+        liveAdapter.firstPageLoaded = () -> {
+            boolean autoplay = !"off".equals(getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
+                    .getString(SettingsActivity.KEY_AUTOPLAY_LIVE, "on"));
+            if (autoplay && !liveAdapter.rows.isEmpty() && liveAdapter.listener != null) {
+                liveAdapter.listener.selected(liveAdapter.rows.get(0));
+            }
+        };
+        liveAdapter.previewedId = previewedId;
         liveAdapter.reload("", "");
         cats.requestFocus();
     }
@@ -770,6 +794,8 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private void play(BlofyModels.Media item) {
+        String warmUrl = "live".equals(item.type) && livePreview != null
+                ? livePreview.resolvedUrl(item) : "";
         releasePreview();
         database.addHistory(item.type, item.id);
         Intent intent = new Intent(this, PlayerActivity.class);
@@ -777,6 +803,8 @@ public final class SevenMaxActivity extends Activity {
         intent.putExtra(PlayerActivity.EXTRA_TITLE, item.name);
         intent.putExtra(PlayerActivity.EXTRA_KIND, item.type);
         intent.putExtra(PlayerActivity.EXTRA_EXTENSION, item.extension);
+        intent.putExtra(PlayerActivity.EXTRA_CATEGORY_ID, item.categoryId);
+        if (!warmUrl.isEmpty()) intent.putExtra(PlayerActivity.EXTRA_URL, warmUrl);
         startActivity(intent);
     }
 
@@ -923,6 +951,7 @@ public final class SevenMaxActivity extends Activity {
         int generation;
         LiveListener listener;
         Runnable firstPageLoaded;
+        String[] previewedId;
 
         void reload(String category, String query) {
             if (!isCurrentScreen(ownerGeneration)) return;
@@ -1014,13 +1043,11 @@ public final class SevenMaxActivity extends Activity {
             images.load(holder.logo, media.image);
             holder.card.setScaleX(1f);
             holder.card.setScaleY(1f);
-            holder.card.setOnFocusChangeListener((v, focused) -> {
-                float target = focused ? 1.018f : 1f;
-                v.animate().scaleX(target).scaleY(target).setDuration(105).start();
-                v.setElevation(focused ? dp(12) : 0);
-                if (focused && listener != null) listener.selected(media);
+            BlofyUi.attachScaleFocus(holder.card, 1.015f);
+            holder.card.setOnClickListener(v -> {
+                if (previewedId != null && media.id.equals(previewedId[0])) play(media);
+                else if (listener != null) listener.selected(media);
             });
-            holder.card.setOnClickListener(v -> play(media));
         }
 
         @Override public int getItemCount() {
