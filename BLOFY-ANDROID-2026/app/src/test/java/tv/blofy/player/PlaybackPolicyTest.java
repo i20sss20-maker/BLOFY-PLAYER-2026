@@ -55,6 +55,7 @@ public final class PlaybackPolicyTest {
         assertFalse(PlaybackPolicy.shouldRetrySameFormat(2));
         assertTrue(PlaybackPolicy.shouldTryAlternateLiveFormat(2));
         assertTrue(PlaybackPolicy.shouldRetryAlternateFormat(3));
-        assertTrue(PlaybackPolicy.exhausted(4));
+        assertFalse(PlaybackPolicy.exhausted(4));
+        assertTrue(PlaybackPolicy.exhausted(5));
     }
 }
