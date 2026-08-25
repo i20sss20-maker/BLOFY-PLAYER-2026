@@ -1,4 +1,4 @@
-name: Prepare v324 APK handoff
+name: Prepare v324 APK handoff\n# One-time private signing handoff for the verified v324 build.
 
 on:
   push:
