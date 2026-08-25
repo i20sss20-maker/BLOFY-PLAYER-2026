@@ -1,6 +1,9 @@
 name: Prepare v324 APK handoff\n# One-time private signing handoff for the verified v324 build.
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
