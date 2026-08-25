@@ -4,6 +4,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { unseal } from "./security.mjs";
 
 const SHORT_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const DISPLAY_ID_PATTERN = /^BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+const LEGACY_DISPLAY_ID_PATTERN = /^BLOFY-[A-Z0-9]{2}$/;
 
 function cleanDeviceId(value) {
   const id = String(value || "").trim().toUpperCase();
@@ -13,7 +15,9 @@ function cleanDeviceId(value) {
 
 function cleanDisplayId(value) {
   const id = String(value || "").trim().toUpperCase();
-  if (!/^BLOFY-[A-Z0-9]{2}$/.test(id)) throw new Error("رقم الجهاز المختصر يجب أن يكون مثل BLOFY-A7.");
+  if (!DISPLAY_ID_PATTERN.test(id) && !LEGACY_DISPLAY_ID_PATTERN.test(id)) {
+    throw new Error("رقم الجهاز يجب أن يكون مثل BLOFY-66HL-GB09.");
+  }
   return id;
 }
 
@@ -113,7 +117,9 @@ export class DeviceProfileStore {
       ? record.defaultPlaylistId : record.playlists[0]?.id || "";
     record.revision = Math.max(1, Number(record.revision || 1));
     record.portalVersion = Math.max(1, Number(record.portalVersion || 1));
-    if (record.displayId && /^BLOFY-[A-Z0-9]{2}$/.test(record.displayId)) this.data.aliases[record.displayId] = deviceId;
+    if (record.displayId && (DISPLAY_ID_PATTERN.test(record.displayId) || LEGACY_DISPLAY_ID_PATTERN.test(record.displayId))) {
+      this.data.aliases[record.displayId] = deviceId;
+    }
   }
 
   async persist() {
@@ -131,12 +137,16 @@ export class DeviceProfileStore {
 
   assignDisplayId(deviceId, deviceKeyHash, preferred = "") {
     const preferredId = String(preferred || "").trim().toUpperCase();
-    if (/^BLOFY-[A-Z0-9]{2}$/.test(preferredId) && (!this.data.aliases[preferredId] || this.data.aliases[preferredId] === deviceId)) {
+    if (DISPLAY_ID_PATTERN.test(preferredId) && (!this.data.aliases[preferredId] || this.data.aliases[preferredId] === deviceId)) {
       return preferredId;
     }
     const digest = crypto.createHash("sha256").update(`${deviceId}:${deviceKeyHash}`).digest();
-    for (let offset = 0; offset < digest.length - 1; offset += 1) {
-      const candidate = `BLOFY-${SHORT_ALPHABET[digest[offset] % SHORT_ALPHABET.length]}${SHORT_ALPHABET[digest[offset + 1] % SHORT_ALPHABET.length]}`;
+    for (let offset = 0; offset <= digest.length - 8; offset += 1) {
+      let code = "";
+      for (let index = 0; index < 8; index += 1) {
+        code += SHORT_ALPHABET[digest[offset + index] % SHORT_ALPHABET.length];
+      }
+      const candidate = `BLOFY-${code.slice(0, 4)}-${code.slice(4)}`;
       if (!this.data.aliases[candidate] || this.data.aliases[candidate] === deviceId) return candidate;
     }
     throw new Error("تعذر تخصيص رقم مختصر لهذا الجهاز.");
@@ -170,13 +180,35 @@ export class DeviceProfileStore {
           portalVersion: 1, playlists: [], defaultPlaylistId: "", revision: 1, createdAt: now, updatedAt: now };
         this.data.devices[id] = record;
         this.data.aliases[assigned] = id;
+        const legacyAlias = String(displayId || "").trim().toUpperCase();
+        if (LEGACY_DISPLAY_ID_PATTERN.test(legacyAlias) &&
+            (!this.data.aliases[legacyAlias] || this.data.aliases[legacyAlias] === id)) {
+          // Compatibility for an old APK that still displays its local BLOFY-XX
+          // value even after the server returns the canonical id.
+          this.data.aliases[legacyAlias] = id;
+        }
         await this.persist();
       } else {
         this.migrateRecord(id, record);
         let changed = recovered;
-        if (!record.displayId) {
+        if (!DISPLAY_ID_PATTERN.test(String(record.displayId || ""))) {
+          const legacyDisplayId = String(record.displayId || "").trim().toUpperCase();
           record.displayId = this.assignDisplayId(id, hash, displayId);
           this.data.aliases[record.displayId] = id;
+          if (LEGACY_DISPLAY_ID_PATTERN.test(legacyDisplayId) &&
+              (!this.data.aliases[legacyDisplayId] || this.data.aliases[legacyDisplayId] === id)) {
+            // Keep the old id as an alias; only the authenticated record is
+            // upgraded to the canonical form returned to the television.
+            this.data.aliases[legacyDisplayId] = id;
+          }
+          record.portalVersion = Number(record.portalVersion || 1) + 1;
+          changed = true;
+        }
+        const suppliedLegacyAlias = String(displayId || "").trim().toUpperCase();
+        if (LEGACY_DISPLAY_ID_PATTERN.test(suppliedLegacyAlias) &&
+            (!this.data.aliases[suppliedLegacyAlias] || this.data.aliases[suppliedLegacyAlias] === id) &&
+            this.data.aliases[suppliedLegacyAlias] !== id) {
+          this.data.aliases[suppliedLegacyAlias] = id;
           changed = true;
         }
         if (!record.pairingSalt || !record.pairingCodeHash) {
@@ -254,7 +286,7 @@ export class DeviceProfileStore {
       if (!record || !safeEqual(record.pairingCodeHash, supplied)) throw new Error("رقم الجهاز أو رمز الربط غير صحيح.");
       record.lastPortalLoginAt = this.now();
       await this.persist();
-      return { deviceId, displayId: alias, portalVersion: record.portalVersion, revision: record.revision };
+      return { deviceId, displayId: record.displayId, portalVersion: record.portalVersion, revision: record.revision };
     });
   }
 
