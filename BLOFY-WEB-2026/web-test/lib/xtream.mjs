@@ -55,6 +55,7 @@ function cleanDate(...values) {
   for (const value of values) {
     const raw = String(value ?? "").trim();
     if (!raw || raw === "0") continue;
+    if (/^(?:19|20)\d{2}$/.test(raw)) return raw;
     if (/^\d{10,13}$/.test(raw)) {
       const numeric = Number(raw) * (raw.length === 10 ? 1000 : 1);
       const date = new Date(numeric);
@@ -62,20 +63,66 @@ function cleanDate(...values) {
     }
     const parsed = Date.parse(raw);
     if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
-    if (/^(?:19|20)\d{2}$/.test(raw)) return raw;
   }
   return "";
 }
 
-function people(value) {
-  const rows = Array.isArray(value) ? value : String(value || "").split(/[,،|]/);
+function firstUseful(...values) {
+  for (const value of values) {
+    const clean = String(value ?? "").trim();
+    if (clean && clean !== "null" && clean !== "undefined") return clean;
+  }
+  return "";
+}
+
+function firstRating(...values) {
+  for (const value of values) {
+    const clean = firstUseful(value);
+    if (clean && !/^0(?:[.,]0+)?(?:\s*\/\s*(?:5|10|100))?$/.test(clean)) return clean;
+  }
+  return "";
+}
+
+function tenPointRating(value, fiveBased = false) {
+  const raw = firstRating(value);
+  if (!raw) return "";
+  const match = raw.replace(",", ".").match(/\d+(?:\.\d+)?/);
+  if (!match) return raw;
+  let score = Number(match[0]);
+  if (!Number.isFinite(score)) return raw;
+  if (fiveBased || /\/\s*5\b/.test(raw)) score *= 2;
+  else if (/%|\/\s*100\b/.test(raw) || score > 10) score /= 10;
+  score = Math.min(10, Math.max(0, score));
+  return String(Math.round(score * 10) / 10);
+}
+
+function primaryRating(info = {}) {
+  const explicitSource = firstUseful(info.ratingSource, info.rating_source);
+  const explicitRating = firstRating(info.rating);
+  if (explicitSource && explicitRating) return { value: tenPointRating(explicitRating), source: explicitSource };
+  const imdb = firstRating(info.imdb_rating, info.imdbRating);
+  if (imdb) return { value: tenPointRating(imdb), source: "IMDb" };
+  const tmdb = firstRating(info.tmdb_rating, info.tmdbRating, info.vote_average);
+  if (tmdb) return { value: tenPointRating(tmdb), source: "TMDB" };
+  if (explicitRating) return { value: tenPointRating(explicitRating), source: "مزود المحتوى" };
+  const fiveBased = firstRating(info.rating_5based);
+  if (fiveBased) return { value: tenPointRating(fiveBased, true), source: "مزود المحتوى" };
+  return { value: "", source: "" };
+}
+
+function people(...values) {
+  const rows = [];
+  for (const value of values) {
+    if (Array.isArray(value)) rows.push(...value);
+    else if (value != null && typeof value !== "object") rows.push(...String(value).split(/[,،|]/));
+  }
   const seen = new Set();
   return rows.map((entry) => {
     if (entry && typeof entry === "object") {
-      const rawImage = String(entry.image || entry.profile || entry.profile_path || "").trim();
+      const rawImage = firstUseful(entry.image, entry.profile, entry.profile_path, entry.profilePath, entry.photo);
       return {
-        name: String(entry.name || entry.actor || entry.original_name || "").trim(),
-        character: String(entry.character || entry.role || "").trim(),
+        name: firstUseful(entry.name, entry.actor, entry.original_name, entry.title),
+        character: firstUseful(entry.character, entry.role, entry.known_for_department),
         image: rawImage.startsWith("/") ? `https://image.tmdb.org/t/p/w185${rawImage}` : rawImage,
       };
     }
@@ -91,14 +138,34 @@ function people(value) {
 function ratingRows(info = {}) {
   const rows = [];
   const add = (source, value) => {
-    const clean = String(value ?? "").trim();
-    if (!clean || clean === "0" || clean === "0.0") return;
-    if (!rows.some((entry) => entry.source === source)) rows.push({ source, value: clean });
+    const clean = firstRating(value);
+    const cleanSource = firstUseful(source);
+    if (!clean || !cleanSource) return;
+    if (!rows.some((entry) => entry.source.toLocaleLowerCase("en") === cleanSource.toLocaleLowerCase("en"))) {
+      rows.push({ source: cleanSource, value: clean });
+    }
   };
-  add("IMDb", info.imdb_rating ?? info.imdbRating);
-  add("TMDB", info.tmdb_rating ?? info.tmdbRating ?? info.vote_average);
-  add("مزود المحتوى", info.rating ?? info.rating_5based);
-  return rows;
+  add("IMDb", firstRating(info.imdb_rating, info.imdbRating));
+  add("TMDB", firstRating(info.tmdb_rating, info.tmdbRating, info.vote_average));
+  add("Rotten Tomatoes", firstRating(info.rottenTomatoesRating, info.rotten_tomatoes_rating));
+  const upstream = info.ratings;
+  if (Array.isArray(upstream)) {
+    for (const entry of upstream) if (entry && typeof entry === "object") {
+      add(firstUseful(entry.source, entry.name, entry.site), firstRating(entry.value, entry.rating, entry.score));
+    }
+  } else if (upstream && typeof upstream === "object") {
+    for (const [source, value] of Object.entries(upstream)) {
+      add(source, value && typeof value === "object"
+        ? firstRating(value.value, value.rating, value.score) : value);
+    }
+  }
+  const provider = firstRating(info.rating);
+  if (provider) add("مزود المحتوى", provider);
+  else {
+    const fiveBased = firstRating(info.rating_5based);
+    if (fiveBased) add("مزود المحتوى", `${fiveBased}/5`);
+  }
+  return rows.slice(0, 6);
 }
 
 export class XtreamClient {
@@ -162,48 +229,53 @@ export class XtreamClient {
     const action = type === "live" ? "get_live_streams" : type === "movies" ? "get_vod_streams" : "get_series";
     const rows = await this.request(action, categoryId ? { category_id: categoryId } : {});
     if (!Array.isArray(rows)) return [];
-    return rows.map((row) => ({
-      id: String(row.stream_id ?? row.series_id),
-      name: row.name || row.title || "بدون اسم",
-      image: row.stream_icon || row.cover || "",
-      backdrop: Array.isArray(row.backdrop_path) ? row.backdrop_path[0] || "" : "",
-      categoryId: String(row.category_id || ""),
-      rating: row.rating_5based || row.rating || "",
-      ratingSource: row.tmdb_rating || row.vote_average ? "TMDB" : "مزود المحتوى",
-      year: row.year || row.releaseDate || row.releasedate || "",
-      releaseDate: cleanDate(row.releaseDate, row.release_date, row.releasedate,
-        row.last_air_date, row.first_air_date, row.year),
-      updatedAt: cleanDate(row.last_modified, row.updated_at, row.added, row.added_at),
-      // Match 7 Max behaviour for Xtream Live: TS is the default and the
-      // player's fallback decision controls when HLS is requested. A provider
-      // direct_source must not silently lock Live to one format, otherwise a
-      // TS -> HLS recovery would keep reopening the exact same URL.
-      extension: type === "live"
-        ? "ts"
-        : String(row.container_extension || extensionFromUrl(row.direct_source) || "mp4").toLowerCase(),
-      epgId: row.epg_channel_id || "",
-      sourceUrl: type === "live" ? "" : normalizeDirectSource(row.direct_source),
-      type,
-    }));
+    return rows.map((row) => {
+      const primary = primaryRating(row);
+      return {
+        id: String(row.stream_id ?? row.series_id),
+        name: row.name || row.title || "بدون اسم",
+        image: row.stream_icon || row.cover || "",
+        backdrop: Array.isArray(row.backdrop_path) ? row.backdrop_path[0] || "" : "",
+        categoryId: String(row.category_id || ""),
+        rating: primary.value,
+        ratingSource: primary.source,
+        year: row.year || row.releaseDate || row.releasedate || "",
+        releaseDate: cleanDate(row.releaseDate, row.release_date, row.releasedate,
+          row.last_air_date, row.first_air_date, row.year),
+        updatedAt: cleanDate(row.last_modified, row.updated_at, row.added, row.added_at,
+          type === "series" ? row.last_air_date : ""),
+        // Match 7 Max behaviour for Xtream Live: TS is the default and the
+        // player's fallback decision controls when HLS is requested. A provider
+        // direct_source must not silently lock Live to one format, otherwise a
+        // TS -> HLS recovery would keep reopening the exact same URL.
+        extension: type === "live"
+          ? "ts"
+          : String(row.container_extension || extensionFromUrl(row.direct_source) || "mp4").toLowerCase(),
+        epgId: row.epg_channel_id || "",
+        sourceUrl: type === "live" ? "" : normalizeDirectSource(row.direct_source),
+        type,
+      };
+    });
   }
 
   async movieInfo(id) {
     const data = await this.request("get_vod_info", { vod_id: id });
     const info = data?.info || {};
     const movie = data?.movie_data || {};
+    const primary = primaryRating(info);
     return {
       id: String(id),
       name: info.name || movie.name || "فيلم",
       description: info.plot || info.description || "",
       image: info.movie_image || movie.stream_icon || "",
       backdrop: Array.isArray(info.backdrop_path) ? info.backdrop_path[0] || "" : "",
-      rating: info.rating || "",
+      rating: primary.value,
       year: info.releasedate || info.year || "",
       releaseDate: cleanDate(info.releaseDate, info.release_date, info.releasedate, info.year),
       updatedAt: cleanDate(movie.added, info.added, info.updated_at),
-      ratingSource: info.tmdb_rating || info.vote_average ? "TMDB" : "مزود المحتوى",
+      ratingSource: primary.source,
       ratings: ratingRows(info),
-      cast: people(info.cast || info.actors),
+      cast: people(info.cast, info.actors, info.credits?.cast),
       director: String(info.director || ""),
       imdbId: String(info.imdb_id || info.imdbId || ""),
       tmdbId: String(info.tmdb_id || info.tmdbId || ""),
@@ -267,6 +339,7 @@ function episodeRows(rawEpisodes) {
 
 export function normalizeSeriesInfo(data, id) {
   const info = data?.info || {};
+  const primary = primaryRating(info);
   const bySeason = new Map();
   for (const [index, row] of episodeRows(data?.episodes).entries()) {
     const episode = row.episode;
@@ -282,8 +355,9 @@ export function normalizeSeriesInfo(data, id) {
       extension: String(episode.container_extension || episode.info?.container_extension || extensionFromUrl(episode.direct_source) || "mp4").toLowerCase(),
       duration: episode.info?.duration || episode.duration || "",
       image: episode.info?.movie_image || episode.info?.cover_big || episode.movie_image || info.cover || "",
-      airDate: cleanDate(episode.air_date, episode.release_date, episode.info?.air_date,
-        episode.info?.release_date, episode.added, episode.info?.added),
+      airDate: cleanDate(episode.airDate, episode.air_date, episode.releaseDate,
+        episode.release_date, episode.info?.airDate, episode.info?.air_date,
+        episode.info?.releaseDate, episode.info?.release_date, episode.added, episode.info?.added),
       sourceUrl: normalizeDirectSource(episode.direct_source || episode.info?.direct_source),
     });
     bySeason.set(season, values);
@@ -301,13 +375,14 @@ export function normalizeSeriesInfo(data, id) {
     description: info.plot || info.description || "",
     image: info.cover || info.movie_image || "",
     backdrop: Array.isArray(info.backdrop_path) ? info.backdrop_path[0] || "" : info.backdrop_path || "",
-    rating: info.rating || info.rating_5based || "",
-    year: info.releaseDate || info.releasedate || info.year || "",
-    releaseDate: cleanDate(info.releaseDate, info.release_date, info.releasedate, info.year),
-    updatedAt: cleanDate(info.last_modified, info.updated_at, info.added),
-    ratingSource: info.tmdb_rating || info.vote_average ? "TMDB" : "مزود المحتوى",
+    rating: primary.value,
+    year: info.releaseDate || info.releasedate || info.first_air_date || info.last_air_date || info.year || "",
+    releaseDate: cleanDate(info.releaseDate, info.release_date, info.releasedate,
+      info.first_air_date, info.year),
+    updatedAt: cleanDate(info.last_modified, info.updated_at, info.added, info.last_air_date),
+    ratingSource: primary.source,
     ratings: ratingRows(info),
-    cast: people(info.cast || info.actors),
+    cast: people(info.cast, info.actors, info.credits?.cast),
     director: String(info.director || ""),
     imdbId: String(info.imdb_id || info.imdbId || ""),
     tmdbId: String(info.tmdb_id || info.tmdbId || ""),

@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /** Dedicated VOD engine: Media3 first, Cronet retry, then LibVLC video fallback. */
 @UnstableApi
@@ -95,6 +96,11 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private int vlcAudioIndex = -1;
     private int vlcSubtitleIndex = -1;
     private boolean stereoMode;
+    private boolean lifecycleStopped;
+    private boolean destroyed;
+    private int resolveGeneration;
+    private int vlcGeneration;
+    private Future<?> resolveTask;
 
     private final Runnable updateProgress = new Runnable() {
         @Override public void run() {
@@ -308,9 +314,10 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private void resolve() {
         if (resolving || id.isEmpty()) return;
         resolving = true;
+        int token = ++resolveGeneration;
         spinner.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.GONE);
-        network.execute(() -> {
+        resolveTask = network.submit(() -> {
             try {
                 String apiType = "episode".equals(kind) || "series".equals(kind) ? "episode" : "movies";
                 JSONObject data = new BlofyApi(this).get(
@@ -321,14 +328,19 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                     result = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + result;
                 }
                 if (!validUrl(result)) throw new Exception("رابط الفيديو غير صالح");
-                resolvedUrl = result;
-                extension = PlaybackPolicy.normalizeExtension(data.optString("extension", extension), extension);
-                runOnUiThread(() -> {
+                String finalUrl = result;
+                String finalExtension = PlaybackPolicy.normalizeExtension(
+                        data.optString("extension", extension), extension);
+                main.post(() -> {
+                    if (destroyed || token != resolveGeneration || isFinishing()) return;
+                    resolvedUrl = finalUrl;
+                    extension = finalExtension;
                     resolving = false;
-                    openMedia3();
+                    if (!lifecycleStopped) openMedia3();
                 });
             } catch (Exception error) {
-                runOnUiThread(() -> {
+                main.post(() -> {
+                    if (destroyed || token != resolveGeneration || isFinishing()) return;
                     resolving = false;
                     showError(error.getMessage());
                 });
@@ -417,7 +429,12 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         if (stereoMode) options.add("--stereo-mode=1");
         libVLC = new LibVLC(this, options);
         vlcPlayer = new org.videolan.libvlc.MediaPlayer(libVLC);
-        vlcPlayer.setEventListener(event -> runOnUiThread(() -> onVlcEvent(event)));
+        org.videolan.libvlc.MediaPlayer openedPlayer = vlcPlayer;
+        int token = ++vlcGeneration;
+        openedPlayer.setEventListener(event -> main.post(() -> {
+            if (destroyed || token != vlcGeneration || vlcPlayer != openedPlayer) return;
+            onVlcEvent(event);
+        }));
 
         IVLCVout vout = vlcPlayer.getVLCVout();
         vout.setVideoView(vlcSurface);
@@ -432,8 +449,11 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         media.release();
         vlcPlayer.play();
         if (resumePosition > 0) {
+            long resumeAtOpen = resumePosition;
             main.postDelayed(() -> {
-                if (vlcPlayer != null && resumePosition > 0) vlcPlayer.setTime(resumePosition);
+                if (!destroyed && token == vlcGeneration && vlcPlayer == openedPlayer) {
+                    openedPlayer.setTime(resumeAtOpen);
+                }
             }, 900);
         }
         startWatchdog(ultraHd() ? 28_000 : 18_000);
@@ -445,6 +465,11 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         switch (event.type) {
             case org.videolan.libvlc.MediaPlayer.Event.Playing:
             case org.videolan.libvlc.MediaPlayer.Event.Vout:
+                updateVlcTrackButtons();
+                break;
+            case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
+            case org.videolan.libvlc.MediaPlayer.Event.PositionChanged:
+                if (firstFrame) break;
                 firstFrame = true;
                 spinner.setVisibility(View.GONE);
                 main.removeCallbacks(startupTimeout);
@@ -630,17 +655,11 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         int displayIndex = 0;
         for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
             if (group.getType() != trackType) continue;
-            int chosen = -1;
             for (int index = 0; index < group.length; index++) {
                 if (!group.isTrackSupported(index)) continue;
-                if (chosen < 0) chosen = index;
-                if (group.isTrackSelected(index)) {
-                    chosen = index;
-                    break;
-                }
+                result.add(new TrackChoice(
+                        group, index, displayIndex++, group.getTrackFormat(index)));
             }
-            if (chosen >= 0) result.add(new TrackChoice(
-                    group, chosen, displayIndex++, group.getTrackFormat(chosen)));
         }
         return result;
     }
@@ -696,15 +715,19 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         if (!usingVlc || vlcPlayer == null) { showControls(); return; }
         org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks = vlcPlayer.getAudioTracks();
         if (tracks == null || tracks.length == 0) return;
-        int attempts = 0;
-        do {
-            vlcAudioIndex = (vlcAudioIndex + 1) % tracks.length;
-            attempts++;
-        } while (tracks[vlcAudioIndex].id < 0 && attempts < tracks.length);
-        if (tracks[vlcAudioIndex].id < 0) return;
-        vlcPlayer.setAudioTrack(tracks[vlcAudioIndex].id);
-        engineView.setText("VLC • صوت: " + tracks[vlcAudioIndex].name);
-        audioButton.setText("🔊  الصوت: " + tracks[vlcAudioIndex].name);
+        int current = indexOfTrack(tracks, vlcPlayer.getAudioTrack());
+        int selected = -1;
+        for (int step = 1; step <= tracks.length; step++) {
+            int candidate = (current + step + tracks.length) % tracks.length;
+            if (tracks[candidate].id >= 0 && vlcPlayer.setAudioTrack(tracks[candidate].id)) {
+                selected = candidate;
+                break;
+            }
+        }
+        if (selected < 0) return;
+        vlcAudioIndex = selected;
+        engineView.setText("VLC • صوت: " + tracks[selected].name);
+        audioButton.setText("🔊  الصوت: " + tracks[selected].name);
         showControls();
     }
 
@@ -712,11 +735,20 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         if (!usingVlc || vlcPlayer == null) { showControls(); return; }
         org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks = vlcPlayer.getSpuTracks();
         if (tracks == null || tracks.length == 0) return;
-        vlcSubtitleIndex = (vlcSubtitleIndex + 1) % tracks.length;
-        vlcPlayer.setSpuTrack(tracks[vlcSubtitleIndex].id);
-        engineView.setText("VLC • ترجمة: " + tracks[vlcSubtitleIndex].name);
-        subtitleButton.setText(tracks[vlcSubtitleIndex].id < 0
-                ? "CC  الترجمة: إيقاف" : "CC  الترجمة: " + tracks[vlcSubtitleIndex].name);
+        int current = indexOfTrack(tracks, vlcPlayer.getSpuTrack());
+        int selected = -1;
+        for (int step = 1; step <= tracks.length; step++) {
+            int candidate = (current + step + tracks.length) % tracks.length;
+            if (vlcPlayer.setSpuTrack(tracks[candidate].id)) {
+                selected = candidate;
+                break;
+            }
+        }
+        if (selected < 0) return;
+        vlcSubtitleIndex = selected;
+        engineView.setText("VLC • ترجمة: " + tracks[selected].name);
+        subtitleButton.setText(tracks[selected].id < 0
+                ? "CC  الترجمة: إيقاف" : "CC  الترجمة: " + tracks[selected].name);
         showControls();
     }
 
@@ -724,9 +756,23 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         if (!usingVlc || vlcPlayer == null || audioButton == null) return;
         org.videolan.libvlc.MediaPlayer.TrackDescription[] audio = vlcPlayer.getAudioTracks();
         org.videolan.libvlc.MediaPlayer.TrackDescription[] text = vlcPlayer.getSpuTracks();
-        audioButton.setText("🔊  الصوت" + (audio == null ? "" : " • " + audio.length + " مسار"));
-        subtitleButton.setText("CC  الترجمة" + (text == null ? "" : " • " + text.length + " مسار"));
+        vlcAudioIndex = indexOfTrack(audio, vlcPlayer.getAudioTrack());
+        vlcSubtitleIndex = indexOfTrack(text, vlcPlayer.getSpuTrack());
+        audioButton.setText(vlcAudioIndex >= 0
+                ? "🔊  الصوت: " + audio[vlcAudioIndex].name
+                : "🔊  الصوت" + (audio == null ? "" : " • " + audio.length + " مسار"));
+        subtitleButton.setText(vlcSubtitleIndex >= 0 && text[vlcSubtitleIndex].id >= 0
+                ? "CC  الترجمة: " + text[vlcSubtitleIndex].name : "CC  الترجمة: إيقاف");
         stereoButton.setText(stereoMode ? "♫  المخرج: ستريو 2.0" : "♫  المخرج: تلقائي");
+    }
+
+    private static int indexOfTrack(org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks,
+                                    int trackId) {
+        if (tracks == null) return -1;
+        for (int index = 0; index < tracks.length; index++) {
+            if (tracks[index].id == trackId) return index;
+        }
+        return -1;
     }
 
     private void showControls() {
@@ -838,11 +884,14 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     }
 
     private void releaseVlc() {
-        if (vlcPlayer != null) {
-            try { vlcPlayer.stop(); } catch (Exception ignored) {}
-            try { vlcPlayer.getVLCVout().detachViews(); } catch (Exception ignored) {}
-            try { vlcPlayer.release(); } catch (Exception ignored) {}
-            vlcPlayer = null;
+        vlcGeneration++;
+        org.videolan.libvlc.MediaPlayer current = vlcPlayer;
+        vlcPlayer = null;
+        if (current != null) {
+            try { current.setEventListener(null); } catch (Exception ignored) {}
+            try { current.stop(); } catch (Exception ignored) {}
+            try { current.getVLCVout().detachViews(); } catch (Exception ignored) {}
+            try { current.release(); } catch (Exception ignored) {}
         }
         if (libVLC != null) {
             try { libVLC.release(); } catch (Exception ignored) {}
@@ -938,8 +987,10 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
     @Override protected void onStart() {
         super.onStart();
-        if (stoppedByLifecycle && !hasActiveEngine() && validUrl(resolvedUrl) && errorPanel.getVisibility() != View.VISIBLE) {
-            stoppedByLifecycle = false;
+        lifecycleStopped = false;
+        boolean shouldRestore = stoppedByLifecycle;
+        stoppedByLifecycle = false;
+        if (shouldRestore && !hasActiveEngine() && validUrl(resolvedUrl) && errorPanel.getVisibility() != View.VISIBLE) {
             if (usingVlc || attempt >= 2) openVlc("استئناف المشاهدة");
             else openMedia3();
         }
@@ -947,12 +998,16 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
     @Override protected void onStop() {
         savePosition();
+        lifecycleStopped = true;
         stoppedByLifecycle = !isFinishing();
         releaseAllEngines();
         super.onStop();
     }
 
     @Override protected void onDestroy() {
+        destroyed = true;
+        resolveGeneration++;
+        if (resolveTask != null) resolveTask.cancel(true);
         main.removeCallbacksAndMessages(null);
         releaseAllEngines();
         network.shutdownNow();

@@ -41,9 +41,9 @@ final class LivePreviewController implements Player.Listener {
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicInteger generation = new AtomicInteger();
+    private int openedGeneration = -1;
     private ExoPlayer player;
     private Runnable pending;
-    private BlofyModels.Media pendingItem;
     private Listener listener;
 
     LivePreviewController(Context context) {
@@ -65,20 +65,19 @@ final class LivePreviewController implements Player.Listener {
 
     void preview(BlofyModels.Media item) {
         if (item == null || item.id == null || item.id.isEmpty()) return;
-        pendingItem = item;
+        int token = generation.incrementAndGet();
         if (listener != null) listener.loading();
         if (pending != null) main.removeCallbacks(pending);
-        pending = () -> startPreview(pendingItem);
+        pending = () -> startPreview(item, token);
         main.postDelayed(pending, 110L);
     }
 
-    private void startPreview(BlofyModels.Media item) {
+    private void startPreview(BlofyModels.Media item, int token) {
         if (item == null) return;
-        int token = generation.incrementAndGet();
         String cacheKey = item.id + ":" + PlaybackPolicy.normalizeExtension(item.extension, "ts");
         Resolved cached = URL_CACHE.get(cacheKey);
         if (cached != null) {
-            open(cached.url, cached.extension);
+            if (token == generation.get()) open(cached.url, cached.extension, token);
             return;
         }
         network.execute(() -> {
@@ -92,7 +91,7 @@ final class LivePreviewController implements Player.Listener {
                 URL_CACHE.put(cacheKey, new Resolved(url, resolvedExt));
                 main.post(() -> {
                     if (token != generation.get()) return;
-                    open(url, resolvedExt);
+                    open(url, resolvedExt, token);
                 });
             } catch (Exception ignored) {
                 main.post(() -> {
@@ -124,8 +123,10 @@ final class LivePreviewController implements Player.Listener {
         view.setPlayer(player);
     }
 
-    private void open(String url, String extension) {
+    private void open(String url, String extension, int token) {
+        if (token != generation.get()) return;
         ensurePlayer();
+        openedGeneration = token;
         MediaItem.Builder item = new MediaItem.Builder().setUri(url);
         String mime = PlaybackPolicy.mimeType(extension);
         if (mime != null) item.setMimeType(mime);
@@ -137,15 +138,16 @@ final class LivePreviewController implements Player.Listener {
     }
 
     @Override public void onRenderedFirstFrame() {
-        if (listener != null) listener.firstFrame();
+        if (openedGeneration == generation.get() && listener != null) listener.firstFrame();
     }
 
     @Override public void onPlayerError(PlaybackException error) {
-        if (listener != null) listener.error();
+        if (openedGeneration == generation.get() && listener != null) listener.error();
     }
 
     void release() {
         generation.incrementAndGet();
+        openedGeneration = -1;
         if (pending != null) main.removeCallbacks(pending);
         if (player != null) {
             view.setPlayer(null);

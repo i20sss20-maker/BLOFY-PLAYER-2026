@@ -15,8 +15,12 @@ final class CatalogDatabase extends SQLiteOpenHelper {
     private static final String MEDIA_COLUMNS =
             "m.id,m.name,m.image,m.backdrop,m.category_id,m.rating,m.year,m.extension,m.type," +
                     "m.release_date,m.rating_source,m.updated_at";
+    private final Context context;
 
-    CatalogDatabase(Context context) { super(context.getApplicationContext(), NAME, null, VERSION); }
+    CatalogDatabase(Context context) {
+        super(context.getApplicationContext(), NAME, null, VERSION);
+        this.context = context.getApplicationContext();
+    }
 
     @Override
     public void onCreate(SQLiteDatabase database) {
@@ -138,13 +142,14 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         if (type != null && !type.isEmpty()) { where.add("m.type=?"); args.add(type); }
         if (category != null && !category.isEmpty()) { where.add("m.category_id=?"); args.add(category); }
         String cleanSearch = search == null ? "" : search.trim();
-        if (!cleanSearch.isEmpty()) { where.add("m.name LIKE ?"); args.add("%" + cleanSearch + "%"); }
+        String escapedSearch = escapeLike(cleanSearch);
+        if (!cleanSearch.isEmpty()) { where.add("m.name LIKE ? ESCAPE '\\'"); args.add("%" + escapedSearch + "%"); }
         if (!where.isEmpty()) sql.append("WHERE ").append(android.text.TextUtils.join(" AND ", where)).append(' ');
         if (historyOnly) {
             sql.append("ORDER BY h.watched_at DESC ");
         } else if (!cleanSearch.isEmpty()) {
-            sql.append("ORDER BY CASE WHEN m.name LIKE ? THEN 0 ELSE 1 END,m.sort_order ASC ");
-            args.add(cleanSearch + "%");
+            sql.append("ORDER BY CASE WHEN m.name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END,m.sort_order ASC ");
+            args.add(escapedSearch + "%");
         } else {
             sql.append("ORDER BY m.sort_order ASC ");
         }
@@ -161,7 +166,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         List<BlofyModels.Media> result = new ArrayList<>();
         String sql = "SELECT " + MEDIA_COLUMNS + " FROM media m WHERE m.type=? " +
                 "ORDER BY CASE WHEN m.year=strftime('%Y','now') OR substr(m.release_date,1,4)=strftime('%Y','now') THEN 0 ELSE 1 END," +
-                "CASE WHEN m.updated_at GLOB '[0-9]*' THEN CAST(m.updated_at AS INTEGER) ELSE 0 END DESC," +
+                "m.updated_at DESC," +
                 "m.release_date DESC,CAST(m.year AS INTEGER) DESC,m.sort_order DESC LIMIT ? OFFSET ?";
         try (Cursor cursor = getReadableDatabase().rawQuery(sql, new String[]{type,
                 String.valueOf(Math.max(1, limit)), String.valueOf(Math.max(0, offset))})) {
@@ -226,6 +231,17 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         getWritableDatabase().insertWithOnConflict("metadata", null, values, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
+    void clearPersonalState() {
+        SQLiteDatabase database = getWritableDatabase();
+        database.beginTransaction();
+        try {
+            database.delete("favorites", null, null);
+            database.delete("history", null, null);
+            database.setTransactionSuccessful();
+        } finally { database.endTransaction(); }
+        PlaybackProgress.clearAll(context);
+    }
+
     String metadata(String key, String fallback) {
         try (Cursor cursor = getReadableDatabase().rawQuery("SELECT value FROM metadata WHERE key=?", new String[]{key})) {
             return cursor.moveToFirst() ? cursor.getString(0) : fallback;
@@ -240,4 +256,8 @@ final class CatalogDatabase extends SQLiteOpenHelper {
     }
 
     private static String value(Cursor cursor, int column) { return cursor.isNull(column) ? "" : cursor.getString(column); }
+
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
 }

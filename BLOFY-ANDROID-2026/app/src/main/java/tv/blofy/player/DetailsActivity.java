@@ -26,6 +26,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public final class DetailsActivity extends Activity {
     static final String EXTRA_ITEM = "item_json";
@@ -39,6 +40,9 @@ public final class DetailsActivity extends Activity {
     private BlofyModels.Media item;
     private BlofyModels.Detail loadedDetail;
     private boolean seasonsScreen;
+    private Future<?> detailTask;
+    private int detailGeneration;
+    private boolean destroyed;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -55,18 +59,26 @@ public final class DetailsActivity extends Activity {
             return;
         }
         showLoading();
-        worker.execute(() -> {
+        int token = ++detailGeneration;
+        detailTask = worker.submit(() -> {
             try {
                 String path = "series".equals(item.type) ? "/api/series/" : "/api/movie/";
                 BlofyModels.Detail detail = new BlofyModels.Detail(api.get(path + BlofyApi.encode(item.id)), item.type);
                 main.post(() -> {
+                    if (!canDeliverDetail(token)) return;
                     loadedDetail = detail;
                     showDetail(detail);
                 });
             } catch (Exception error) {
-                main.post(() -> showError(error.getMessage()));
+                main.post(() -> {
+                    if (canDeliverDetail(token)) showError(error.getMessage());
+                });
             }
         });
+    }
+
+    private boolean canDeliverDetail(int token) {
+        return !destroyed && token == detailGeneration && !isFinishing() && !isDestroyed();
     }
 
     private void showLoading() {
@@ -390,6 +402,10 @@ public final class DetailsActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        destroyed = true;
+        detailGeneration++;
+        if (detailTask != null) detailTask.cancel(true);
+        main.removeCallbacksAndMessages(null);
         worker.shutdownNow();
         database.close();
         super.onDestroy();

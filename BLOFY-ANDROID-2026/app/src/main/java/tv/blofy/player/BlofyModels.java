@@ -282,7 +282,15 @@ final class BlofyModels {
             }
         }
         if (!result.isEmpty()) return;
-        String flat = first(data, "castText", "cast_text", "actorsText", "actors_text", "cast", "actors");
+        String flat = "";
+        String[] flatKeys = {"castText", "cast_text", "actorsText", "actors_text", "cast", "actors"};
+        for (String key : flatKeys) {
+            Object raw = data.opt(key);
+            if (raw instanceof String && !((String) raw).trim().isEmpty()) {
+                flat = ((String) raw).trim();
+                break;
+            }
+        }
         if (flat.isEmpty()) return;
         for (String name : flat.split("[,،|]")) {
             String clean = name.trim();
