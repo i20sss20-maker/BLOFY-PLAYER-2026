@@ -193,11 +193,11 @@ jobs:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          TAG="v325-unsigned-${SOURCE_SHA:0:12}"
+          TAG="v326-unsigned-${SOURCE_SHA:0:12}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --target "$SOURCE_SHA" \
-              --title "BLOFY PLAYER v325 unsigned build" \
+              --title "BLOFY PLAYER v326 unsigned build" \
               --notes "CI-verified unsigned handoff for local release signing." \
               --prerelease
           fi
@@ -250,7 +250,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-RELEASE-UNSIGNED-APK",
-            "version": "2026.08.26.1-v325"
+            "version": "2026.08.26.2-v326"
           }
           EOF
           git add .ci/full-player-status.json

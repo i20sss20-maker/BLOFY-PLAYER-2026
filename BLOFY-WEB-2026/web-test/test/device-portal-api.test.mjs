@@ -73,8 +73,8 @@ test("full portal API supports encrypted CRUD, connect, fresh tests, bootstrap, 
   const running = await startServer(directory, { PLAYBACK_SESSION_MAX_AGE_SECONDS: "1" });
   try {
     const health = await (await fetch(`${running.origin}/api/health`)).json();
-    assert.equal(health.version, "2026.08.26.1-v325");
-    assert.equal(health.portal, "v325-device-recovery");
+    assert.equal(health.version, "2026.08.26.2-v326");
+    assert.equal(health.portal, "v326-device-recovery");
     const portalHtml = await (await fetch(`${running.origin}/activate`)).text();
     assert.match(portalHtml, /\/brand\.css/);
     assert.match(portalHtml, /\/assets\/blofy-logo-192\.png/);

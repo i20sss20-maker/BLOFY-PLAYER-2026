@@ -40,9 +40,17 @@ public final class DeviceIdentityTest {
         assertTrue(BlofyApi.isDeviceRecoveryConflict(
                 new BlofyApi.ApiException(409, "DEVICE_IDENTITY_CONFLICT", "device identity conflict")));
         assertFalse(BlofyApi.isDeviceRecoveryConflict(
+                new BlofyApi.ApiException(500, "SOME_OTHER_CONFLICT",
+                        "تعذر استعادة الجهاز. تحقق من رقم الجهاز ورمز الربط.")));
+        assertFalse(BlofyApi.isDeviceRecoveryConflict(
                 new BlofyApi.ApiException(409, "SOME_OTHER_CONFLICT", "different conflict")));
         assertFalse(BlofyApi.isDeviceRecoveryConflict(
                 new BlofyApi.ApiException(503, "الخادم غير متاح")));
+        assertFalse(BlofyApi.isDeviceRecoveryConflict(
+                new BlofyApi.ApiException(503,
+                        "تعذر استعادة الجهاز. تحقق من رقم الجهاز ورمز الربط.")));
+        assertFalse(BlofyApi.isDeviceRecoveryConflict(
+                new Exception("تعذر استعادة الجهاز. تحقق من رقم الجهاز ورمز الربط.")));
         assertFalse(BlofyApi.isDeviceRecoveryConflict(new java.io.IOException("network timeout")));
     }
 }

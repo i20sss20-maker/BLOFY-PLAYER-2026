@@ -16,8 +16,8 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 325
-        versionName = "2026.08.26.1-v325"
+        versionCode = 326
+        versionName = "2026.08.26.2-v326"
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }

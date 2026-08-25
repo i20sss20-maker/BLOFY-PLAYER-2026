@@ -110,6 +110,10 @@ public final class MainActivity extends Activity {
             registerDeviceOnce();
         } catch (Exception legacyFailure) {
             if (!BlofyApi.isDeviceRecoveryConflict(legacyFailure)) throw legacyFailure;
+            if (DeviceIdentity.isFreshPrivateIdentityPending(this)) {
+                throw new Exception("الخادم رفض هوية الاستعادة الجديدة. ستبقى محفوظة للمحاولة التالية دون تغييرها.",
+                        legacyFailure);
+            }
             // The old server record belongs to a different key and the displayed
             // v323 code was never accepted there. Do not weaken recovery checks or
             // overwrite it: create a completely separate, persisted identity.
@@ -399,6 +403,8 @@ public final class MainActivity extends Activity {
             String result = "تم تحديث القوائم من الموقع.";
             try {
                 registerDevice();
+                license = new BlofyModels.License(api.get("/api/license?device_id="
+                        + BlofyApi.encode(api.deviceId())));
                 JSONObject response = api.get("/api/device/playlists");
                 playlistStore.applyRemote(response);
                 session = new BlofyModels.Session(api.get("/api/session"));

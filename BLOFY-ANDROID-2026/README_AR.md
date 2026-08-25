@@ -1,6 +1,6 @@
 # BLOFY PLAYER Android 2026
 
-الإصدار: `2026.08.26.1-v325`
+الإصدار: `2026.08.26.2-v326`
 
 تطبيق Android أصلي للهاتف والتابلت وAndroid TV والريسيفر؛ لا يحتوي على `WebView`. شاشة التفعيل، قراءة الباقة، الرئيسية، التصنيفات، البحث، التفاصيل، المواسم، الحلقات، المفضلة، السجل والإعدادات كلها واجهات Android أصلية قابلة للتحكم باللمس والريموت.
 
@@ -43,11 +43,11 @@ export BLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app"
 
 `app/build/outputs/apk/debug/app-debug.apk`
 
-أو ادفع التحديث إلى GitHub؛ ملف `codemagic.yaml` يشغّل `lintDebug` و`testDebugUnitTest` ثم يبني APK تلقائيًا.
+أو ادفع التحديث إلى GitHub؛ مسار `.github/workflows/full-player-apk.yml` يشغّل الاختبارات والفحص ثم يبني APK تلقائيًا.
 
 ## اختبار القبول
 
-- تأكد أن `/api/health` يعيد `version: 2026.08.21.5` و`nativePlayback: direct`.
+- تأكد أن `/api/health` يعيد `version: 2026.08.26.2-v326` و`nativePlayback: direct-provider` و`portal: v326-device-recovery`.
 - ابنِ APK جديدًا؛ تحديث موقع Railway وحده لا يغيّر كود Media3 المثبت سابقًا.
 - اختبر قناة TS وقناة M3U8 وفيلمًا، ثم استخدم زر الرجوع للخروج من المشغل.
 - تأكد أن الشاشة الرئيسية والتصنيفات والتفاصيل تظهر كواجهات Android ولا يظهر شريط متصفح أو صفحة الموقع.
