@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -43,6 +44,7 @@ public final class DetailsActivity extends Activity {
     private Future<?> detailTask;
     private int detailGeneration;
     private boolean destroyed;
+    private FrameLayout resumeOverlay;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -249,9 +251,84 @@ public final class DetailsActivity extends Activity {
         LinearLayout.LayoutParams heroParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
         heroParams.topMargin = dp(8);
         page.addView(hero, heroParams);
-        if (!detail.cast.isEmpty()) addCastRail(page, detail.cast);
+        addCredits(page, detail);
         root.addView(page, match());
-        primary.requestFocus();
+        if (!showResumePrompt(detail)) primary.requestFocus();
+    }
+
+    private boolean showResumePrompt(BlofyModels.Detail detail) {
+        boolean enabled = !"off".equals(getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
+                .getString(SettingsActivity.KEY_RESUME_PROMPT, "on"));
+        if (!enabled) return false;
+        String resumeId;
+        String resumeTitle;
+        String resumeKind;
+        String resumeExtension;
+        long position;
+        if ("series".equals(detail.type)) {
+            PlaybackProgress.EpisodeResume episode = PlaybackProgress.episode(this, item.id);
+            if (episode == null || !episode.available()) return false;
+            resumeId = episode.id;
+            resumeTitle = episode.title.isEmpty() ? detail.name : episode.title;
+            resumeKind = "episode";
+            resumeExtension = episode.extension;
+            position = episode.position;
+        } else {
+            position = PlaybackProgress.get(this, "movies", detail.id);
+            if (position < PlaybackProgress.RESUME_THRESHOLD_MS) return false;
+            resumeId = detail.id;
+            resumeTitle = detail.name;
+            resumeKind = "movies";
+            resumeExtension = detail.extension;
+        }
+
+        resumeOverlay = new FrameLayout(this);
+        resumeOverlay.setBackgroundColor(Color.argb(205, 2, 2, 8));
+        resumeOverlay.setClickable(true);
+        resumeOverlay.setFocusable(true);
+        LinearLayout modal = new LinearLayout(this);
+        modal.setOrientation(LinearLayout.VERTICAL);
+        modal.setGravity(Gravity.CENTER);
+        modal.setPadding(dp(34), dp(30), dp(34), dp(30));
+        modal.setBackground(BlofyUi.panel(this, Color.rgb(15, 11, 26), 20, BlofyUi.PURPLE_LIGHT));
+        TextView title = BlofyUi.title(this, "متابعة المشاهدة", 24);
+        title.setGravity(Gravity.CENTER);
+        modal.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+        TextView note = BlofyUi.text(this,
+                "توقفت عند " + PlaybackProgress.format(position) + " — اختر طريقة التشغيل", 14, BlofyUi.MUTED);
+        note.setGravity(Gravity.CENTER);
+        modal.addView(note, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER);
+        Button resume = BlofyUi.button(this, "▶  استئناف", true);
+        resume.setOnClickListener(v -> play(resumeId, resumeTitle, resumeKind, resumeExtension, false));
+        actions.addView(resume, new LinearLayout.LayoutParams(dp(205), dp(58)));
+        Button restart = BlofyUi.button(this, "↺  البدء من جديد", false);
+        restart.setOnClickListener(v -> play(resumeId, resumeTitle, resumeKind, resumeExtension, true));
+        LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(205), dp(58));
+        restartParams.leftMargin = dp(12);
+        actions.addView(restart, restartParams);
+        modal.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
+        TextView cancel = BlofyUi.text(this, "رجوع: البقاء في صفحة التفاصيل", 11, BlofyUi.MUTED);
+        cancel.setGravity(Gravity.CENTER);
+        modal.addView(cancel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
+        resumeOverlay.addView(modal, new FrameLayout.LayoutParams(dp(610), ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER));
+        root.addView(resumeOverlay, match());
+        resume.requestFocus();
+        return true;
+    }
+
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (resumeOverlay != null && resumeOverlay.getParent() != null
+                && event.getAction() == KeyEvent.ACTION_DOWN
+                && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            root.removeView(resumeOverlay);
+            resumeOverlay = null;
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     private void addCastRail(LinearLayout page, List<BlofyModels.Actor> cast) {
@@ -274,6 +351,30 @@ public final class DetailsActivity extends Activity {
         people.setPadding(dp(2), dp(2), dp(12), dp(4));
         people.setAdapter(new CastAdapter(cast));
         page.addView(people, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(142)));
+    }
+
+    private void addCredits(LinearLayout page, BlofyModels.Detail detail) {
+        if (!detail.cast.isEmpty()) {
+            addCastRail(page, detail.cast);
+            return;
+        }
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(4), dp(14), dp(4));
+        row.setBackground(BlofyUi.panel(this, Color.argb(165, 17, 14, 29), 14, BlofyUi.STROKE));
+        TextView title = BlofyUi.title(this, "الممثلون وطاقم العمل", 15);
+        title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        row.addView(title, new LinearLayout.LayoutParams(dp(220), dp(48)));
+        TextView value = BlofyUi.text(this, detail.director.isEmpty()
+                ? "بيانات الطاقم غير متوفرة من المصدر حاليًا"
+                : "إخراج: " + detail.director, 12, BlofyUi.MUTED);
+        value.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        row.addView(value, new LinearLayout.LayoutParams(0, dp(48), 1));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
+        params.setMargins(0, dp(8), 0, 0);
+        page.addView(row, params);
     }
 
     private void addMetaChip(LinearLayout row, String value) {
@@ -458,13 +559,9 @@ public final class DetailsActivity extends Activity {
         EpisodeAdapter(String seriesName) { this.seriesName = seriesName; }
         void setEpisodes(List<BlofyModels.Episode> values) {
             rows = values == null ? new ArrayList<>() : new ArrayList<>(values);
-            Collections.sort(rows, (first, second) -> {
-                if (!first.airDate.isEmpty() || !second.airDate.isEmpty()) {
-                    int date = second.airDate.compareTo(first.airDate);
-                    if (date != 0) return date;
-                }
-                return Integer.compare(second.number, first.number);
-            });
+            // The provider may return newest-first. TV users expect episode 1 at
+            // the top, regardless of air-date or the original JSON ordering.
+            Collections.sort(rows, (first, second) -> Integer.compare(first.number, second.number));
             notifyDataSetChanged();
         }
         @Override public Holder onCreateViewHolder(ViewGroup parent, int viewType) {
