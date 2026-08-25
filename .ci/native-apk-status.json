@@ -1,9 +1,9 @@
 {
   "workflow": "Build BLOFY PLAYER APK",
-  "status": "success",
-  "run_id": 32664617989,
-  "run_attempt": 2,
-  "source_sha": "657383070c85f7ff535421ddb467690cdce09321",
-  "artifact": "BLOFY-PLAYER-NATIVE-APK",
-  "version": "2026.08.23.9-7max-fast"
+  "status": "failure",
+  "run_id": 32893040518,
+  "run_attempt": 1,
+  "source_sha": "d822968fc15dfc20113970f20286aa1dfd40e3e1",
+  "artifact": "BLOFY-PLAYER-FINAL-TV-APK",
+  "version": "2026.08.23.12-final-tv"
 }
