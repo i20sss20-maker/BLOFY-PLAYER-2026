@@ -51,6 +51,56 @@ export function normalizeDirectSource(value) {
   }
 }
 
+function cleanDate(...values) {
+  for (const value of values) {
+    const raw = String(value ?? "").trim();
+    if (!raw || raw === "0") continue;
+    if (/^\d{10,13}$/.test(raw)) {
+      const numeric = Number(raw) * (raw.length === 10 ? 1000 : 1);
+      const date = new Date(numeric);
+      if (Number.isFinite(date.getTime())) return date.toISOString().slice(0, 10);
+    }
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+    if (/^(?:19|20)\d{2}$/.test(raw)) return raw;
+  }
+  return "";
+}
+
+function people(value) {
+  const rows = Array.isArray(value) ? value : String(value || "").split(/[,،|]/);
+  const seen = new Set();
+  return rows.map((entry) => {
+    if (entry && typeof entry === "object") {
+      const rawImage = String(entry.image || entry.profile || entry.profile_path || "").trim();
+      return {
+        name: String(entry.name || entry.actor || entry.original_name || "").trim(),
+        character: String(entry.character || entry.role || "").trim(),
+        image: rawImage.startsWith("/") ? `https://image.tmdb.org/t/p/w185${rawImage}` : rawImage,
+      };
+    }
+    return { name: String(entry || "").trim(), character: "", image: "" };
+  }).filter((entry) => {
+    const key = entry.name.toLocaleLowerCase("en");
+    if (!entry.name || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 24);
+}
+
+function ratingRows(info = {}) {
+  const rows = [];
+  const add = (source, value) => {
+    const clean = String(value ?? "").trim();
+    if (!clean || clean === "0" || clean === "0.0") return;
+    if (!rows.some((entry) => entry.source === source)) rows.push({ source, value: clean });
+  };
+  add("IMDb", info.imdb_rating ?? info.imdbRating);
+  add("TMDB", info.tmdb_rating ?? info.tmdbRating ?? info.vote_average);
+  add("مزود المحتوى", info.rating ?? info.rating_5based);
+  return rows;
+}
+
 export class XtreamClient {
   constructor({ serverUrl, username, password }) {
     this.base = cleanBase(serverUrl);
@@ -119,7 +169,11 @@ export class XtreamClient {
       backdrop: Array.isArray(row.backdrop_path) ? row.backdrop_path[0] || "" : "",
       categoryId: String(row.category_id || ""),
       rating: row.rating_5based || row.rating || "",
+      ratingSource: row.tmdb_rating || row.vote_average ? "TMDB" : "مزود المحتوى",
       year: row.year || row.releaseDate || row.releasedate || "",
+      releaseDate: cleanDate(row.releaseDate, row.release_date, row.releasedate,
+        row.last_air_date, row.first_air_date, row.year),
+      updatedAt: cleanDate(row.last_modified, row.updated_at, row.added, row.added_at),
       // Match 7 Max behaviour for Xtream Live: TS is the default and the
       // player's fallback decision controls when HLS is requested. A provider
       // direct_source must not silently lock Live to one format, otherwise a
@@ -145,6 +199,14 @@ export class XtreamClient {
       backdrop: Array.isArray(info.backdrop_path) ? info.backdrop_path[0] || "" : "",
       rating: info.rating || "",
       year: info.releasedate || info.year || "",
+      releaseDate: cleanDate(info.releaseDate, info.release_date, info.releasedate, info.year),
+      updatedAt: cleanDate(movie.added, info.added, info.updated_at),
+      ratingSource: info.tmdb_rating || info.vote_average ? "TMDB" : "مزود المحتوى",
+      ratings: ratingRows(info),
+      cast: people(info.cast || info.actors),
+      director: String(info.director || ""),
+      imdbId: String(info.imdb_id || info.imdbId || ""),
+      tmdbId: String(info.tmdb_id || info.tmdbId || ""),
       duration: info.duration || "",
       genre: info.genre || "",
       extension: movie.container_extension || extensionFromUrl(movie.direct_source) || "mp4",
@@ -220,6 +282,8 @@ export function normalizeSeriesInfo(data, id) {
       extension: String(episode.container_extension || episode.info?.container_extension || extensionFromUrl(episode.direct_source) || "mp4").toLowerCase(),
       duration: episode.info?.duration || episode.duration || "",
       image: episode.info?.movie_image || episode.info?.cover_big || episode.movie_image || info.cover || "",
+      airDate: cleanDate(episode.air_date, episode.release_date, episode.info?.air_date,
+        episode.info?.release_date, episode.added, episode.info?.added),
       sourceUrl: normalizeDirectSource(episode.direct_source || episode.info?.direct_source),
     });
     bySeason.set(season, values);
@@ -239,6 +303,14 @@ export function normalizeSeriesInfo(data, id) {
     backdrop: Array.isArray(info.backdrop_path) ? info.backdrop_path[0] || "" : info.backdrop_path || "",
     rating: info.rating || info.rating_5based || "",
     year: info.releaseDate || info.releasedate || info.year || "",
+    releaseDate: cleanDate(info.releaseDate, info.release_date, info.releasedate, info.year),
+    updatedAt: cleanDate(info.last_modified, info.updated_at, info.added),
+    ratingSource: info.tmdb_rating || info.vote_average ? "TMDB" : "مزود المحتوى",
+    ratings: ratingRows(info),
+    cast: people(info.cast || info.actors),
+    director: String(info.director || ""),
+    imdbId: String(info.imdb_id || info.imdbId || ""),
+    tmdbId: String(info.tmdb_id || info.tmdbId || ""),
     genre: info.genre || "",
     seasons,
     type: "series",

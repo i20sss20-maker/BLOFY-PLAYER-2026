@@ -25,9 +25,12 @@ import android.widget.TextView;
 import androidx.annotation.Nullable;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
+import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.common.TrackSelectionOverride;
+import androidx.media3.common.Tracks;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
@@ -42,6 +45,7 @@ import org.videolan.libvlc.interfaces.IVLCVout;
 import org.videolan.libvlc.LibVLC;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -71,6 +75,9 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private TextView timeView;
     private TextView errorText;
     private TextView retryButton;
+    private TextView audioButton;
+    private TextView subtitleButton;
+    private TextView stereoButton;
     private SeekBar seekBar;
 
     private String id;
@@ -87,6 +94,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private int attempt;
     private int vlcAudioIndex = -1;
     private int vlcSubtitleIndex = -1;
+    private boolean stereoMode;
 
     private final Runnable updateProgress = new Runnable() {
         @Override public void run() {
@@ -103,7 +111,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     };
 
     private final Runnable hideControls = () -> {
-        if (controls != null && errorPanel.getVisibility() != View.VISIBLE) {
+        if (controls != null && errorPanel.getVisibility() != View.VISIBLE && !optionFocused()) {
             controls.setVisibility(View.GONE);
         }
     };
@@ -118,7 +126,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         title = value(getIntent().getStringExtra(EXTRA_TITLE));
         kind = value(getIntent().getStringExtra(EXTRA_KIND));
         extension = PlaybackPolicy.normalizeExtension(getIntent().getStringExtra(EXTRA_EXTENSION), "mp4");
-        resumePosition = getSharedPreferences("blofy_positions", MODE_PRIVATE).getLong(positionKey(), 0);
+        resumePosition = PlaybackProgress.get(this, kind, id);
         PlaybackTransportFactory.warmUpCronet(this);
         buildUi();
         hideSystemUi();
@@ -215,11 +223,30 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         row.addView(timeView, timeParams);
         controls.addView(row, new LinearLayout.LayoutParams(-1, dp(50)));
 
+        LinearLayout trackRow = new LinearLayout(this);
+        trackRow.setOrientation(LinearLayout.HORIZONTAL);
+        trackRow.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        trackRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        audioButton = playerOptionButton("🔊  الصوت: تلقائي");
+        audioButton.setOnClickListener(v -> cycleAudio());
+        trackRow.addView(audioButton, new LinearLayout.LayoutParams(dp(250), dp(42)));
+        subtitleButton = playerOptionButton("CC  الترجمة: تلقائي");
+        subtitleButton.setOnClickListener(v -> cycleSubtitle());
+        LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(dp(250), dp(42));
+        subtitleParams.leftMargin = dp(10);
+        trackRow.addView(subtitleButton, subtitleParams);
+        stereoButton = playerOptionButton("♫  المخرج: تلقائي");
+        stereoButton.setOnClickListener(v -> toggleStereo());
+        LinearLayout.LayoutParams stereoParams = new LinearLayout.LayoutParams(dp(220), dp(42));
+        stereoParams.leftMargin = dp(10);
+        trackRow.addView(stereoButton, stereoParams);
+        controls.addView(trackRow, new LinearLayout.LayoutParams(-1, dp(46)));
+
         LinearLayout footer = new LinearLayout(this);
         footer.setOrientation(LinearLayout.HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL);
         TextView hints = BlofyUi.text(this,
-                "◀ ▶  تقديم وتأخير   •   ضغط مطول 60ث   •   OK تشغيل وإيقاف   •   ↑ صوت   •   ↓ ترجمة",
+                "◀ ▶ تقديم وتأخير  •  OK تشغيل/إيقاف  •  ↑ خيارات الصوت والترجمة  •  MENU خيارات",
                 12, BlofyUi.MUTED);
         hints.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         footer.addView(hints, new LinearLayout.LayoutParams(0, dp(34), 1));
@@ -229,7 +256,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         footer.addView(signature, new LinearLayout.LayoutParams(dp(170), dp(34)));
         controls.addView(footer, new LinearLayout.LayoutParams(-1, dp(34)));
 
-        root.addView(controls, new FrameLayout.LayoutParams(-1, dp(202), Gravity.BOTTOM));
+        root.addView(controls, new FrameLayout.LayoutParams(-1, dp(248), Gravity.BOTTOM));
 
         errorPanel = new LinearLayout(this);
         errorPanel.setOrientation(LinearLayout.VERTICAL);
@@ -274,6 +301,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
         setContentView(root);
         showControls();
+        playerView.requestFocus();
         main.post(updateProgress);
     }
 
@@ -348,6 +376,12 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         player.setHandleAudioBecomingNoisy(true);
         player.setWakeMode(C.WAKE_MODE_NETWORK);
         playerView.setPlayer(player);
+        if (stereoMode) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .setMaxAudioChannelCount(2)
+                    .build());
+        }
 
         MediaItem.Builder item = new MediaItem.Builder()
                 .setUri(PlaybackPolicy.directPlaybackUrl(resolvedUrl))
@@ -380,6 +414,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         options.add("--http-reconnect");
         options.add("--no-drop-late-frames");
         options.add("--no-skip-frames");
+        if (stereoMode) options.add("--stereo-mode=1");
         libVLC = new LibVLC(this, options);
         vlcPlayer = new org.videolan.libvlc.MediaPlayer(libVLC);
         vlcPlayer.setEventListener(event -> runOnUiThread(() -> onVlcEvent(event)));
@@ -392,6 +427,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         media.setHWDecoderEnabled(true, false);
         media.addOption(":http-user-agent=BLOFY-PLAYER/2026 AndroidTV");
         media.addOption(":network-caching=" + (ultraHd() ? "2500" : "1500"));
+        if (stereoMode) media.addOption(":stereo-mode=1");
         vlcPlayer.setMedia(media);
         media.release();
         vlcPlayer.play();
@@ -412,6 +448,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 firstFrame = true;
                 spinner.setVisibility(View.GONE);
                 main.removeCallbacks(startupTimeout);
+                updateVlcTrackButtons();
                 showControls();
                 break;
             case org.videolan.libvlc.MediaPlayer.Event.Buffering:
@@ -482,6 +519,10 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         }
     }
 
+    @Override public void onTracksChanged(Tracks tracks) {
+        if (!usingVlc) updateMedia3TrackButtons();
+    }
+
     @Override public void onRenderedFirstFrame() {
         if (usingVlc) return;
         firstFrame = true;
@@ -530,13 +571,140 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         showControls();
     }
 
+    private void cycleAudio() {
+        if (usingVlc) cycleVlcAudio(); else cycleMedia3Audio();
+    }
+
+    private void cycleSubtitle() {
+        if (usingVlc) cycleVlcSubtitle(); else cycleMedia3Subtitle();
+    }
+
+    private void cycleMedia3Audio() {
+        if (player == null) { showControls(); return; }
+        List<TrackChoice> choices = trackChoices(C.TRACK_TYPE_AUDIO);
+        if (choices.isEmpty()) {
+            ToastBridge.show(this, "لا توجد مسارات صوت إضافية في هذا الملف");
+            return;
+        }
+        int selected = selectedChoice(choices);
+        TrackChoice choice = choices.get((selected + 1) % choices.size());
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                .setOverrideForType(new TrackSelectionOverride(
+                        choice.group.getMediaTrackGroup(), choice.trackIndex))
+                .build());
+        audioButton.setText("🔊  الصوت: " + trackLabel(choice.format, "مسار " + (choice.displayIndex + 1)));
+        showControls();
+    }
+
+    private void cycleMedia3Subtitle() {
+        if (player == null) { showControls(); return; }
+        List<TrackChoice> choices = trackChoices(C.TRACK_TYPE_TEXT);
+        if (choices.isEmpty()) {
+            subtitleButton.setText("CC  الترجمة: غير متاحة");
+            ToastBridge.show(this, "لا توجد ترجمة مضمّنة في هذا الملف");
+            return;
+        }
+        int selected = selectedChoice(choices);
+        if (selected == choices.size() - 1) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build());
+            subtitleButton.setText("CC  الترجمة: إيقاف");
+        } else {
+            TrackChoice choice = choices.get(selected < 0 ? 0 : selected + 1);
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setOverrideForType(new TrackSelectionOverride(
+                            choice.group.getMediaTrackGroup(), choice.trackIndex))
+                    .build());
+            subtitleButton.setText("CC  الترجمة: " + trackLabel(choice.format,
+                    "مسار " + (choice.displayIndex + 1)));
+        }
+        showControls();
+    }
+
+    private List<TrackChoice> trackChoices(@C.TrackType int trackType) {
+        List<TrackChoice> result = new ArrayList<>();
+        if (player == null) return result;
+        int displayIndex = 0;
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != trackType) continue;
+            int chosen = -1;
+            for (int index = 0; index < group.length; index++) {
+                if (!group.isTrackSupported(index)) continue;
+                if (chosen < 0) chosen = index;
+                if (group.isTrackSelected(index)) {
+                    chosen = index;
+                    break;
+                }
+            }
+            if (chosen >= 0) result.add(new TrackChoice(
+                    group, chosen, displayIndex++, group.getTrackFormat(chosen)));
+        }
+        return result;
+    }
+
+    private int selectedChoice(List<TrackChoice> choices) {
+        for (int index = 0; index < choices.size(); index++) {
+            TrackChoice choice = choices.get(index);
+            if (choice.group.isTrackSelected(choice.trackIndex)) return index;
+        }
+        return -1;
+    }
+
+    private String trackLabel(Format format, String fallback) {
+        if (format == null) return fallback;
+        String label = format.label == null ? "" : format.label.trim();
+        String language = format.language == null ? "" : format.language.trim();
+        String base = !label.isEmpty() ? label : (!language.isEmpty() ? language : fallback);
+        if (format.channelCount > 0) base += " • " + format.channelCount + "ch";
+        return base;
+    }
+
+    private void updateMedia3TrackButtons() {
+        if (usingVlc || player == null || audioButton == null) return;
+        List<TrackChoice> audio = trackChoices(C.TRACK_TYPE_AUDIO);
+        int selectedAudio = selectedChoice(audio);
+        audioButton.setText(selectedAudio >= 0
+                ? "🔊  الصوت: " + trackLabel(audio.get(selectedAudio).format, "تلقائي")
+                : "🔊  الصوت: تلقائي");
+        List<TrackChoice> text = trackChoices(C.TRACK_TYPE_TEXT);
+        int selectedText = selectedChoice(text);
+        subtitleButton.setText(selectedText >= 0
+                ? "CC  الترجمة: " + trackLabel(text.get(selectedText).format, "مضمّنة")
+                : "CC  الترجمة: إيقاف");
+    }
+
+    private void toggleStereo() {
+        stereoMode = !stereoMode;
+        stereoButton.setText(stereoMode ? "♫  المخرج: ستريو 2.0" : "♫  المخرج: تلقائي");
+        resumePosition = positionMs();
+        if (usingVlc) {
+            openVlc(stereoMode ? "تم تفعيل إخراج ستريو 2.0" : "تمت إعادة إخراج الصوت إلى تلقائي");
+        } else if (player != null) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .setMaxAudioChannelCount(stereoMode ? 2 : Integer.MAX_VALUE)
+                    .build());
+            updateMedia3TrackButtons();
+        }
+        showControls();
+    }
+
     private void cycleVlcAudio() {
         if (!usingVlc || vlcPlayer == null) { showControls(); return; }
         org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks = vlcPlayer.getAudioTracks();
         if (tracks == null || tracks.length == 0) return;
-        vlcAudioIndex = (vlcAudioIndex + 1) % tracks.length;
+        int attempts = 0;
+        do {
+            vlcAudioIndex = (vlcAudioIndex + 1) % tracks.length;
+            attempts++;
+        } while (tracks[vlcAudioIndex].id < 0 && attempts < tracks.length);
+        if (tracks[vlcAudioIndex].id < 0) return;
         vlcPlayer.setAudioTrack(tracks[vlcAudioIndex].id);
         engineView.setText("VLC • صوت: " + tracks[vlcAudioIndex].name);
+        audioButton.setText("🔊  الصوت: " + tracks[vlcAudioIndex].name);
         showControls();
     }
 
@@ -547,13 +715,29 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         vlcSubtitleIndex = (vlcSubtitleIndex + 1) % tracks.length;
         vlcPlayer.setSpuTrack(tracks[vlcSubtitleIndex].id);
         engineView.setText("VLC • ترجمة: " + tracks[vlcSubtitleIndex].name);
+        subtitleButton.setText(tracks[vlcSubtitleIndex].id < 0
+                ? "CC  الترجمة: إيقاف" : "CC  الترجمة: " + tracks[vlcSubtitleIndex].name);
         showControls();
+    }
+
+    private void updateVlcTrackButtons() {
+        if (!usingVlc || vlcPlayer == null || audioButton == null) return;
+        org.videolan.libvlc.MediaPlayer.TrackDescription[] audio = vlcPlayer.getAudioTracks();
+        org.videolan.libvlc.MediaPlayer.TrackDescription[] text = vlcPlayer.getSpuTracks();
+        audioButton.setText("🔊  الصوت" + (audio == null ? "" : " • " + audio.length + " مسار"));
+        subtitleButton.setText("CC  الترجمة" + (text == null ? "" : " • " + text.length + " مسار"));
+        stereoButton.setText(stereoMode ? "♫  المخرج: ستريو 2.0" : "♫  المخرج: تلقائي");
     }
 
     private void showControls() {
         controls.setVisibility(View.VISIBLE);
         main.removeCallbacks(hideControls);
         main.postDelayed(hideControls, 5_000);
+    }
+
+    private boolean optionFocused() {
+        View focused = getCurrentFocus();
+        return focused == audioButton || focused == subtitleButton || focused == stereoButton;
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
@@ -568,6 +752,30 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 }
                 return true;
             }
+            if (optionFocused()) {
+                switch (event.getKeyCode()) {
+                    case KeyEvent.KEYCODE_DPAD_CENTER:
+                    case KeyEvent.KEYCODE_ENTER:
+                        if (event.getRepeatCount() == 0 && getCurrentFocus() != null) {
+                            getCurrentFocus().performClick();
+                        }
+                        return true;
+                    case KeyEvent.KEYCODE_DPAD_DOWN:
+                        playerView.requestFocus();
+                        showControls();
+                        return true;
+                    case KeyEvent.KEYCODE_BACK:
+                        playerView.requestFocus();
+                        showControls();
+                        return true;
+                    case KeyEvent.KEYCODE_DPAD_LEFT:
+                    case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    case KeyEvent.KEYCODE_DPAD_UP:
+                        return super.dispatchKeyEvent(event);
+                    default:
+                        break;
+                }
+            }
             switch (event.getKeyCode()) {
                 case KeyEvent.KEYCODE_DPAD_LEFT:
                     seekBy(longPress ? -60_000 : -10_000);
@@ -576,10 +784,12 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                     seekBy(longPress ? 60_000 : 10_000);
                     return true;
                 case KeyEvent.KEYCODE_DPAD_UP:
-                    cycleVlcAudio();
+                case KeyEvent.KEYCODE_MENU:
+                    showControls();
+                    if (audioButton != null) audioButton.requestFocus();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_DOWN:
-                    cycleVlcSubtitle();
+                    cycleSubtitle();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
@@ -608,8 +818,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     }
 
     private void persistPosition(long position) {
-        getSharedPreferences("blofy_positions", MODE_PRIVATE)
-                .edit().putLong(positionKey(), Math.max(0, position)).apply();
+        PlaybackProgress.save(this, kind, id, position);
     }
 
     private void savePosition() {
@@ -618,10 +827,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         if (d > 0 && p > d - 30_000) p = 0;
         resumePosition = Math.max(0, p);
         persistPosition(resumePosition);
-    }
-
-    private String positionKey() {
-        return "position_" + Integer.toHexString((kind + ":" + id).hashCode());
     }
 
     private void releaseMedia3() {
@@ -700,6 +905,33 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         badge.setFocusable(false);
         badge.setBackground(cinemaPanel(Color.argb(185, 20, 19, 29), 17, 1, Color.rgb(72, 68, 86)));
         return badge;
+    }
+
+    private TextView playerOptionButton(String label) {
+        TextView button = BlofyUi.title(this, label, 12);
+        button.setGravity(Gravity.CENTER);
+        button.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+        button.setSingleLine(true);
+        button.setFocusable(true);
+        button.setClickable(true);
+        button.setBackground(BlofyUi.focusDrawable(this,
+                Color.argb(205, 20, 18, 31), Color.rgb(73, 29, 132), BlofyUi.PURPLE_LIGHT));
+        BlofyUi.attachScaleFocus(button, 1.025f);
+        return button;
+    }
+
+    private static final class TrackChoice {
+        final Tracks.Group group;
+        final int trackIndex;
+        final int displayIndex;
+        final Format format;
+
+        TrackChoice(Tracks.Group group, int trackIndex, int displayIndex, Format format) {
+            this.group = group;
+            this.trackIndex = trackIndex;
+            this.displayIndex = displayIndex;
+            this.format = format;
+        }
     }
 
     private int dp(int value) { return BlofyUi.dp(this, value); }

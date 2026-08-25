@@ -4,7 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -23,6 +27,8 @@ import androidx.recyclerview.widget.RecyclerView;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** BLOFY's cinematic TV shell and catalog experience. */
 public final class SevenMaxActivity extends Activity {
@@ -36,6 +42,10 @@ public final class SevenMaxActivity extends Activity {
     private BlofyApi api;
     private LivePreviewController livePreview;
     private String screen = "home";
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService catalogWorker = Executors.newSingleThreadExecutor();
+    private Runnable heroRotation;
+    private int heroGeneration;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -77,7 +87,7 @@ public final class SevenMaxActivity extends Activity {
                 () -> showCatalog("movies", false));
 
         HomeRailAdapter seriesAdapter = new HomeRailAdapter("series", false, false);
-        addHomeRail(content, "أحدث المسلسلات", "حلقات ومواسم تستحق المتابعة", seriesAdapter,
+        addHomeRail(content, "أحدث المسلسلات والحلقات", "مرتبة حسب آخر إضافة وتاريخ العرض", seriesAdapter,
                 () -> showCatalog("series", false));
 
         shell.content.addView(scroll, match());
@@ -85,7 +95,9 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private View addHero(LinearLayout parent) {
-        final BlofyModels.Media featured = featuredMedia();
+        final List<BlofyModels.Media> candidates = featuredMedia();
+        final BlofyModels.Media[] active = {candidates.isEmpty() ? null : candidates.get(0)};
+        final BlofyModels.Media featured = active[0];
 
         FrameLayout hero = new FrameLayout(this);
         hero.setClipToOutline(true);
@@ -153,12 +165,12 @@ public final class SevenMaxActivity extends Activity {
         actions.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         Button primary = BlofyUi.button(this, featured == null ? "شاهد البث المباشر" : "شاهد الآن  ▶", true);
         primary.setOnClickListener(v -> {
-            if (featured == null) showLive(); else routeMedia(featured);
+            if (active[0] == null) showLive(); else routeMedia(active[0]);
         });
         actions.addView(primary, new LinearLayout.LayoutParams(dp(178), dp(48)));
         Button more = BlofyUi.button(this, "مزيد من المعلومات", false);
         more.setOnClickListener(v -> {
-            if (featured == null) showCatalog("movies", false); else openDetails(featured);
+            if (active[0] == null) showCatalog("movies", false); else openDetails(active[0]);
         });
         LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(154), dp(48));
         moreParams.setMargins(dp(10), 0, 0, 0);
@@ -170,21 +182,65 @@ public final class SevenMaxActivity extends Activity {
         copyParams.setMargins(dp(38), dp(20), 0, dp(20));
         hero.addView(copy, copyParams);
 
+        TextView dots = BlofyUi.text(this, heroDots(candidates.size(), 0), 15, BlofyUi.PURPLE_LIGHT);
+        dots.setGravity(Gravity.CENTER);
+        dots.setTextDirection(View.TEXT_DIRECTION_LTR);
+        FrameLayout.LayoutParams dotParams = new FrameLayout.LayoutParams(dp(250), dp(28),
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        dotParams.bottomMargin = dp(10);
+        hero.addView(dots, dotParams);
+
         LinearLayout.LayoutParams heroParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(300));
         heroParams.setMargins(0, dp(4), 0, dp(22));
         parent.addView(hero, heroParams);
+
+        if (candidates.size() > 1) {
+            int token = ++heroGeneration;
+            final int[] index = {0};
+            heroRotation = () -> {
+                if (token != heroGeneration || !"home".equals(screen)) return;
+                index[0] = (index[0] + 1) % candidates.size();
+                BlofyModels.Media next = candidates.get(index[0]);
+                active[0] = next;
+                eyebrow.setText("الأعلى تقييماً  •  BLOFY");
+                title.setText(next.name);
+                meta.setText(formatMeta(next));
+                description.setText("اختيار متجدد حسب التقييم وتاريخ الإصدار وأحدث ما وصل إلى مكتبتك.");
+                dots.setText(heroDots(candidates.size(), index[0]));
+                String art = TextUtils.isEmpty(next.backdrop) ? next.image : next.backdrop;
+                backdrop.animate().alpha(.18f).setDuration(130).withEndAction(() -> {
+                    images.load(backdrop, art);
+                    backdrop.animate().alpha(.78f).setDuration(260).start();
+                }).start();
+                main.postDelayed(heroRotation, 6_500L);
+            };
+            main.postDelayed(heroRotation, 6_500L);
+        }
         return primary;
     }
 
-    private BlofyModels.Media featuredMedia() {
-        List<BlofyModels.Media> candidates = database.media("movies", "", "", false, false, 8, 0);
-        if (candidates.isEmpty()) candidates = database.media("series", "", "", false, false, 8, 0);
-        if (candidates.isEmpty()) return null;
-        for (BlofyModels.Media item : candidates) {
-            if (!TextUtils.isEmpty(item.backdrop)) return item;
+    private List<BlofyModels.Media> featuredMedia() {
+        List<BlofyModels.Media> candidates = database.featured(7);
+        if (candidates.isEmpty()) candidates = database.latest("movies", 7, 0);
+        if (candidates.isEmpty()) candidates = database.latest("series", 7, 0);
+        return candidates;
+    }
+
+    private String heroDots(int count, int selected) {
+        if (count <= 1) return "";
+        StringBuilder value = new StringBuilder();
+        for (int index = 0; index < Math.min(count, 7); index++) {
+            if (index > 0) value.append("  ");
+            value.append(index == selected ? "●" : "○");
         }
-        return candidates.get(0);
+        return value.toString();
+    }
+
+    private void stopHeroRotation() {
+        heroGeneration++;
+        if (heroRotation != null) main.removeCallbacks(heroRotation);
+        heroRotation = null;
     }
 
     private void addHomeRail(LinearLayout parent, String titleValue, String subtitle,
@@ -241,6 +297,11 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private ScreenShell shell(String selected, String titleValue) {
+        return shell(selected, titleValue, true);
+    }
+
+    private ScreenShell shell(String selected, String titleValue, boolean showSidebar) {
+        stopHeroRotation();
         root.removeAllViews();
 
         LinearLayout page = new LinearLayout(this);
@@ -248,14 +309,16 @@ public final class SevenMaxActivity extends Activity {
         page.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         page.setBackground(BlofyUi.screenGradient());
 
-        LinearLayout sidebar = buildSidebar(selected);
-        page.addView(sidebar, new LinearLayout.LayoutParams(dp(SIDEBAR_WIDTH),
-                ViewGroup.LayoutParams.MATCH_PARENT));
+        if (showSidebar) {
+            LinearLayout sidebar = buildSidebar(selected);
+            page.addView(sidebar, new LinearLayout.LayoutParams(dp(SIDEBAR_WIDTH),
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
 
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
         main.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        main.addView(buildTopBar(titleValue), new LinearLayout.LayoutParams(
+        main.addView(buildTopBar(titleValue, !showSidebar), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(76)));
 
         FrameLayout content = new FrameLayout(this);
@@ -327,13 +390,6 @@ public final class SevenMaxActivity extends Activity {
         state.setTextDirection(View.TEXT_DIRECTION_RTL);
         card.addView(state, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(24)));
 
-        TextView server = BlofyUi.title(this, database.metadata("server_name", "BLOFY Playlist"), 12);
-        server.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        server.setTextDirection(View.TEXT_DIRECTION_LTR);
-        server.setSingleLine(true);
-        server.setEllipsize(TextUtils.TruncateAt.END);
-        card.addView(server, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
-
         TextView device = BlofyUi.text(this, DeviceIdentity.id(this), 9, BlofyUi.PURPLE_LIGHT);
         device.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         device.setTextDirection(View.TEXT_DIRECTION_LTR);
@@ -350,13 +406,19 @@ public final class SevenMaxActivity extends Activity {
         return card;
     }
 
-    private LinearLayout buildTopBar(String titleValue) {
+    private LinearLayout buildTopBar(String titleValue, boolean dedicated) {
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         top.setPadding(dp(26), dp(10), dp(24), dp(8));
         top.setBackground(BlofyUi.panel(this, Color.argb(185, 7, 6, 15), 0, BlofyUi.DIVIDER));
+
+        if (dedicated) {
+            addTopAction(top, "⌂  الرئيسية", this::showHome, 122);
+            View gap = new View(this);
+            top.addView(gap, new LinearLayout.LayoutParams(dp(8), 1));
+        }
 
         LinearLayout heading = new LinearLayout(this);
         heading.setOrientation(LinearLayout.VERTICAL);
@@ -375,7 +437,7 @@ public final class SevenMaxActivity extends Activity {
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(dp(132), dp(32));
         statusParams.setMargins(0, 0, dp(10), 0);
         top.addView(status, statusParams);
-        addTopAction(top, "⌕  بحث", () -> showCatalog("movies", true), 96);
+        addTopAction(top, "⌕  بحث", () -> showCatalog("series".equals(screen) ? "series" : "movies", true), 96);
         addTopAction(top, "⚙", this::openLegacySettings, 50);
         addTopAction(top, "↻", this::openLegacyRefresh, 50);
         return top;
@@ -388,6 +450,28 @@ public final class SevenMaxActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(width), dp(42));
         params.setMargins(dp(4), 0, dp(4), 0);
         top.addView(button, params);
+    }
+
+    private void bindLiveSearch(EditText search, java.util.function.Consumer<String> listener) {
+        final Runnable[] pending = new Runnable[1];
+        final String owner = screen;
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence value, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable value) {
+                if (pending[0] != null) main.removeCallbacks(pending[0]);
+                String query = value == null ? "" : value.toString();
+                pending[0] = () -> {
+                    if (owner.equals(screen)) listener.accept(query);
+                };
+                main.postDelayed(pending[0], 150L);
+            }
+        });
+        search.setOnEditorActionListener((v, action, event) -> {
+            if (pending[0] != null) main.removeCallbacks(pending[0]);
+            if (owner.equals(screen)) listener.accept(search.getText().toString());
+            return true;
+        });
     }
 
     private void showLive() {
@@ -457,6 +541,11 @@ public final class SevenMaxActivity extends Activity {
         fallbackLogo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         fallbackLogo.setPadding(dp(74), dp(74), dp(74), dp(74));
         previewFrame.addView(fallbackLogo, match());
+        livePreview.setListener(new LivePreviewController.Listener() {
+            @Override public void loading() { fallbackLogo.setVisibility(View.VISIBLE); }
+            @Override public void firstFrame() { fallbackLogo.setVisibility(View.GONE); }
+            @Override public void error() { fallbackLogo.setVisibility(View.VISIBLE); }
+        });
         previewPanel.addView(previewFrame, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
@@ -479,18 +568,15 @@ public final class SevenMaxActivity extends Activity {
 
         liveAdapter.listener = item -> {
             channelName.setText(item.name);
-            fallbackLogo.setVisibility(View.GONE);
             if (livePreview != null) livePreview.preview(item);
         };
         catAdapter.listener = category -> {
+            liveAdapter.firstPageLoaded = () -> channels.requestFocus();
             liveAdapter.reload(category.id, search.getText().toString());
-            channels.post(() -> {
-                if (liveAdapter.getItemCount() > 0) channels.requestFocus();
-            });
         };
-        search.setOnEditorActionListener((v, action, event) -> {
-            liveAdapter.reload(liveAdapter.category, search.getText().toString());
-            return true;
+        bindLiveSearch(search, value -> {
+            liveAdapter.firstPageLoaded = null;
+            liveAdapter.reload(liveAdapter.category, value);
         });
 
         page.addView(columns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -515,7 +601,7 @@ public final class SevenMaxActivity extends Activity {
         releasePreview();
         screen = type;
         String titleValue = "series".equals(type) ? "المسلسلات" : "الأفلام";
-        ScreenShell shell = shell(type, titleValue);
+        ScreenShell shell = shell(type, titleValue, false);
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
@@ -566,14 +652,12 @@ public final class SevenMaxActivity extends Activity {
         body.addView(media, mediaParams);
 
         catAdapter.listener = category -> {
+            adapter.firstPageLoaded = () -> media.requestFocus();
             adapter.reload(category.id, search.getText().toString());
-            media.post(() -> {
-                if (adapter.getItemCount() > 0) media.requestFocus();
-            });
         };
-        search.setOnEditorActionListener((v, action, event) -> {
-            adapter.reload(adapter.category, search.getText().toString());
-            return true;
+        bindLiveSearch(search, value -> {
+            adapter.firstPageLoaded = null;
+            adapter.reload(adapter.category, value);
         });
 
         page.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -669,8 +753,10 @@ public final class SevenMaxActivity extends Activity {
 
     private String formatMeta(BlofyModels.Media item) {
         List<String> values = new ArrayList<>();
-        if (!TextUtils.isEmpty(item.year)) values.add(item.year);
-        if (!TextUtils.isEmpty(item.rating)) values.add("★ " + item.rating);
+        if (!TextUtils.isEmpty(item.releaseDate)) values.add(item.releaseDate);
+        else if (!TextUtils.isEmpty(item.year)) values.add(item.year);
+        if (!TextUtils.isEmpty(item.rating)) values.add((TextUtils.isEmpty(item.ratingSource)
+                ? "" : item.ratingSource + " ") + "★ " + item.rating);
         values.add("series".equals(item.type) ? "مسلسل" : "movies".equals(item.type) ? "فيلم" : "بث مباشر");
         return TextUtils.join("  •  ", values);
     }
@@ -689,6 +775,9 @@ public final class SevenMaxActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        stopHeroRotation();
+        main.removeCallbacksAndMessages(null);
+        catalogWorker.shutdownNow();
         releasePreview();
         database.close();
         super.onDestroy();
@@ -768,29 +857,48 @@ public final class SevenMaxActivity extends Activity {
         String category = "";
         String query = "";
         boolean exhausted;
+        boolean loading;
+        int generation;
         LiveListener listener;
+        Runnable firstPageLoaded;
 
         void reload(String category, String query) {
             this.category = category == null ? "" : category;
             this.query = query == null ? "" : query;
             rows.clear();
             exhausted = false;
+            loading = false;
+            generation++;
+            notifyDataSetChanged();
             loadMore();
         }
 
         void loadMore() {
-            if (exhausted) return;
+            if (exhausted || loading) return;
+            loading = true;
             int offset = rows.size();
-            List<BlofyModels.Media> next = database.media("live", category, query,
-                    false, false, LIVE_PAGE, offset);
-            if (next.size() < LIVE_PAGE) exhausted = true;
-            if (next.isEmpty()) {
-                if (offset == 0) notifyDataSetChanged();
-                return;
-            }
-            rows.addAll(next);
-            if (offset == 0) notifyDataSetChanged();
-            else notifyItemRangeInserted(offset, next.size());
+            int token = generation;
+            String selectedCategory = category;
+            String selectedQuery = query;
+            catalogWorker.execute(() -> {
+                List<BlofyModels.Media> next = database.media("live", selectedCategory, selectedQuery,
+                        false, false, LIVE_PAGE, offset);
+                main.post(() -> {
+                    if (token != generation || !selectedCategory.equals(category)
+                            || !selectedQuery.equals(query)) return;
+                    loading = false;
+                    if (next.size() < LIVE_PAGE) exhausted = true;
+                    if (next.isEmpty()) return;
+                    rows.addAll(next);
+                    if (offset == 0) notifyDataSetChanged();
+                    else notifyItemRangeInserted(offset, next.size());
+                    if (offset == 0 && firstPageLoaded != null) {
+                        Runnable callback = firstPageLoaded;
+                        firstPageLoaded = null;
+                        callback.run();
+                    }
+                });
+            });
         }
 
         @Override public Holder onCreateViewHolder(ViewGroup parent, int type) {
@@ -832,7 +940,7 @@ public final class SevenMaxActivity extends Activity {
         }
 
         @Override public void onBindViewHolder(Holder holder, int position) {
-            if (position >= rows.size() - 20) loadMore();
+            if (position >= rows.size() - 20) holder.card.post(this::loadMore);
             BlofyModels.Media media = rows.get(position);
             holder.number.setText(String.valueOf(position + 1));
             holder.name.setText(media.name);
@@ -874,6 +982,7 @@ public final class SevenMaxActivity extends Activity {
         final boolean landscape;
         final List<BlofyModels.Media> rows = new ArrayList<>();
         boolean exhausted;
+        boolean loading;
 
         HomeRailAdapter(String type, boolean history, boolean landscape) {
             this.type = type;
@@ -884,22 +993,29 @@ public final class SevenMaxActivity extends Activity {
         void reload() {
             rows.clear();
             exhausted = false;
+            loading = false;
             loadMore();
         }
 
         void loadMore() {
-            if (exhausted) return;
+            if (exhausted || loading) return;
+            loading = true;
             int offset = rows.size();
-            List<BlofyModels.Media> next = database.media(type, "", "", false,
-                    history, POSTER_PAGE, offset);
-            if (next.size() < POSTER_PAGE) exhausted = true;
-            if (next.isEmpty()) {
+            try {
+                List<BlofyModels.Media> next = history
+                        ? database.media(type, "", "", false, true, POSTER_PAGE, offset)
+                        : database.latest(type, POSTER_PAGE, offset);
+                if (next.size() < POSTER_PAGE) exhausted = true;
+                if (next.isEmpty()) {
+                    if (offset == 0) notifyDataSetChanged();
+                    return;
+                }
+                rows.addAll(next);
                 if (offset == 0) notifyDataSetChanged();
-                return;
+                else notifyItemRangeInserted(offset, next.size());
+            } finally {
+                loading = false;
             }
-            rows.addAll(next);
-            if (offset == 0) notifyDataSetChanged();
-            else notifyItemRangeInserted(offset, next.size());
         }
 
         @Override public Holder onCreateViewHolder(ViewGroup parent, int type) {
@@ -940,7 +1056,7 @@ public final class SevenMaxActivity extends Activity {
         }
 
         @Override public void onBindViewHolder(Holder holder, int position) {
-            if (position >= rows.size() - 14) loadMore();
+            if (position >= rows.size() - 14) holder.card.post(this::loadMore);
             BlofyModels.Media media = rows.get(position);
             holder.name.setText(media.name);
             holder.meta.setText(formatMeta(media));
@@ -981,6 +1097,9 @@ public final class SevenMaxActivity extends Activity {
         String category = "";
         String query = "";
         boolean exhausted;
+        boolean loading;
+        int generation;
+        Runnable firstPageLoaded;
 
         PosterAdapter(String type, boolean favorites, boolean history) {
             this.type = type;
@@ -993,22 +1112,38 @@ public final class SevenMaxActivity extends Activity {
             this.query = query == null ? "" : query;
             rows.clear();
             exhausted = false;
+            loading = false;
+            generation++;
+            notifyDataSetChanged();
             loadMore();
         }
 
         void loadMore() {
-            if (exhausted) return;
+            if (exhausted || loading) return;
+            loading = true;
             int offset = rows.size();
-            List<BlofyModels.Media> next = database.media(type, category, query,
-                    favorites, history, POSTER_PAGE, offset);
-            if (next.size() < POSTER_PAGE) exhausted = true;
-            if (next.isEmpty()) {
-                if (offset == 0) notifyDataSetChanged();
-                return;
-            }
-            rows.addAll(next);
-            if (offset == 0) notifyDataSetChanged();
-            else notifyItemRangeInserted(offset, next.size());
+            int token = generation;
+            String selectedCategory = category;
+            String selectedQuery = query;
+            catalogWorker.execute(() -> {
+                List<BlofyModels.Media> next = database.media(type, selectedCategory, selectedQuery,
+                        favorites, history, POSTER_PAGE, offset);
+                main.post(() -> {
+                    if (token != generation || !selectedCategory.equals(category)
+                            || !selectedQuery.equals(query)) return;
+                    loading = false;
+                    if (next.size() < POSTER_PAGE) exhausted = true;
+                    if (next.isEmpty()) return;
+                    rows.addAll(next);
+                    if (offset == 0) notifyDataSetChanged();
+                    else notifyItemRangeInserted(offset, next.size());
+                    if (offset == 0 && firstPageLoaded != null) {
+                        Runnable callback = firstPageLoaded;
+                        firstPageLoaded = null;
+                        callback.run();
+                    }
+                });
+            });
         }
 
         @Override public Holder onCreateViewHolder(ViewGroup parent, int type) {
@@ -1046,7 +1181,7 @@ public final class SevenMaxActivity extends Activity {
         }
 
         @Override public void onBindViewHolder(Holder holder, int position) {
-            if (position >= rows.size() - 18) loadMore();
+            if (position >= rows.size() - 18) holder.card.post(this::loadMore);
             BlofyModels.Media media = rows.get(position);
             holder.name.setText(media.name);
             holder.meta.setText(formatMeta(media));

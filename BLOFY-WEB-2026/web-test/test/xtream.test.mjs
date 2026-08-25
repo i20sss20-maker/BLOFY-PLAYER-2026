@@ -76,20 +76,34 @@ test("Xtream keeps valid direct_source internally and rejects unsafe schemes", a
   client.request = async (action) => action === "get_vod_info"
     ? {
         movie_data: { stream_id: 44, direct_source: "https://cdn.example/movie/44.mkv?token=secret" },
-        info: { name: "Movie" },
+        info: {
+          name: "Movie",
+          cast: "Actor One, Actor Two",
+          imdb_rating: "7.8",
+          release_date: "2026-08-20",
+        },
       }
     : [{ stream_id: 33, name: "Live", direct_source: "https://cdn.example/live/33.m3u8?token=secret" }];
 
   const catalog = await client.catalog("live");
-  assert.equal(catalog[0].sourceUrl, "https://cdn.example/live/33.m3u8?token=secret");
-  assert.equal(catalog[0].extension, "m3u8");
+  assert.equal(catalog[0].sourceUrl, "");
+  assert.equal(catalog[0].extension, "ts");
   const movie = await client.movieInfo("44");
   assert.equal(movie.sourceUrl, "https://cdn.example/movie/44.mkv?token=secret");
+  assert.equal(movie.releaseDate, "2026-08-20");
+  assert.deepEqual(movie.cast.map((entry) => entry.name), ["Actor One", "Actor Two"]);
+  assert.deepEqual(movie.ratings[0], { source: "IMDb", value: "7.8" });
 });
 
 test("series normalization accepts provider-specific episode identifiers", () => {
   const result = normalizeSeriesInfo({
-    info: { name: "مسلسل اختبار", cover: "https://img.example/cover.jpg" },
+    info: {
+      name: "مسلسل اختبار",
+      cover: "https://img.example/cover.jpg",
+      cast: "ممثل أول، ممثل ثان",
+      tmdb_rating: "8.2",
+      release_date: "2026-08-01",
+    },
     episodes: {
       "2": [{ stream_id: 22, episode_num: "2", name: "الثانية", container_extension: "mkv" }],
       "1": {
@@ -101,6 +115,9 @@ test("series normalization accepts provider-specific episode identifiers", () =>
   assert.deepEqual(result.seasons.map((season) => season.season), ["1", "2"]);
   assert.equal(result.seasons[0].episodes[0].id, "11");
   assert.equal(result.seasons[1].episodes[0].extension, "mkv");
+  assert.equal(result.releaseDate, "2026-08-01");
+  assert.equal(result.ratings[0].source, "TMDB");
+  assert.equal(result.cast.length, 2);
 });
 
 test("series normalization retains a valid private episode direct_source", () => {

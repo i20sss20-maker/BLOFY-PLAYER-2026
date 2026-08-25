@@ -1,18 +1,23 @@
 package tv.blofy.player;
 
 import android.content.Context;
+import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.LruCache;
 import android.view.ViewGroup;
 
 import androidx.annotation.OptIn;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 
 import org.json.JSONObject;
@@ -22,7 +27,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @OptIn(markerClass = UnstableApi.class)
-final class LivePreviewController {
+final class LivePreviewController implements Player.Listener {
+    interface Listener {
+        void loading();
+        void firstFrame();
+        void error();
+    }
+
+    private static final LruCache<String, Resolved> URL_CACHE = new LruCache<>(48);
     private final Context context;
     private final PlayerView view;
     private final BlofyApi api;
@@ -32,12 +44,15 @@ final class LivePreviewController {
     private ExoPlayer player;
     private Runnable pending;
     private BlofyModels.Media pendingItem;
+    private Listener listener;
 
     LivePreviewController(Context context) {
         this.context = context;
         this.api = new BlofyApi(context);
         view = new PlayerView(context);
         view.setUseController(false);
+        view.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
+        view.setShutterBackgroundColor(Color.TRANSPARENT);
         view.setKeepScreenOn(false);
         view.setFocusable(false);
         view.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -46,17 +61,26 @@ final class LivePreviewController {
 
     PlayerView view() { return view; }
 
+    void setListener(Listener listener) { this.listener = listener; }
+
     void preview(BlofyModels.Media item) {
         if (item == null || item.id == null || item.id.isEmpty()) return;
         pendingItem = item;
+        if (listener != null) listener.loading();
         if (pending != null) main.removeCallbacks(pending);
         pending = () -> startPreview(pendingItem);
-        main.postDelayed(pending, 320L);
+        main.postDelayed(pending, 110L);
     }
 
     private void startPreview(BlofyModels.Media item) {
         if (item == null) return;
         int token = generation.incrementAndGet();
+        String cacheKey = item.id + ":" + PlaybackPolicy.normalizeExtension(item.extension, "ts");
+        Resolved cached = URL_CACHE.get(cacheKey);
+        if (cached != null) {
+            open(cached.url, cached.extension);
+            return;
+        }
         network.execute(() -> {
             try {
                 String ext = PlaybackPolicy.normalizeExtension(item.extension, "ts");
@@ -64,12 +88,16 @@ final class LivePreviewController {
                         + "?ext=" + BlofyApi.encode(ext));
                 String url = result.optString("url", "");
                 String resolvedExt = PlaybackPolicy.normalizeExtension(result.optString("extension", ext), ext);
-                if (!url.startsWith("http")) return;
+                if (!url.startsWith("http")) throw new IllegalStateException("invalid preview url");
+                URL_CACHE.put(cacheKey, new Resolved(url, resolvedExt));
                 main.post(() -> {
                     if (token != generation.get()) return;
                     open(url, resolvedExt);
                 });
             } catch (Exception ignored) {
+                main.post(() -> {
+                    if (token == generation.get() && listener != null) listener.error();
+                });
                 // Preview is optional; never block channel navigation because of it.
             }
         });
@@ -84,13 +112,14 @@ final class LivePreviewController {
                 .setUserAgent("BLOFY-ANDROID-PREVIEW/" + BuildConfig.VERSION_NAME);
         DefaultDataSource.Factory data = new DefaultDataSource.Factory(context, http);
         DefaultLoadControl load = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(1_000, 9_000, 250, 750)
+                .setBufferDurationsMs(600, 6_000, 120, 350)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
         player = new ExoPlayer.Builder(context)
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(data))
                 .setLoadControl(load)
                 .build();
+        player.addListener(this);
         player.setVolume(0f);
         view.setPlayer(player);
     }
@@ -107,6 +136,14 @@ final class LivePreviewController {
         player.play();
     }
 
+    @Override public void onRenderedFirstFrame() {
+        if (listener != null) listener.firstFrame();
+    }
+
+    @Override public void onPlayerError(PlaybackException error) {
+        if (listener != null) listener.error();
+    }
+
     void release() {
         generation.incrementAndGet();
         if (pending != null) main.removeCallbacks(pending);
@@ -116,5 +153,14 @@ final class LivePreviewController {
             player = null;
         }
         network.shutdownNow();
+    }
+
+    private static final class Resolved {
+        final String url;
+        final String extension;
+        Resolved(String url, String extension) {
+            this.url = url;
+            this.extension = extension;
+        }
     }
 }
