@@ -890,12 +890,13 @@ public final class SevenMaxActivity extends Activity {
             if (autoplay && !liveAdapter.rows.isEmpty() && liveAdapter.listener != null) {
                 liveAdapter.listener.selected(liveAdapter.rows.get(0));
             }
+            if (sportsMode && categoryRows.isEmpty()) focusFirstItem(channels);
         };
         liveAdapter.previewedId = previewedId;
         String firstCategory = sportsMode && !categoryRows.isEmpty() ? categoryRows.get(0).id : "";
         String fallbackQuery = sportsMode && categoryRows.isEmpty() ? "SPORT" : search.getText().toString();
         liveAdapter.reload(firstCategory, fallbackQuery);
-        focusItem(cats, 0);
+        if (!categoryRows.isEmpty()) focusItem(cats, 0);
     }
 
     private boolean isSportsCategory(String name) {
