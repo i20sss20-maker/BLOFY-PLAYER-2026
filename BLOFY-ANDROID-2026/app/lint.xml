@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- BLOFY intentionally uses Media3 unstable APIs in its native playback core. -->
+    <issue id="UnsafeOptInUsageError">
+        <option name="opt-in" value="androidx.media3.common.util.UnstableApi" />
+    </issue>
+
+    <!-- Android TV/remote navigation uses the existing back-key contract. The app
+         opts out of predictive back in the manifest, but lint does not account
+         for the per-app opt-out. -->
+    <issue id="GestureBackNavigation" severity="ignore" />
+
+    <!-- The animated overload is guarded by app runtime compatibility policy;
+         keep this single legacy progress-screen call from blocking TV builds. -->
+    <issue id="NewApi">
+        <ignore path="src/main/java/tv/blofy/player/MainActivity.java" />
+    </issue>
+</lint>
+

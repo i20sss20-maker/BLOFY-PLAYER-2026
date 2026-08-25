@@ -25,14 +25,30 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void unknownExtensionsAreLeftForMedia3Sniffing() {
+    public void vodEbmlContainersAreLeftForMedia3Sniffing() {
+        assertNull(PlaybackPolicy.mimeType("mkv"));
+        assertNull(PlaybackPolicy.mimeType("webm"));
         assertNull(PlaybackPolicy.mimeType("unknown"));
+        assertEquals("video/mp4", PlaybackPolicy.mimeType("mp4"));
     }
 
     @Test
     public void fastStartupTimeoutsAreBounded() {
-        assertEquals(6_000, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(8_000, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(4_500, PlaybackPolicy.startupTimeoutMs(0));
+        assertEquals(3_500, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(4_500, PlaybackPolicy.vodStartupTimeoutMs(false));
+        assertEquals(5_500, PlaybackPolicy.vodStartupTimeoutMs(true));
+        assertEquals(5_500, PlaybackPolicy.vlcStartupTimeoutMs(false));
+        assertEquals(6_500, PlaybackPolicy.vlcStartupTimeoutMs(true));
+    }
+
+    @Test
+    public void failuresAreClassifiedWithoutGuessingTrackSupport() {
+        assertTrue(PlaybackPolicy.isNetworkFailure("HTTP 400"));
+        assertTrue(PlaybackPolicy.isNetworkFailure("ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"));
+        assertTrue(PlaybackPolicy.isDecoderFailure("ERROR_CODE_DECODING_FORMAT_UNSUPPORTED"));
+        assertTrue(PlaybackPolicy.isStartupTimeout("انتهت مهلة بدء التشغيل"));
+        assertFalse(PlaybackPolicy.isNetworkFailure("ERROR_CODE_DECODER_INIT_FAILED"));
     }
 
     @Test
@@ -42,17 +58,15 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void recoveryUsesHttpFirstThenCronetThenAlternateFormat() {
-        // Fast/default path: platform HTTP first, then Cronet, then alternate TS/HLS.
-        assertFalse(PlaybackPolicy.useCronet(0));
-        assertTrue(PlaybackPolicy.useCronet(1));
-        assertFalse(PlaybackPolicy.useCronet(2));
-        assertTrue(PlaybackPolicy.useCronet(3));
-
-        assertTrue(PlaybackPolicy.shouldRetrySameFormat(1));
-        assertFalse(PlaybackPolicy.shouldRetrySameFormat(2));
-        assertTrue(PlaybackPolicy.shouldTryAlternateLiveFormat(2));
-        assertTrue(PlaybackPolicy.shouldRetryAlternateFormat(3));
-        assertTrue(PlaybackPolicy.exhausted(4));
+    public void playbackLinkTimeoutAndCancellationHaveStableUserMessages() {
+        assertEquals("استغرق الخادم وقتًا أطول من مهلة تجهيز رابط التشغيل.",
+                PlaybackPolicy.resolveErrorMessage(
+                        new java.io.InterruptedIOException("playback-link-timeout")));
+        assertEquals("تم إلغاء تجهيز رابط التشغيل.",
+                PlaybackPolicy.resolveErrorMessage(
+                        new java.io.InterruptedIOException("playback-link-cancelled")));
+        assertEquals("رسالة الخادم",
+                PlaybackPolicy.resolveErrorMessage(new Exception("رسالة الخادم")));
     }
+
 }

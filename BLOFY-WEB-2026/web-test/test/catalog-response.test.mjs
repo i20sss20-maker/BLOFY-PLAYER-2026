@@ -38,10 +38,17 @@ test("native catalog can preserve provider artwork without exposing media creden
     sourceUrl: "http://provider.example/movie/user/private/7.mp4",
     image: "http://cdn.example/posters/7.jpg",
     backdrop: "http://cdn.example/backdrops/7.jpg",
+    rating: "8.4",
+    ratingSource: "TMDB",
+    releaseDate: "2026-08-24",
+    updatedAt: "2026-08-25",
   };
   const result = publicCatalogItem(raw, (value) => value);
   assert.equal(result.image, raw.image);
   assert.equal(result.backdrop, raw.backdrop);
+  assert.equal(result.ratingSource, "TMDB");
+  assert.equal(result.releaseDate, "2026-08-24");
+  assert.equal(result.updatedAt, "2026-08-25");
   assert.equal(Object.hasOwn(result, "sourceUrl"), false);
   assert.equal(JSON.stringify(result).includes("/user/private/"), false);
 });
@@ -79,4 +86,24 @@ test("repeated series serialization never mutates or re-signs the cached graph",
   assert.equal(Object.hasOwn(first.seasons[0].episodes[0], "sourceUrl"), false);
   assert.equal(JSON.stringify(first).includes("private-password"), false);
   assert.equal(cached.seasons[0].episodes[0].sourceUrl.includes("private-password"), true);
+});
+
+test("series serialization preserves the public cast and crew contract", () => {
+  const cached = {
+    id: "series-credits",
+    cast: [{ id: "10", name: "Actor", character: "Hero", image: "https://image.tmdb.org/t/p/w185/a.jpg" }],
+    crew: [{ id: "20", name: "Director", job: "Director", department: "Directing", image: "https://image.tmdb.org/t/p/w185/d.jpg" }],
+    director: "Director",
+    credits: {
+      cast: [{ id: "10", name: "Actor", character: "Hero", image: "https://image.tmdb.org/t/p/w185/a.jpg" }],
+      crew: [{ id: "20", name: "Director", job: "Director", department: "Directing", image: "https://image.tmdb.org/t/p/w185/d.jpg" }],
+    },
+    seasons: [],
+  };
+
+  const result = JSON.parse(JSON.stringify(publicSeriesItem(cached, signedPath)));
+  assert.equal(result.director, "Director");
+  assert.deepEqual(result.crew[0], cached.crew[0]);
+  assert.deepEqual(result.credits.cast[0], cached.credits.cast[0]);
+  assert.deepEqual(result.credits.crew[0], cached.credits.crew[0]);
 });

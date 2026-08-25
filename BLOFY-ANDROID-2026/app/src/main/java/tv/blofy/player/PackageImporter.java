@@ -2,6 +2,11 @@ package tv.blofy.player;
 
 import org.json.JSONObject;
 
+import java.io.EOFException;
+import java.net.ConnectException;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -32,12 +37,18 @@ final class PackageImporter {
     private final BlofyApi api;
     private final CatalogDatabase database;
     private final Listener listener;
+    private final String playlistId;
     private final Map<String, Integer> extensions = new LinkedHashMap<>();
     private long lastCatalogRequestAt;
 
     PackageImporter(BlofyApi api, CatalogDatabase database, Listener listener) {
+        this(api, database, "", listener);
+    }
+
+    PackageImporter(BlofyApi api, CatalogDatabase database, String playlistId, Listener listener) {
         this.api = api;
         this.database = database;
+        this.playlistId = playlistId == null ? "" : playlistId.trim();
         this.listener = listener;
     }
 
@@ -51,10 +62,8 @@ final class PackageImporter {
         if (!session.present) throw new Exception("لم يتم تسجيل بيانات الباقة بعد.");
 
         emit(12, "تحليل الخادم", "تحديد نوع الباقة وإمكانات التشغيل");
-        database.beginFreshImport();
-        database.putMetadata("sync_state", "in_progress");
-        database.putMetadata("server_name", session.serverName);
-        database.putMetadata("session_kind", session.kind);
+        String sourceIdentity = sourceIdentity(session, playlistId);
+        database.beginStagedImport(sourceIdentity);
 
         try {
             importType("live", "القنوات المباشرة", 14, 42);
@@ -62,19 +71,27 @@ final class PackageImporter {
             importType("series", "المسلسلات", 69, 94);
 
             String profile = profile();
-            database.putMetadata("playback_profile", profile);
-            database.putMetadata("last_sync", String.valueOf(System.currentTimeMillis()));
-            database.putMetadata("sync_state", "complete");
+            database.commitStagedImport(sourceIdentity, session.serverName, session.kind, profile);
             emit(98, "تجهيز التشغيل", profile);
             emit(100, "اكتملت قراءة الباقة", "Live " + database.count("live")
                     + " • Movies " + database.count("movies")
                     + " • Series " + database.count("series"));
             return new Result(database.count("live"), database.count("movies"), database.count("series"), profile);
         } catch (Exception error) {
-            database.beginFreshImport();
-            database.putMetadata("sync_state", "failed");
+            database.abortStagedImport();
             throw error;
         }
+    }
+
+    private static String sourceIdentity(BlofyModels.Session session, String playlistId) {
+        if (playlistId != null && !playlistId.trim().isEmpty()
+                && !"current-session".equals(playlistId.trim())) {
+            return CatalogScope.forPlaylist(playlistId);
+        }
+        String username = session.account == null ? "" : session.account.optString("username",
+                session.account.optString("user", session.account.optString("id", "")));
+        String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;
+        return CatalogScope.forSession(raw);
     }
 
     private void importType(String type, String label, int start, int end) throws Exception {
@@ -88,9 +105,6 @@ final class PackageImporter {
         int total = Math.max(0, first.optInt("total", 0));
         int pageSize = Math.max(1, first.optInt("pageSize", 60));
 
-        // Some Xtream panels return an empty global VOD/series list but expose
-        // valid items when category_id is supplied. Use categories as a safe
-        // fallback instead of silently storing 0 Movies/Series.
         if (total == 0 && !"live".equals(type) && !categories.isEmpty()) {
             importByCategories(type, label, categories, start, end);
             return;
@@ -108,7 +122,7 @@ final class PackageImporter {
                     + "&page=" + page + "&page_size=" + REQUESTED_PAGE_SIZE, true);
             save(BlofyModels.Media.list(response, type));
         }
-        emit(end, "اكتملت " + label, database.count(type) + " عنصر محفوظ محليًا");
+        emit(end, "اكتملت " + label, database.importCount(type) + " عنصر محفوظ محليًا");
     }
 
     private void importByCategories(String type, String label,
@@ -134,11 +148,12 @@ final class PackageImporter {
                 save(BlofyModels.Media.list(response, type));
             }
         }
-        emit(end, "اكتملت " + label, database.count(type) + " عنصر محفوظ محليًا");
+        emit(end, "اكتملت " + label, database.importCount(type) + " عنصر محفوظ محليًا");
     }
 
     private JSONObject getWithRetry(String path, boolean catalogRequest) throws Exception {
-        final long[] delays = {1_000L, 3_000L, 8_000L, 15_000L, 32_000L};
+        final long[] httpDelays = {1_000L, 3_000L, 8_000L, 15_000L, 32_000L};
+        final long[] networkDelays = {350L, 900L, 2_000L, 5_000L, 10_000L};
         for (int attempt = 0; ; attempt++) {
             try {
                 if (catalogRequest) lastCatalogRequestAt = System.currentTimeMillis();
@@ -146,11 +161,28 @@ final class PackageImporter {
             } catch (BlofyApi.ApiException error) {
                 boolean retryable = error.status == 429 || error.status == 502
                         || error.status == 503 || error.status == 504;
-                if (!retryable || attempt >= delays.length) throw error;
-                emitRetry(path, error.status, attempt + 1);
-                Thread.sleep(delays[attempt]);
+                if (!retryable || attempt >= httpDelays.length) throw error;
+                emitRetry(path, String.valueOf(error.status), attempt + 1);
+                Thread.sleep(httpDelays[attempt]);
+            } catch (Exception error) {
+                if (!isTransientNetworkError(error) || attempt >= networkDelays.length) throw error;
+                emitRetry(path, "شبكة", attempt + 1);
+                Thread.sleep(networkDelays[attempt]);
             }
         }
+    }
+
+    private static boolean isTransientNetworkError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof SocketTimeoutException
+                    || current instanceof ConnectException
+                    || current instanceof SocketException
+                    || current instanceof UnknownHostException
+                    || current instanceof EOFException) return true;
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void paceLegacyCatalog() throws InterruptedException {
@@ -159,10 +191,10 @@ final class PackageImporter {
         if (wait > 0) Thread.sleep(wait);
     }
 
-    private void emitRetry(String path, int status, int attempt) {
+    private void emitRetry(String path, String reason, int attempt) {
         String area = path.contains("catalog") ? "الكتالوج" : "الخادم";
         emit(0, "إعادة الاتصال بـ " + area,
-                "استجابة " + status + " • محاولة " + attempt + " تلقائيًا");
+                reason + " • محاولة " + attempt + " تلقائيًا");
     }
 
     private void save(List<BlofyModels.Media> items) {
@@ -184,8 +216,8 @@ final class PackageImporter {
         for (String extension : new String[]{"mp4", "mkv", "avi", "mov", "webm"})
             files += extensions.containsKey(extension) ? extensions.get(extension) : 0;
         if (transport >= hls && transport >= files)
-            return "Media3 مباشر • Cronet أولًا • TS سريع";
-        if (hls >= files) return "Media3 مباشر • Cronet أولًا • HLS متكيف";
+            return "Media3 مباشر • HTTP سريع • TS";
+        if (hls >= files) return "Media3 مباشر • HTTP سريع • HLS متكيف";
         return "Media3 مباشر • ملفات فيديو مع دعم الاستكمال";
     }
 

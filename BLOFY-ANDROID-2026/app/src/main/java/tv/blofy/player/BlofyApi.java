@@ -2,11 +2,13 @@ package tv.blofy.player;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -21,10 +23,39 @@ final class BlofyApi {
     private static final String KEY_COOKIES = "cookies";
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int READ_TIMEOUT_MS = 25_000;
+    // One budget covers both BLOFY authorization and redirect resolution.  A
+    // dead host must not consume most of the user's channel-switch window.
+    private static final int PLAYBACK_LINK_TIMEOUT_MS = 4_000;
 
     static final class ApiException extends Exception {
         final int status;
         ApiException(int status, String message) { super(message); this.status = status; }
+    }
+
+    /** Cancels the active native-link/redirect connection, not just its Future. */
+    static final class Cancellation {
+        private HttpURLConnection connection;
+        private boolean cancelled;
+
+        synchronized void attach(HttpURLConnection next) throws InterruptedIOException {
+            if (cancelled) {
+                next.disconnect();
+                throw new InterruptedIOException("playback-link-cancelled");
+            }
+            connection = next;
+        }
+
+        synchronized void detach(HttpURLConnection current) {
+            if (connection == current) connection = null;
+        }
+
+        synchronized void cancel() {
+            cancelled = true;
+            if (connection != null) connection.disconnect();
+            connection = null;
+        }
+
+        synchronized boolean isCancelled() { return cancelled; }
     }
 
     private final Context context;
@@ -45,46 +76,80 @@ final class BlofyApi {
 
     String baseUrl() { return baseUrl; }
     String deviceId() { return deviceId; }
+    String playbackSessionKey() {
+        return Integer.toHexString(cookieHeader().hashCode());
+    }
     String activationUrl(BlofyModels.License license) {
         String root = license != null && !license.activationUrl.isEmpty() ? license.activationUrl : baseUrl + "/activate";
-        String url = root + (root.contains("?") ? "&" : "?") + "device_id=" + encode(deviceId);
+        // The QR must show exactly the same public credentials printed on TV.
+        // Never expose the long private id, device key, or reusable six-digit code.
+        // A freshly registered one-time token may auto-open the dashboard; after it
+        // is consumed the short id + code printed on TV remain the login fallback.
+        String url = root + (root.contains("?") ? "&" : "?")
+                + "device_id=" + encode(DeviceIdentity.displayId(context));
         String pairToken = DeviceIdentity.pairToken(context);
-        return pairToken == null || pairToken.isEmpty() ? url : url + "&pair_token=" + encode(pairToken);
+        return pairToken == null || pairToken.isEmpty()
+                ? url : url + "&pair_token=" + encode(pairToken);
     }
 
     JSONObject get(String path) throws Exception {
-        JSONObject result = request("GET", path, null);
+        return path.startsWith("/api/native-link/")
+                ? getPlayback(path, new Cancellation())
+                : request("GET", path, null);
+    }
+
+    JSONObject getPlayback(String path, Cancellation cancellation) throws Exception {
+        if (!path.startsWith("/api/native-link/")) {
+            throw new IllegalArgumentException("getPlayback requires a native-link path");
+        }
+        long deadlineMs = SystemClock.elapsedRealtime() + PLAYBACK_LINK_TIMEOUT_MS;
+        JSONObject result = request("GET", path, null, deadlineMs, cancellation);
         // The native-link endpoint authorizes the device and returns a short-lived
         // BLOFY redirect. Resolve that redirect here with BLOFY cookies/identity,
         // but DO NOT follow it with HttpURLConnection. Media3 receives only the
         // provider URL, so BLOFY credentials are never forwarded to the provider
         // and media bytes never pass through Railway.
-        if (path.startsWith("/api/native-link/")) {
-            String playbackPath = result.optString("url", "");
-            if (playbackPath.startsWith("/api/native-play")) {
-                result.put("url", resolveNativePlaybackRedirect(playbackPath));
-                result.put("mode", "direct-provider");
-            }
+        String playbackPath = result.optString("url", "");
+        if (playbackPath.startsWith("/api/native-play")) {
+            result.put("url", resolveNativePlaybackRedirect(playbackPath, deadlineMs, cancellation));
+            result.put("mode", "direct-provider");
         }
         return result;
     }
 
     JSONObject delete(String path) throws Exception { return request("DELETE", path, null); }
     JSONObject post(String path, JSONObject body) throws Exception { return request("POST", path, body); }
+    JSONObject patch(String path, JSONObject body) throws Exception { return request("PATCH", path, body); }
 
     JSONObject request(String method, String path, JSONObject body) throws Exception {
-        HttpURLConnection connection = open(path, method);
-        if (body != null) {
-            connection.setDoOutput(true);
-            byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
-            connection.setFixedLengthStreamingMode(bytes.length);
-            try (OutputStream output = connection.getOutputStream()) { output.write(bytes); }
+        return request(method, path, body, 0L, null);
+    }
+
+    private JSONObject request(String method, String path, JSONObject body,
+                               long deadlineMs, Cancellation cancellation) throws Exception {
+        HttpURLConnection connection = open(path, method, deadlineMs);
+        if (cancellation != null) cancellation.attach(connection);
+        int status;
+        String text;
+        try {
+            checkActive(deadlineMs, cancellation);
+            if (body != null) {
+                connection.setDoOutput(true);
+                byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+                connection.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream output = connection.getOutputStream()) { output.write(bytes); }
+            }
+            status = connection.getResponseCode();
+            checkActive(deadlineMs, cancellation);
+            captureCookies(connection);
+            connection.setReadTimeout(remainingTimeout(deadlineMs, READ_TIMEOUT_MS));
+            InputStream stream = status >= 200 && status < 400
+                    ? connection.getInputStream() : connection.getErrorStream();
+            text = stream == null ? "" : readText(stream, 64 * 1024 * 1024, deadlineMs, cancellation);
+        } finally {
+            if (cancellation != null) cancellation.detach(connection);
+            connection.disconnect();
         }
-        int status = connection.getResponseCode();
-        captureCookies(connection);
-        InputStream stream = status >= 200 && status < 400 ? connection.getInputStream() : connection.getErrorStream();
-        String text = stream == null ? "" : readText(stream, 64 * 1024 * 1024);
-        connection.disconnect();
         JSONObject result;
         try { result = text.isEmpty() ? new JSONObject() : new JSONObject(text); }
         catch (Exception error) { throw new ApiException(status, "الخادم أعاد بيانات غير صالحة."); }
@@ -95,14 +160,24 @@ final class BlofyApi {
         return result;
     }
 
-    private String resolveNativePlaybackRedirect(String path) throws Exception {
-        HttpURLConnection connection = open(path, "GET");
-        connection.setInstanceFollowRedirects(false);
-        connection.setRequestProperty("Accept", "*/*");
-        int status = connection.getResponseCode();
-        captureCookies(connection);
-        String location = connection.getHeaderField("Location");
-        connection.disconnect();
+    private String resolveNativePlaybackRedirect(String path, long deadlineMs,
+                                                 Cancellation cancellation) throws Exception {
+        checkActive(deadlineMs, cancellation);
+        HttpURLConnection connection = open(path, "GET", deadlineMs);
+        cancellation.attach(connection);
+        int status;
+        String location;
+        try {
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "*/*");
+            status = connection.getResponseCode();
+            checkActive(deadlineMs, cancellation);
+            captureCookies(connection);
+            location = connection.getHeaderField("Location");
+        } finally {
+            cancellation.detach(connection);
+            connection.disconnect();
+        }
 
         if (status < 300 || status >= 400 || location == null || location.isEmpty()) {
             throw new ApiException(status, "تعذر استخراج رابط المصدر المباشر من BLOFY.");
@@ -140,6 +215,10 @@ final class BlofyApi {
     }
 
     private HttpURLConnection open(String path, String method) throws Exception {
+        return open(path, method, 0L);
+    }
+
+    private HttpURLConnection open(String path, String method, long deadlineMs) throws Exception {
         String target = path.startsWith("http://") || path.startsWith("https://") ? path : baseUrl + (path.startsWith("/") ? path : "/" + path);
         URL url = new URL(target);
         if (!url.getHost().equalsIgnoreCase(new URL(baseUrl).getHost())) {
@@ -147,8 +226,8 @@ final class BlofyApi {
         }
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod(method);
-        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        connection.setReadTimeout(READ_TIMEOUT_MS);
+        connection.setConnectTimeout(remainingTimeout(deadlineMs, CONNECT_TIMEOUT_MS));
+        connection.setReadTimeout(remainingTimeout(deadlineMs, READ_TIMEOUT_MS));
         connection.setUseCaches(false);
         connection.setInstanceFollowRedirects(true);
         connection.setRequestProperty("Accept", "application/json");
@@ -202,14 +281,38 @@ final class BlofyApi {
     }
 
     private static String readText(InputStream input, int limit) throws Exception {
+        return readText(input, limit, 0L, null);
+    }
+
+    private static String readText(InputStream input, int limit, long deadlineMs,
+                                   Cancellation cancellation) throws Exception {
         try (InputStream source = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[16_384];
             int read;
             while ((read = source.read(buffer)) >= 0) {
+                checkActive(deadlineMs, cancellation);
                 output.write(buffer, 0, read);
                 if (output.size() > limit) throw new ApiException(413, "البيانات أكبر من الحد المسموح.");
             }
             return output.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+
+    private static int remainingTimeout(long deadlineMs, int normalTimeoutMs)
+            throws InterruptedIOException {
+        if (deadlineMs <= 0) return normalTimeoutMs;
+        long remaining = deadlineMs - SystemClock.elapsedRealtime();
+        if (remaining <= 0) throw new InterruptedIOException("playback-link-timeout");
+        return (int) Math.max(1L, Math.min((long) normalTimeoutMs, remaining));
+    }
+
+    private static void checkActive(long deadlineMs, Cancellation cancellation)
+            throws InterruptedIOException {
+        if (cancellation != null && cancellation.isCancelled()) {
+            throw new InterruptedIOException("playback-link-cancelled");
+        }
+        if (deadlineMs > 0 && SystemClock.elapsedRealtime() >= deadlineMs) {
+            throw new InterruptedIOException("playback-link-timeout");
         }
     }
 

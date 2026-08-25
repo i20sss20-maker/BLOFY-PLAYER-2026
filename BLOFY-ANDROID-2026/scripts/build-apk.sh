@@ -19,3 +19,4 @@ fi
 
 ./gradlew --no-daemon lintDebug testDebugUnitTest assembleDebug -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
 echo "APK: $project_dir/app/build/outputs/apk/debug/app-debug.apk"
+

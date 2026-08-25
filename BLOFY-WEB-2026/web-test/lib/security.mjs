@@ -14,6 +14,10 @@ if (production && configuredSecret.length < 32) {
 
 const key = crypto.createHash("sha256").update(configuredSecret).digest();
 const safeHostCache = new Map();
+const trustedProxyHops = Math.min(8, Math.max(0, Number.parseInt(
+  process.env.TRUSTED_PROXY_HOPS ?? (production ? "1" : "0"), 10,
+) || 0));
+const allowPrivateTestUrls = process.env.NODE_ENV === "test" && process.env.ALLOW_PRIVATE_URLS_FOR_TESTS === "1";
 
 export function seal(value) {
   const iv = crypto.randomBytes(12);
@@ -69,6 +73,28 @@ export function licenseCookie(token, maxAge = 60 * 60 * 24 * 400) {
     "SameSite=Lax",
     production ? "Secure" : "",
     `Max-Age=${maxAge}`,
+  ].filter(Boolean).join("; ");
+}
+
+export function portalCookie(token, maxAge = 60 * 60 * 12) {
+  return [
+    `blofy_portal=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    production ? "Secure" : "",
+    `Max-Age=${maxAge}`,
+  ].filter(Boolean).join("; ");
+}
+
+export function clearPortalCookie() {
+  return [
+    "blofy_portal=",
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    production ? "Secure" : "",
+    "Max-Age=0",
   ].filter(Boolean).join("; ");
 }
 
@@ -138,6 +164,7 @@ export async function assertSafeUrl(raw) {
   try { url = new URL(raw); } catch { throw new Error("رابط الخادم غير صحيح."); }
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("يجب أن يبدأ الرابط بـ http أو https.");
   if (url.username || url.password) throw new Error("لا تضع بيانات الدخول داخل رابط الخادم.");
+  if (allowPrivateTestUrls) return url;
   const cached = safeHostCache.get(url.hostname);
   if (!cached || cached < Date.now()) {
     const records = await dns.lookup(url.hostname, { all: true });
@@ -261,5 +288,20 @@ export async function readTextLimited(response, maxBytes = 32_000_000, timeoutMs
 }
 
 export function clientKey(req) {
-  return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+  const cleanAddress = (value) => {
+    let address = String(value || "").trim();
+    const bracketed = address.match(/^\[([^\]]+)](?::\d+)?$/);
+    if (bracketed) address = bracketed[1];
+    else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(address)) address = address.slice(0, address.lastIndexOf(":"));
+    return net.isIP(address) ? address : "";
+  };
+  const remote = cleanAddress(req.socket?.remoteAddress) || "unknown";
+  // Only a private/loopback reverse proxy connection may supply a chain. Read
+  // from the trusted right side, never from the attacker-controlled first item.
+  if (trustedProxyHops > 0 && remote !== "unknown" && isPrivateIp(remote)) {
+    const chain = String(req.headers?.["x-forwarded-for"] || "").split(",").map(cleanAddress).filter(Boolean);
+    const index = chain.length - trustedProxyHops;
+    if (index >= 0 && chain[index]) return chain[index];
+  }
+  return remote;
 }

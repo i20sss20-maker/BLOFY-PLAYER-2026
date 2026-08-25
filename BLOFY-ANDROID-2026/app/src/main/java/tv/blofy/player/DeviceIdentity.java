@@ -3,6 +3,8 @@ package tv.blofy.player;
 import android.content.Context;
 import android.provider.Settings;
 
+import org.json.JSONObject;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -12,6 +14,8 @@ final class DeviceIdentity {
     private static final String PREFS = "blofy_native_identity";
     private static final String KEY_SECRET = "device_secret";
     private static final String KEY_PAIR_TOKEN = "pair_token";
+    private static final String KEY_DISPLAY_ID = "display_id";
+    private static final String KEY_PAIRING_CODE = "pairing_code";
 
     private DeviceIdentity() {}
 
@@ -27,6 +31,64 @@ final class DeviceIdentity {
                     + "-" + value.substring(8, 12) + "-" + value.substring(12, 16);
         } catch (Exception ignored) {
             return "BLOFY-ANDROID-DEVICE";
+        }
+    }
+
+    /** Short, TV-friendly identifier. The long id remains the private API identity. */
+    static String displayId(Context context) {
+        String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_DISPLAY_ID, "");
+        if (saved != null && saved.matches("BLOFY-[A-Z0-9]{2}")) return saved;
+        return "BLOFY-" + stableCode(context, "display", 2);
+    }
+
+    /** Six-digit pairing code. The server-issued value wins after registration. */
+    static String activationCode(Context context) {
+        String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_PAIRING_CODE, "");
+        if (saved != null && saved.matches("[0-9]{6}")) return saved;
+        return stableDigits(context, "activation", 6);
+    }
+
+    static void updatePublicIdentity(Context context, JSONObject response) {
+        if (response == null) return;
+        String displayId = response.optString("displayId", "").trim().toUpperCase(Locale.US);
+        String pairingCode = response.optString("pairingCode", "").trim();
+        android.content.SharedPreferences.Editor edit = context.getSharedPreferences(PREFS,
+                Context.MODE_PRIVATE).edit();
+        if (displayId.matches("BLOFY-[A-Z0-9]{2}")) edit.putString(KEY_DISPLAY_ID, displayId);
+        if (pairingCode.matches("[0-9]{6}")) edit.putString(KEY_PAIRING_CODE, pairingCode);
+        edit.apply();
+    }
+
+    private static String stableCode(Context context, String purpose, int length) {
+        final char[] alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
+        try {
+            String androidId = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(("tv.blofy.player:" + purpose + ":" + androidId)
+                    .getBytes(StandardCharsets.UTF_8));
+            StringBuilder value = new StringBuilder(length);
+            for (int index = 0; index < length; index++) {
+                value.append(alphabet[(hash[index] & 0xff) % alphabet.length]);
+            }
+            return value.toString();
+        } catch (Exception ignored) {
+            return length == 2 ? "TV" : "BLOFY6";
+        }
+    }
+
+    private static String stableDigits(Context context, String purpose, int length) {
+        try {
+            String androidId = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(("tv.blofy.player:" + purpose + ":" + androidId)
+                    .getBytes(StandardCharsets.UTF_8));
+            StringBuilder value = new StringBuilder(length);
+            for (int index = 0; index < length; index++) value.append((hash[index] & 0xff) % 10);
+            return value.toString();
+        } catch (Exception ignored) {
+            return "000000";
         }
     }
 
