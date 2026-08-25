@@ -8,6 +8,7 @@ import { DeviceProfileStore, persistDeviceSessionFromHeaders } from "./lib/devic
 import { extensionFromUrl, XtreamClient } from "./lib/xtream.mjs";
 import { pageItems, parseM3u } from "./lib/playlist.mjs";
 import { publicCatalogItem, publicSeriesItem } from "./lib/catalog-response.mjs";
+import { enrichMediaDetails } from "./lib/tmdb.mjs";
 import {
   assertSafeUrl,
   clearSessionCookie,
@@ -26,7 +27,7 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
-const APP_VERSION = "2026.08.25.10";
+const APP_VERSION = "2026.08.25.11";
 const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
@@ -456,7 +457,9 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && movieMatch) {
     if (session.kind !== "xtream") return json(res, 400, { error: "تفاصيل الفيلم غير متوفرة لهذا النوع من القوائم." }, securityHeaders());
     const client = new XtreamClient(session);
-    const item = await cached(cacheKey(session, `movie:${movieMatch[1]}`), () => client.movieInfo(movieMatch[1]));
+    const rawItem = await cached(cacheKey(session, `movie:${movieMatch[1]}`), () => client.movieInfo(movieMatch[1]));
+    const item = await cached(cacheKey(session, `movie-ar:${movieMatch[1]}`),
+      () => enrichMediaDetails(rawItem, "movies"), 6 * 60 * 60 * 1000);
     const { sourceUrl: _privateSource, ...publicItem } = item;
     return json(res, 200, { ...publicItem, image: item.image || "", backdrop: item.backdrop || "" }, securityHeaders());
   }
@@ -465,7 +468,9 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && seriesMatch) {
     if (session.kind !== "xtream") return json(res, 400, { error: "المواسم والحلقات تحتاج مصدر Xtream Codes." }, securityHeaders());
     const client = new XtreamClient(session);
-    const item = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
+    const rawItem = await cached(cacheKey(session, `series:${seriesMatch[1]}`), () => client.seriesInfo(seriesMatch[1]));
+    const item = await cached(cacheKey(session, `series-ar:${seriesMatch[1]}`),
+      () => enrichMediaDetails(rawItem, "series"), 6 * 60 * 60 * 1000);
     if (!item.seasons.length) return json(res, 404, { error: "لم يرسل مزود القائمة مواسم أو حلقات لهذا المسلسل." }, securityHeaders());
     for (const season of item.seasons) for (const episode of season.episodes) {
       rememberDirectSource(session, "episode", episode.id, episode.sourceUrl);
