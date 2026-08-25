@@ -81,6 +81,7 @@ final class BlofyApi {
     }
     String activationUrl(BlofyModels.License license) {
         String root = license != null && !license.activationUrl.isEmpty() ? license.activationUrl : baseUrl + "/activate";
+        if (!DeviceIdentity.hasRegisteredPublicIdentity(context)) return root;
         // The QR must show exactly the same public credentials printed on TV.
         // Never expose the long private id, device key, or reusable six-digit code.
         // A freshly registered one-time token may auto-open the dashboard; after it
