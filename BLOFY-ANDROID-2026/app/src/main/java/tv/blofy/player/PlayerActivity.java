@@ -81,6 +81,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private String sourceVariant = "canonical";
     private long resumePosition;
     private int recoveryStep;
+    private int startupTimeoutRetries;
     private boolean resolving;
     private boolean firstFrameRendered;
     private boolean warmLiveSwitchPending;
@@ -176,19 +177,16 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private boolean useCronetNow() { return PlaybackPolicy.useCronet(recoveryStep); }
     private String activeTransportName() { return useCronetNow() ? "cronet" : "default-http"; }
 
-    private String transportPreferenceKey() {
-        return "transport_" + kind + "_" + PlaybackPolicy.normalizeExtension(extension, "auto");
-    }
-
     private int preferredRecoveryStep() {
-        if (kind == null || extension == null) return 0;
-        return getSharedPreferences("blofy_playback", MODE_PRIVATE)
-                .getBoolean(transportPreferenceKey(), false) ? 1 : 0;
+        // Transport success must not leak from one playlist/provider to another.
+        // Start every source with the platform HTTP stack and use Cronet only as
+        // a bounded compatibility fallback for the current source.
+        return 0;
     }
 
     private void rememberSuccessfulTransport() {
-        getSharedPreferences("blofy_playback", MODE_PRIVATE)
-                .edit().putBoolean(transportPreferenceKey(), useCronetNow()).apply();
+        // Deliberately session-only. Persisting this choice by file extension
+        // made one unusual host slow down every other host using that extension.
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -292,8 +290,6 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private void schedulePlaybackTimeout() {
         playbackHandler.removeCallbacks(playbackTimeout);
         int timeout = PlaybackPolicy.startupTimeoutMs(recoveryStep);
-        if (isUltraHd()) timeout += 2_500;
-        if ("stable".equals(playerSetting(SettingsActivity.KEY_BUFFER, "auto"))) timeout += 1_500;
         playbackHandler.postDelayed(playbackTimeout, timeout);
     }
 
@@ -385,7 +381,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory);
         MediaItem.Builder itemBuilder = new MediaItem.Builder()
                 .setUri(PlaybackPolicy.directPlaybackUrl(url)).setMediaId(title);
-        String mimeType = PlaybackPolicy.mimeType(extension);
+        // The no-extension variant is explicitly a container-sniffing fallback;
+        // forcing the old extension here defeated that fallback.
+        String mimeType = "no-extension".equals(sourceVariant)
+                ? null : PlaybackPolicy.mimeType(extension);
         if (mimeType != null) itemBuilder.setMimeType(mimeType);
         MediaItem item = itemBuilder.build();
         return PlaybackPolicy.isHls(extension) && !"no-extension".equals(sourceVariant)
@@ -467,6 +466,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         url = null;
         resumePosition = 0;
         recoveryStep = preferredRecoveryStep();
+        startupTimeoutRetries = 0;
         warmLiveSwitchPending = player != null;
         titleView.setText(title);
         titleView.setVisibility(View.VISIBLE);
@@ -479,6 +479,25 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (isFinishing() || isDestroyed()) return;
         playbackHandler.removeCallbacks(playbackTimeout);
         playbackHandler.removeCallbacks(markPlaybackStable);
+
+        // A startup timeout is not proof that the container is wrong. Previously
+        // it triggered all five fallbacks in sequence, which is the 20+ second
+        // delay seen on otherwise healthy playlists. Retry the same source once
+        // with the alternate HTTP transport, then stop cleanly.
+        if (isStartupTimeout(reason)) {
+            Log.w(TAG, "startup-timeout-recovery retry=" + startupTimeoutRetries
+                    + " ext=" + extension + " transport=" + activeTransportName());
+            releasePlayer();
+            if (startupTimeoutRetries == 0) {
+                startupTimeoutRetries = 1;
+                recoveryStep = useCronetNow() ? 0 : 1;
+                reopenResolvedSource(false);
+                return;
+            }
+            showPlaybackFailure(reason);
+            return;
+        }
+
         recoveryStep += 1;
         Log.w(TAG, "recover reason=" + reason + " step=" + recoveryStep + " ext=" + extension
                 + " nextTransport=" + PlaybackPolicy.transportName(recoveryStep));
@@ -503,6 +522,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             resolvePlaybackLink();
             return;
         }
+        showPlaybackFailure(reason);
+    }
+
+    private static boolean isStartupTimeout(String reason) {
+        return "انتهت مهلة بدء التشغيل".equals(reason) || "لم تظهر صورة الفيديو".equals(reason);
+    }
+
+    private void showPlaybackFailure(String reason) {
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
         errorText.setText("تعذر تشغيل المصدر. آخر سبب: " + reason + "\nالصيغة: " + extension
@@ -518,6 +545,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void manualRetry() {
         recoveryStep = preferredRecoveryStep();
+        startupTimeoutRetries = 0;
         sourceVariant = "canonical";
         playbackReferer = "";
         warmLiveSwitchPending = false;
@@ -549,6 +577,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     @Override public void onRenderedFirstFrame() {
         if (playbackStartedAtMs == 0) return;
         firstFrameRendered = true;
+        startupTimeoutRetries = 0;
         playbackHandler.removeCallbacks(playbackTimeout);
         progress.setVisibility(View.GONE);
         long firstFrameMs = SystemClock.elapsedRealtime() - playbackStartedAtMs;
