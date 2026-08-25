@@ -8,8 +8,12 @@ import java.util.Locale;
  * with Cronet, then for Live only try the alternate TS/HLS container.
  */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 3_500;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 5_500;
+    // A 3.5 second deadline was too aggressive for UHD/HEVC sources. It caused
+    // the player to abandon a healthy source, then spend ~20 seconds walking
+    // through every transport/container fallback. Give the primary source one
+    // realistic window and keep the single compatibility retry short.
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 8_000;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 3_500;
     static final int MAX_RECOVERY_STEPS = 4;
 
     private PlaybackPolicy() {}
