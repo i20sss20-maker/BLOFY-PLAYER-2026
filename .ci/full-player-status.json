@@ -1,9 +1,9 @@
 {
   "workflow": "Build BLOFY FULL Player APK",
   "status": "failure",
-  "run_id": 32909928568,
+  "run_id": 32912945354,
   "run_attempt": 1,
-  "source_sha": "7b6d3da4d94614a07b3fc9bedb16980378ca7c31",
+  "source_sha": "804938bc8b3963f64c54ed84edbb88641822e22b",
   "artifact": "BLOFY-PLAYER-RELEASE-UNSIGNED-APK",
   "version": "2026.08.25.9-playlist-hub"
 }
