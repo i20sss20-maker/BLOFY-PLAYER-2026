@@ -7,8 +7,6 @@ import java.net.ConnectException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -39,12 +37,18 @@ final class PackageImporter {
     private final BlofyApi api;
     private final CatalogDatabase database;
     private final Listener listener;
+    private final String playlistId;
     private final Map<String, Integer> extensions = new LinkedHashMap<>();
     private long lastCatalogRequestAt;
 
     PackageImporter(BlofyApi api, CatalogDatabase database, Listener listener) {
+        this(api, database, "", listener);
+    }
+
+    PackageImporter(BlofyApi api, CatalogDatabase database, String playlistId, Listener listener) {
         this.api = api;
         this.database = database;
+        this.playlistId = playlistId == null ? "" : playlistId.trim();
         this.listener = listener;
     }
 
@@ -58,16 +62,8 @@ final class PackageImporter {
         if (!session.present) throw new Exception("لم يتم تسجيل بيانات الباقة بعد.");
 
         emit(12, "تحليل الخادم", "تحديد نوع الباقة وإمكانات التشغيل");
-        String sourceIdentity = sourceIdentity(session);
-        String previousIdentity = database.metadata("source_identity", "");
-        if (!previousIdentity.isEmpty() && !previousIdentity.equals(sourceIdentity)) {
-            database.clearPersonalState();
-        }
-        database.beginFreshImport();
-        database.putMetadata("sync_state", "in_progress");
-        database.putMetadata("server_name", session.serverName);
-        database.putMetadata("session_kind", session.kind);
-        database.putMetadata("source_identity", sourceIdentity);
+        String sourceIdentity = sourceIdentity(session, playlistId);
+        database.beginStagedImport(sourceIdentity);
 
         try {
             importType("live", "القنوات المباشرة", 14, 42);
@@ -75,34 +71,27 @@ final class PackageImporter {
             importType("series", "المسلسلات", 69, 94);
 
             String profile = profile();
-            database.putMetadata("playback_profile", profile);
-            database.putMetadata("last_sync", String.valueOf(System.currentTimeMillis()));
-            database.putMetadata("sync_state", "complete");
+            database.commitStagedImport(sourceIdentity, session.serverName, session.kind, profile);
             emit(98, "تجهيز التشغيل", profile);
             emit(100, "اكتملت قراءة الباقة", "Live " + database.count("live")
                     + " • Movies " + database.count("movies")
                     + " • Series " + database.count("series"));
             return new Result(database.count("live"), database.count("movies"), database.count("series"), profile);
         } catch (Exception error) {
-            database.beginFreshImport();
-            database.putMetadata("sync_state", "failed");
+            database.abortStagedImport();
             throw error;
         }
     }
 
-    private static String sourceIdentity(BlofyModels.Session session) {
+    private static String sourceIdentity(BlofyModels.Session session, String playlistId) {
+        if (playlistId != null && !playlistId.trim().isEmpty()
+                && !"current-session".equals(playlistId.trim())) {
+            return CatalogScope.forPlaylist(playlistId);
+        }
         String username = session.account == null ? "" : session.account.optString("username",
                 session.account.optString("user", session.account.optString("id", "")));
         String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(raw.getBytes(StandardCharsets.UTF_8));
-            StringBuilder value = new StringBuilder(digest.length * 2);
-            for (byte part : digest) value.append(String.format(Locale.US, "%02x", part & 0xff));
-            return value.toString();
-        } catch (Exception ignored) {
-            return Integer.toHexString(raw.hashCode());
-        }
+        return CatalogScope.forSession(raw);
     }
 
     private void importType(String type, String label, int start, int end) throws Exception {
@@ -133,7 +122,7 @@ final class PackageImporter {
                     + "&page=" + page + "&page_size=" + REQUESTED_PAGE_SIZE, true);
             save(BlofyModels.Media.list(response, type));
         }
-        emit(end, "اكتملت " + label, database.count(type) + " عنصر محفوظ محليًا");
+        emit(end, "اكتملت " + label, database.importCount(type) + " عنصر محفوظ محليًا");
     }
 
     private void importByCategories(String type, String label,
@@ -159,7 +148,7 @@ final class PackageImporter {
                 save(BlofyModels.Media.list(response, type));
             }
         }
-        emit(end, "اكتملت " + label, database.count(type) + " عنصر محفوظ محليًا");
+        emit(end, "اكتملت " + label, database.importCount(type) + " عنصر محفوظ محليًا");
     }
 
     private JSONObject getWithRetry(String path, boolean catalogRequest) throws Exception {

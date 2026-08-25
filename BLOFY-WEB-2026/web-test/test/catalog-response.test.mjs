@@ -87,3 +87,23 @@ test("repeated series serialization never mutates or re-signs the cached graph",
   assert.equal(JSON.stringify(first).includes("private-password"), false);
   assert.equal(cached.seasons[0].episodes[0].sourceUrl.includes("private-password"), true);
 });
+
+test("series serialization preserves the public cast and crew contract", () => {
+  const cached = {
+    id: "series-credits",
+    cast: [{ id: "10", name: "Actor", character: "Hero", image: "https://image.tmdb.org/t/p/w185/a.jpg" }],
+    crew: [{ id: "20", name: "Director", job: "Director", department: "Directing", image: "https://image.tmdb.org/t/p/w185/d.jpg" }],
+    director: "Director",
+    credits: {
+      cast: [{ id: "10", name: "Actor", character: "Hero", image: "https://image.tmdb.org/t/p/w185/a.jpg" }],
+      crew: [{ id: "20", name: "Director", job: "Director", department: "Directing", image: "https://image.tmdb.org/t/p/w185/d.jpg" }],
+    },
+    seasons: [],
+  };
+
+  const result = JSON.parse(JSON.stringify(publicSeriesItem(cached, signedPath)));
+  assert.equal(result.director, "Director");
+  assert.deepEqual(result.crew[0], cached.crew[0]);
+  assert.deepEqual(result.credits.cast[0], cached.credits.cast[0]);
+  assert.deepEqual(result.credits.crew[0], cached.credits.crew[0]);
+});

@@ -34,12 +34,12 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void fastStartupTimeoutsAreBounded() {
-        assertEquals(5_500, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(4_500, PlaybackPolicy.startupTimeoutMs(1));
-        assertEquals(6_000, PlaybackPolicy.vodStartupTimeoutMs(false));
-        assertEquals(7_500, PlaybackPolicy.vodStartupTimeoutMs(true));
-        assertEquals(7_000, PlaybackPolicy.vlcStartupTimeoutMs(false));
-        assertEquals(9_000, PlaybackPolicy.vlcStartupTimeoutMs(true));
+        assertEquals(4_500, PlaybackPolicy.startupTimeoutMs(0));
+        assertEquals(3_500, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(4_500, PlaybackPolicy.vodStartupTimeoutMs(false));
+        assertEquals(5_500, PlaybackPolicy.vodStartupTimeoutMs(true));
+        assertEquals(5_500, PlaybackPolicy.vlcStartupTimeoutMs(false));
+        assertEquals(6_500, PlaybackPolicy.vlcStartupTimeoutMs(true));
     }
 
     @Test
@@ -55,6 +55,18 @@ public final class PlaybackPolicyTest {
     public void liveFallbackSwitchesBetweenTsAndHls() {
         assertEquals("m3u8", PlaybackPolicy.alternateLiveExtension("ts"));
         assertEquals("ts", PlaybackPolicy.alternateLiveExtension("m3u8"));
+    }
+
+    @Test
+    public void playbackLinkTimeoutAndCancellationHaveStableUserMessages() {
+        assertEquals("استغرق الخادم وقتًا أطول من مهلة تجهيز رابط التشغيل.",
+                PlaybackPolicy.resolveErrorMessage(
+                        new java.io.InterruptedIOException("playback-link-timeout")));
+        assertEquals("تم إلغاء تجهيز رابط التشغيل.",
+                PlaybackPolicy.resolveErrorMessage(
+                        new java.io.InterruptedIOException("playback-link-cancelled")));
+        assertEquals("رسالة الخادم",
+                PlaybackPolicy.resolveErrorMessage(new Exception("رسالة الخادم")));
     }
 
 }

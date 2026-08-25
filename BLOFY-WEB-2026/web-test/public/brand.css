@@ -1,0 +1,27 @@
+.brand-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 22px rgba(119, 35, 255, 0.36));
+}
+
+.card-icon.portal-logo {
+  width: 66px;
+  height: 66px;
+  padding: 5px;
+  overflow: hidden;
+  background: linear-gradient(145deg, rgba(137, 56, 255, 0.18), rgba(69, 31, 145, 0.08));
+}
+
+.portal-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 620px) {
+  .brand-logo { width: 42px; height: 42px; }
+  .login-card { border-radius: 22px; }
+  .login-layout { min-height: auto; }
+  .intro-copy h1 { font-size: 40px; }
+}

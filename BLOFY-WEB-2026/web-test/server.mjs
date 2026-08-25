@@ -1,6 +1,6 @@
 import http from "node:http";
 import crypto from "node:crypto";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LicenseStore } from "./lib/license-store.mjs";
@@ -29,10 +29,11 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
-const APP_VERSION = "2026.08.25.14";
+const APP_VERSION = "2026.08.25.15-v323";
 const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
+const production = process.env.NODE_ENV === "production";
 const port = Number(process.env.PORT || 3000);
 const cacheTtl = boundedInteger(process.env.CACHE_TTL_MS, 300_000, 1_000, 86_400_000);
 const catalogCacheTtl = Math.max(cacheTtl,
@@ -40,8 +41,32 @@ const catalogCacheTtl = Math.max(cacheTtl,
 const maxMemoryCacheEntries = boundedInteger(process.env.MAX_MEMORY_CACHE_ENTRIES, 96, 16, 1_000);
 const configuredActivationUrl = String(process.env.ACTIVATION_URL || "").trim();
 const trialDays = Math.max(1, Number(process.env.TRIAL_DAYS || 7));
-const licenseDbPath = process.env.LICENSE_DB_PATH || path.join(here, "data", "licenses.json");
-const deviceProfileDbPath = process.env.DEVICE_PROFILE_DB_PATH || path.join(path.dirname(licenseDbPath), "device-profiles.json");
+const configuredDataDir = String(process.env.DATA_DIR || "").trim();
+const configuredLicenseDbPath = String(process.env.LICENSE_DB_PATH || "").trim();
+const configuredDeviceProfileDbPath = String(process.env.DEVICE_PROFILE_DB_PATH || "").trim();
+const explicitStoragePath = configuredDataDir || configuredLicenseDbPath || configuredDeviceProfileDbPath;
+if (production && !explicitStoragePath && process.env.ALLOW_EPHEMERAL_DATA !== "1") {
+  throw new Error("Persistent storage is required in production. Mount a Railway Volume and set DATA_DIR (for example /data), or set LICENSE_DB_PATH/DEVICE_PROFILE_DB_PATH inside that volume.");
+}
+// Older BLOFY Railway deployments already set LICENSE_DB_PATH=/data/licenses.json.
+// Keep that production-safe contract and place the new device database beside it,
+// so the v323 portal can deploy without losing the existing licence volume.
+const inferredDataDir = configuredDataDir
+  || (configuredLicenseDbPath ? path.dirname(path.resolve(configuredLicenseDbPath)) : "")
+  || (configuredDeviceProfileDbPath ? path.dirname(path.resolve(configuredDeviceProfileDbPath)) : "");
+const dataDir = path.resolve(inferredDataDir || path.join(here, "data"));
+const licenseDbPath = configuredLicenseDbPath || path.join(dataDir, "licenses.json");
+const deviceProfileDbPath = configuredDeviceProfileDbPath || path.join(dataDir, "device-profiles.json");
+for (const directory of new Set([path.dirname(licenseDbPath), path.dirname(deviceProfileDbPath)])) {
+  mkdirSync(directory, { recursive: true });
+  accessSync(directory, fsConstants.R_OK | fsConstants.W_OK);
+}
+const playbackSessionMaxAge = boundedInteger(process.env.PLAYBACK_SESSION_MAX_AGE_SECONDS, 30 * 24 * 60 * 60,
+  process.env.NODE_ENV === "test" ? 1 : 300, 400 * 24 * 60 * 60);
+const portalSessionMaxAge = boundedInteger(process.env.PORTAL_SESSION_MAX_AGE_SECONDS, 12 * 60 * 60,
+  process.env.NODE_ENV === "test" ? 1 : 300, 7 * 24 * 60 * 60);
+const pairTokenMaxAge = boundedInteger(process.env.PAIR_TOKEN_MAX_AGE_SECONDS, 15 * 60,
+  process.env.NODE_ENV === "test" ? 1 : 60, 60 * 60);
 const memoryCache = new Map();
 const directSourceCache = new Map();
 const rateBuckets = new Map();
@@ -160,23 +185,31 @@ function recalledDirectSource(session, type, id) {
 
 function getSession(req) {
   const token = parseCookies(req.headers.cookie || "").blofy_session;
-  const session = token ? unseal(token) : null;
+  const payload = token ? unseal(token) : null;
+  const session = payload?.kind === "playback-session" && Number(payload.expiresAt || 0) > Date.now()
+    ? payload.session : null;
   if (!session || !["xtream", "m3u"].includes(session.kind)) return null;
   return session;
 }
 
-async function loadM3u(session) {
-  return cached(cacheKey(session, "m3u"), async () => {
-    const response = await fetchSafe(session.url, { headers: { accept: "application/x-mpegURL,text/plain,*/*" } });
-    if (!response.ok) throw new Error(`تعذر تحميل القائمة (${response.status}).`);
-    const text = await readTextLimited(response, 64_000_000, 15_000);
-    const items = parseM3u(text, response.url || session.url);
-    if (!items.length) throw new Error("القائمة لا تحتوي على قنوات صالحة.");
-    return items;
-  }, catalogCacheTtl);
+function sealedPlaybackSession(session) {
+  return seal({ kind: "playback-session", expiresAt: Date.now() + playbackSessionMaxAge * 1000, session });
 }
 
-async function sessionFromInput(body) {
+async function fetchM3u(session) {
+  const response = await fetchSafe(session.url, { headers: { accept: "application/x-mpegURL,text/plain,*/*" } });
+  if (!response.ok) throw new Error(`تعذر تحميل القائمة (${response.status}).`);
+  const text = await readTextLimited(response, 64_000_000, 15_000);
+  const items = parseM3u(text, response.url || session.url);
+  if (!items.length) throw new Error("القائمة لا تحتوي على قنوات صالحة.");
+  return items;
+}
+
+async function loadM3u(session, { fresh = false } = {}) {
+  return fresh ? fetchM3u(session) : cached(cacheKey(session, "m3u"), () => fetchM3u(session), catalogCacheTtl);
+}
+
+async function sessionFromInput(body, { freshM3u = false } = {}) {
   const kind = body.kind === "m3u" ? "m3u" : "xtream";
   if (kind === "xtream") {
     const serverUrl = String(body.serverUrl || "").trim().replace(/\/+$/, "");
@@ -192,7 +225,7 @@ async function sessionFromInput(body) {
   if (!playlistUrl) throw new Error("أدخل رابط M3U أو M3U8.");
   await assertSafeUrl(playlistUrl);
   const session = { kind, url: playlistUrl, serverName: new URL(playlistUrl).host, name: String(body.name || "قائمتي").slice(0, 50) };
-  await loadM3u(session);
+  await loadM3u(session, { fresh: freshM3u });
   return session;
 }
 
@@ -214,18 +247,30 @@ function publicSession(session) {
 }
 
 function publicPlaylist(entry, defaultPlaylistId = "") {
+  const restored = unseal(entry?.profileToken || "");
+  const kind = ["xtream", "m3u"].includes(entry.kind) ? entry.kind : restored?.kind;
+  const name = entry.name && entry.name !== "قائمتي" ? entry.name : restored?.name || entry.name;
+  const serverName = entry.serverName || restored?.serverName || "";
   return {
     id: entry.id,
-    name: entry.name || "قائمتي",
-    kind: entry.kind === "m3u" ? "m3u" : "xtream",
-    serverName: entry.serverName || "",
+    name: name || "قائمتي",
+    kind: kind === "m3u" ? "m3u" : "xtream",
+    serverName,
     isDefault: entry.id === defaultPlaylistId,
     status: entry.status || "unknown",
+    lastError: String(entry.lastError || ""),
     latencyMs: Number(entry.latencyMs || 0),
     lastTestedAt: Number(entry.lastTestedAt || 0),
     createdAt: Number(entry.createdAt || 0),
     updatedAt: Number(entry.updatedAt || 0),
   };
+}
+
+function safeConnectionError(error) {
+  return String(error?.message || "فشل اختبار الاتصال.")
+    .replace(/https?:\/\/\S+/gi, "[server]")
+    .replace(/[\r\n\t]+/g, " ")
+    .slice(0, 200);
 }
 
 function privatePlaylist(entry) {
@@ -278,7 +323,7 @@ async function sessionFromPlaylistUpdate(existing, body) {
     : { kind, name, serverUrl: body.serverUrl ?? current.serverUrl, username: body.username ?? current.username,
       password: String(body.password || "") || current.password };
   const startedAt = Date.now();
-  return { session: await sessionFromInput(input), tested: true, latencyMs: Date.now() - startedAt };
+  return { session: await sessionFromInput(input, { freshM3u: true }), tested: true, latencyMs: Date.now() - startedAt };
 }
 
 async function categoriesFor(session, type) {
@@ -368,6 +413,9 @@ async function handleApi(req, res, url) {
       nativePlayback: NATIVE_PLAYBACK_MODE,
       mediaProxy: false,
       transcoding: false,
+      portal: "v323-multi-playlist",
+      pairing: "one-time-token-or-six-digits",
+      storage: production ? "persistent-required" : "local-development",
       time: new Date().toISOString(),
     }, securityHeaders());
   }
@@ -411,16 +459,23 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/device/register") {
+    if (limited(req, 10, 15 * 60_000, "device-register")) {
+      return json(res, 429, { error: "محاولات تسجيل كثيرة. حاول بعد 15 دقيقة." }, securityHeaders());
+    }
     const body = await readJson(req, 4096);
     const registered = await deviceProfiles.register(body.deviceId || body.device_id, body.deviceKey || body.device_key, {
       displayId: body.displayId || body.display_id,
       pairingCode: body.pairingCode || body.pairing_code,
     });
+    const nonce = crypto.randomBytes(24).toString("base64url");
+    const pairExpiresAt = Date.now() + pairTokenMaxAge * 1000;
+    await deviceProfiles.issuePairNonce(registered.deviceId, registered.keyHash, nonce, pairExpiresAt);
     const pairToken = seal({
       kind: "device-pair",
       deviceId: registered.deviceId,
-      keyHash: registered.keyHash,
-      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      displayId: registered.displayId,
+      nonce,
+      expiresAt: pairExpiresAt,
     });
     return json(res, 201, {
       ok: true,
@@ -428,6 +483,8 @@ async function handleApi(req, res, url) {
       displayId: registered.displayId,
       pairingCode: registered.pairingCode,
       revision: registered.revision,
+      pairExpiresAt,
+      recovered: registered.recovered,
       pairToken,
     }, securityHeaders());
   }
@@ -438,12 +495,22 @@ async function handleApi(req, res, url) {
     }
     const body = await readJson(req, 4096);
     try {
-      const portal = await deviceProfiles.login(body.deviceId || body.device_id, body.pairingCode || body.pairing_code);
+      let portal;
+      const suppliedPairToken = String(body.pairToken || body.pair_token || "");
+      if (suppliedPairToken) {
+        const pairing = unseal(suppliedPairToken);
+        if (!pairing || pairing.kind !== "device-pair" || !pairing.nonce || Number(pairing.expiresAt || 0) <= Date.now()) {
+          throw new Error("انتهت صلاحية رابط QR أو تم استخدامه.");
+        }
+        portal = await deviceProfiles.consumePairNonce(pairing.deviceId, pairing.nonce);
+      } else {
+        portal = await deviceProfiles.login(body.deviceId || body.device_id, body.pairingCode || body.pairing_code);
+      }
       const token = seal({ kind: "device-portal", deviceId: portal.deviceId, portalVersion: portal.portalVersion,
-        expiresAt: Date.now() + 12 * 60 * 60 * 1000 });
+        expiresAt: Date.now() + portalSessionMaxAge * 1000 });
       const license = await licenses.get(portal.deviceId, { create: false });
       return json(res, 200, { ok: true, displayId: portal.displayId, revision: portal.revision, license }, {
-        ...securityHeaders(), "set-cookie": portalCookie(token),
+        ...securityHeaders(), "set-cookie": portalCookie(token, portalSessionMaxAge),
       });
     } catch {
       return json(res, 401, { error: "رقم الجهاز أو رمز الربط غير صحيح." }, securityHeaders());
@@ -451,7 +518,12 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/device/login") {
-    return json(res, 200, { ok: true }, { ...securityHeaders(), "set-cookie": clearPortalCookie() });
+    const token = parseCookies(req.headers.cookie || "").blofy_portal;
+    const portal = token ? unseal(token) : null;
+    if (portal?.kind === "device-portal") await deviceProfiles.revokePortal(portal.deviceId, portal.portalVersion).catch(() => {});
+    return json(res, 200, { ok: true }, {
+      ...securityHeaders(), "set-cookie": [clearPortalCookie(), clearSessionCookie()],
+    });
   }
 
   if (url.pathname === "/api/device/playlists" && req.method === "GET") {
@@ -469,13 +541,14 @@ async function handleApi(req, res, url) {
     catch (error) { return json(res, 401, { error: error.message }, securityHeaders()); }
     const body = await readJson(req, 32_768);
     const startedAt = Date.now();
-    const session = await sessionFromInput(body);
+    const session = await sessionFromInput(body, { freshM3u: true });
     const created = await deviceProfiles.createPlaylist(auth.deviceId, {
       name: session.name,
       kind: session.kind,
       serverName: session.serverName,
       profileToken: seal(session),
       status: "connected",
+      lastError: "",
       lastTestedAt: Date.now(),
       latencyMs: Date.now() - startedAt,
       makeDefault: body.makeDefault === true || body.make_default === true,
@@ -510,6 +583,7 @@ async function handleApi(req, res, url) {
       serverName: result.session.serverName,
       profileToken: seal(result.session),
       status: "connected",
+      lastError: "",
       ...(result.tested ? { lastTestedAt: Date.now(), latencyMs: result.latencyMs } : {}),
     });
     if (body.makeDefault === true || body.make_default === true) await deviceProfiles.setDefault(auth.deviceId, existing.id);
@@ -538,17 +612,26 @@ async function handleApi(req, res, url) {
     if (!session) throw new Error("بيانات القائمة المحفوظة غير صالحة.");
     if (action === "test") {
       const startedAt = Date.now();
-      const validated = await sessionFromInput(session);
-      const updated = await deviceProfiles.updatePlaylist(auth.deviceId, entry.id, {
-        name: validated.name, kind: validated.kind, serverName: validated.serverName, profileToken: seal(validated),
-        status: "connected", lastTestedAt: Date.now(), latencyMs: Date.now() - startedAt,
-      });
-      return json(res, 200, { ok: true, playlist: publicPlaylist(updated, snapshot.defaultPlaylistId) }, securityHeaders());
+      try {
+        const validated = await sessionFromInput(session, { freshM3u: true });
+        const updated = await deviceProfiles.updatePlaylist(auth.deviceId, entry.id, {
+          name: validated.name, kind: validated.kind, serverName: validated.serverName, profileToken: seal(validated),
+          status: "connected", lastError: "", lastTestedAt: Date.now(), latencyMs: Date.now() - startedAt,
+        });
+        return json(res, 200, { ok: true, playlist: publicPlaylist(updated, snapshot.defaultPlaylistId) }, securityHeaders());
+      } catch (error) {
+        const lastError = safeConnectionError(error);
+        const updated = await deviceProfiles.updatePlaylist(auth.deviceId, entry.id, {
+          status: "error", lastError, lastTestedAt: Date.now(), latencyMs: Date.now() - startedAt,
+        });
+        return json(res, 422, { ok: false, error: lastError,
+          playlist: publicPlaylist(updated, snapshot.defaultPlaylistId) }, securityHeaders());
+      }
     }
     const selected = await deviceProfiles.setDefault(auth.deviceId, entry.id);
     if (action === "default") return json(res, 200, { ok: true, ...selected }, securityHeaders());
     return json(res, 200, { ok: true, session: publicSession(session), ...selected }, {
-      ...securityHeaders(), "set-cookie": sessionCookie(seal(session)),
+      ...securityHeaders(), "set-cookie": sessionCookie(sealedPlaybackSession(session), playbackSessionMaxAge),
     });
   }
 
@@ -557,15 +640,23 @@ async function handleApi(req, res, url) {
     const deviceId = String(body.deviceId || body.device_id || "").trim().toUpperCase();
     const pairing = unseal(String(body.pairToken || body.pair_token || ""));
     if (!pairing || pairing.kind !== "device-pair" || pairing.deviceId !== deviceId ||
-        Number(pairing.expiresAt || 0) <= Date.now() || !pairing.keyHash) {
+        Number(pairing.expiresAt || 0) <= Date.now() || !pairing.nonce) {
       return json(res, 403, { error: "انتهت صلاحية ربط الجهاز. حدّث الباركود من التطبيق." }, securityHeaders());
     }
+    let verified;
+    try { verified = await deviceProfiles.verifyPairNonce(deviceId, pairing.nonce); }
+    catch (error) { return json(res, 403, { error: error.message }, securityHeaders()); }
     const license = await licenses.get(deviceId);
     const hasProfile = body.kind === "xtream" || body.kind === "m3u";
     let configured = false;
+    let session = null;
     if (hasProfile) {
-      const session = await sessionFromInput(body);
-      const result = await deviceProfiles.configure(deviceId, pairing.keyHash, seal(session));
+      session = await sessionFromInput(body, { freshM3u: true });
+    }
+    try { await deviceProfiles.consumePairNonce(deviceId, pairing.nonce); }
+    catch (error) { return json(res, 403, { error: error.message }, securityHeaders()); }
+    if (session) {
+      const result = await deviceProfiles.configure(deviceId, verified.keyHash, seal(session), session);
       configured = result.configured;
     }
     return json(res, 200, { ok: true, configured, ...license, activationUrl: activationUrlFor(req) }, securityHeaders());
@@ -603,7 +694,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, configured: true, license, session: publicSession(session),
       activePlaylistId: snapshot.defaultPlaylistId, ...sync }, {
       ...securityHeaders(),
-      "set-cookie": [licenseCookie(licenseValue), sessionCookie(seal(session))],
+      "set-cookie": [licenseCookie(licenseValue), sessionCookie(sealedPlaybackSession(session), playbackSessionMaxAge)],
     });
   }
 
@@ -640,9 +731,9 @@ async function handleApi(req, res, url) {
     if (!requireActiveLicense(req, res)) return;
     const session = await sessionFromInput(await readJson(req));
     const sealedSession = seal(session);
-    await persistDeviceSessionFromHeaders(deviceProfiles, req.headers, sealedSession);
+    await persistDeviceSessionFromHeaders(deviceProfiles, req.headers, sealedSession, session);
     return json(res, 200, { ok: true, session: publicSession(session) }, {
-      ...securityHeaders(), "set-cookie": sessionCookie(sealedSession),
+      ...securityHeaders(), "set-cookie": sessionCookie(sealedPlaybackSession(session), playbackSessionMaxAge),
     });
   }
 
@@ -736,6 +827,7 @@ const staticFiles = new Map([
   ["/portal/", "activate.html"],
   ["/activate.js", "activate.js"],
   ["/styles.css", "styles.css"],
+  ["/brand.css", "brand.css"],
   ["/assets/blofy-logo-192.png", "assets/blofy-logo-192.png"],
   ["/assets/blofy-logo-512.png", "assets/blofy-logo-512.png"],
 ]);
@@ -757,7 +849,7 @@ function serveStatic(res, pathname) {
     ...securityHeaders(),
     "content-type": mime[path.extname(target).toLowerCase()] || "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": /activate|styles/.test(relative) ? "no-cache" : "public, max-age=86400",
+    "cache-control": /activate|styles|brand/.test(relative) ? "no-cache" : "public, max-age=86400",
   });
   createReadStream(target).pipe(res);
   return true;

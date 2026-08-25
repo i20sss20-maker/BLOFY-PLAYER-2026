@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "BLOFY-PLAYER-2026"
 include(":app")
+

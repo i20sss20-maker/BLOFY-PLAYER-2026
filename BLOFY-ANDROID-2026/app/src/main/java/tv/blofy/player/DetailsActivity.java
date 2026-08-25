@@ -210,20 +210,20 @@ public final class DetailsActivity extends Activity {
                 primary.setOnClickListener(v -> play(resume.id,
                         resume.title.isEmpty() ? detail.name : resume.title,
                         "episode", resume.extension, false));
-                actions.addView(primary, new LinearLayout.LayoutParams(dp(218), dp(56)));
+                actions.addView(primary, new LinearLayout.LayoutParams(dp(190), dp(56)));
 
                 Button restart = BlofyUi.button(this, "↺  من البداية", false);
                 restart.setOnClickListener(v -> play(resume.id,
                         resume.title.isEmpty() ? detail.name : resume.title,
                         "episode", resume.extension, true));
-                LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(150), dp(56));
-                restartParams.leftMargin = dp(10);
+                LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(120), dp(56));
+                restartParams.leftMargin = dp(8);
                 actions.addView(restart, restartParams);
 
                 Button episodes = BlofyUi.button(this, "المواسم", false);
                 episodes.setOnClickListener(v -> showSeasons(detail));
-                LinearLayout.LayoutParams episodesParams = new LinearLayout.LayoutParams(dp(110), dp(56));
-                episodesParams.leftMargin = dp(10);
+                LinearLayout.LayoutParams episodesParams = new LinearLayout.LayoutParams(dp(100), dp(56));
+                episodesParams.leftMargin = dp(8);
                 actions.addView(episodes, episodesParams);
             } else {
                 primary = BlofyUi.button(this, "▶  المواسم والحلقات", true);
@@ -236,23 +236,24 @@ public final class DetailsActivity extends Activity {
             primary = BlofyUi.button(this,
                     canResume ? "▶  استئناف  " + PlaybackProgress.format(position) : "▶  شاهد الآن", true);
             primary.setOnClickListener(v -> play(detail.id, detail.name, "movies", detail.extension, false));
-            actions.addView(primary, new LinearLayout.LayoutParams(dp(canResume ? 218 : 245), dp(56)));
+            actions.addView(primary, new LinearLayout.LayoutParams(dp(canResume ? 200 : 235), dp(56)));
             if (canResume) {
                 Button restart = BlofyUi.button(this, "↺  البدء من جديد", false);
                 restart.setOnClickListener(v -> play(detail.id, detail.name, "movies", detail.extension, true));
-                LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(180), dp(56));
-                restartParams.leftMargin = dp(10);
+                LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(165), dp(56));
+                restartParams.leftMargin = dp(8);
                 actions.addView(restart, restartParams);
             }
         }
-        Button favorite = BlofyUi.button(this, "♡  أضف للمفضلة", false);
+        Button favorite = BlofyUi.button(this, "♡  المفضلة", false);
         favorite.setOnClickListener(v -> {
             database.toggleFavorite(item.type, item.id);
             ToastBridge.show(this, "تم تحديث المفضلة");
         });
-        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(158), dp(56));
-        favoriteParams.leftMargin = dp(12);
+        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(150), dp(56));
+        favoriteParams.leftMargin = dp(8);
         actions.addView(favorite, favoriteParams);
+        linkActionRow(actions);
         info.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(66)));
 
         FrameLayout.LayoutParams infoParams = new FrameLayout.LayoutParams(dp(680),
@@ -431,6 +432,21 @@ public final class DetailsActivity extends Activity {
         row.addView(chip, params);
     }
 
+    private void linkActionRow(LinearLayout actions) {
+        List<View> focusable = new ArrayList<>();
+        for (int index = 0; index < actions.getChildCount(); index++) {
+            View child = actions.getChildAt(index);
+            if (!child.isFocusable()) continue;
+            if (child.getId() == View.NO_ID) child.setId(View.generateViewId());
+            focusable.add(child);
+        }
+        for (int index = 0; index < focusable.size(); index++) {
+            View child = focusable.get(index);
+            if (index > 0) child.setNextFocusLeftId(focusable.get(index - 1).getId());
+            if (index + 1 < focusable.size()) child.setNextFocusRightId(focusable.get(index + 1).getId());
+        }
+    }
+
     private void showSeasons(BlofyModels.Detail detail) {
         seasonsScreen = true;
         root.removeAllViews();
@@ -501,9 +517,21 @@ public final class DetailsActivity extends Activity {
         int firstSeason = 0;
         SeasonAdapter seasonAdapter = new SeasonAdapter(detail.seasons, firstSeason, season -> {
             episodeAdapter.setEpisodes(season.episodes);
-            episodes.post(() -> { if (episodeAdapter.getItemCount() > 0) episodes.requestFocus(); });
+            episodes.post(() -> focusRecyclerItem(episodes, 0));
         });
+        seasonAdapter.episodeTarget = episodes;
+        seasonAdapter.topTarget = back;
+        episodeAdapter.seasonTarget = seasons;
+        episodeAdapter.topTarget = back;
         seasons.setAdapter(seasonAdapter);
+        back.setOnKeyListener((view, keyCode, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                focusRecyclerItem(seasons, seasonAdapter.selected);
+                return true;
+            }
+            return false;
+        });
 
         body.addView(seasons, new LinearLayout.LayoutParams(dp(270), ViewGroup.LayoutParams.MATCH_PARENT));
         LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
@@ -516,11 +544,22 @@ public final class DetailsActivity extends Activity {
             episodeAdapter.setEpisodes(detail.seasons.get(firstSeason).episodes);
             seasons.scrollToPosition(firstSeason);
         }
-        seasons.requestFocus();
+        focusRecyclerItem(seasons, firstSeason);
     }
 
     private void play(String id, String title, String type, String extension) {
         play(id, title, type, extension, false);
+    }
+
+    private void focusRecyclerItem(RecyclerView list, int position) {
+        if (list == null || list.getAdapter() == null || list.getAdapter().getItemCount() == 0) return;
+        int target = Math.max(0, Math.min(position, list.getAdapter().getItemCount() - 1));
+        list.scrollToPosition(target);
+        list.post(() -> {
+            RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(target);
+            if (holder != null) holder.itemView.requestFocus();
+            else list.requestFocus();
+        });
     }
 
     private void play(String id, String title, String type, String extension, boolean restart) {
@@ -532,6 +571,18 @@ public final class DetailsActivity extends Activity {
         player.putExtra(VodPlayerActivity.EXTRA_KIND, type);
         player.putExtra(VodPlayerActivity.EXTRA_EXTENSION, extension);
         startActivity(player);
+    }
+
+    private BlofyModels.Episode nextEpisodeAfter(String currentId) {
+        if (loadedDetail == null || currentId == null || currentId.isEmpty()) return null;
+        boolean found = false;
+        for (BlofyModels.Season season : loadedDetail.seasons) {
+            for (BlofyModels.Episode episode : season.episodes) {
+                if (found) return episode;
+                if (currentId.equals(episode.id)) found = true;
+            }
+        }
+        return null;
     }
 
     private void showError(String message) {
@@ -580,6 +631,8 @@ public final class DetailsActivity extends Activity {
         private final List<BlofyModels.Season> rows;
         private final SeasonListener listener;
         private int selected;
+        RecyclerView episodeTarget;
+        View topTarget;
         SeasonAdapter(List<BlofyModels.Season> rows, int selected, SeasonListener listener) {
             this.rows = rows == null ? new ArrayList<>() : rows;
             this.selected = Math.max(0, Math.min(selected, Math.max(0, this.rows.size() - 1)));
@@ -607,6 +660,18 @@ public final class DetailsActivity extends Activity {
                 if (selected >= 0) notifyItemChanged(selected);
                 listener.selected(season);
             });
+            holder.button.setOnKeyListener((view, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && episodeTarget != null) {
+                    focusRecyclerItem(episodeTarget, 0);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP && position == 0 && topTarget != null) {
+                    topTarget.requestFocus();
+                    return true;
+                }
+                return false;
+            });
         }
         @Override public int getItemCount() { return rows.size(); }
         final class Holder extends RecyclerView.ViewHolder {
@@ -618,6 +683,8 @@ public final class DetailsActivity extends Activity {
     private final class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.Holder> {
         private final String seriesName;
         private List<BlofyModels.Episode> rows = new ArrayList<>();
+        RecyclerView seasonTarget;
+        View topTarget;
         EpisodeAdapter(String seriesName) { this.seriesName = seriesName; }
         void setEpisodes(List<BlofyModels.Episode> values) {
             rows = values == null ? new ArrayList<>() : new ArrayList<>(values);
@@ -659,9 +726,31 @@ public final class DetailsActivity extends Activity {
             images.load(holder.image, episode.image);
             holder.card.setOnClickListener(v -> {
                 String playbackTitle = seriesName + " — " + name;
+                BlofyModels.Episode next = nextEpisodeAfter(episode.id);
                 PlaybackProgress.rememberEpisode(DetailsActivity.this, item.id,
                         episode.id, playbackTitle, episode.extension);
+                PlaybackProgress.rememberNextEpisode(DetailsActivity.this, episode.id, item.id,
+                        next == null ? "" : next.id,
+                        next == null ? "" : seriesName + " — "
+                                + (next.title == null || next.title.isEmpty()
+                                ? "Episode " + next.number : next.title),
+                        next == null ? "" : next.extension);
                 play(episode.id, playbackTitle, "episode", episode.extension);
+            });
+            holder.card.setOnKeyListener((view, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && seasonTarget != null) {
+                    RecyclerView.Adapter<?> value = seasonTarget.getAdapter();
+                    int selectedSeason = value instanceof SeasonAdapter
+                            ? ((SeasonAdapter) value).selected : 0;
+                    focusRecyclerItem(seasonTarget, selectedSeason);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP && position == 0 && topTarget != null) {
+                    topTarget.requestFocus();
+                    return true;
+                }
+                return false;
             });
         }
         @Override public int getItemCount() { return rows.size(); }

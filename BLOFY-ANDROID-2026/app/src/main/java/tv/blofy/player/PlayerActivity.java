@@ -49,9 +49,11 @@ import org.videolan.libvlc.interfaces.IVLCVout;
 
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** BLOFY native playback core. */
 @UnstableApi
@@ -87,18 +89,26 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private String categoryId;
     private String playbackReferer = "";
     private String sourceVariant = "canonical";
+    private String canonicalUrl = "";
+    private String canonicalExtension = "";
+    private String canonicalReferer = "";
     private long resumePosition;
     private int recoveryStep;
     private boolean firstFrameRendered;
     private boolean usingVlc;
     private boolean vlcAttempted;
     private boolean warmLiveSwitchPending;
+    private boolean vlcSubtitlePreferenceApplied;
     private long playbackStartedAtMs;
     private int vlcGeneration;
     private int resolveGeneration;
     private Future<?> resolveTask;
+    private BlofyApi.Cancellation resolveCancellation;
+    private boolean lifecycleStarted;
 
-    private final ExecutorService network = Executors.newFixedThreadPool(3);
+    private final ExecutorService network = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1),
+            new ThreadPoolExecutor.DiscardOldestPolicy());
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
     private final Runnable hideTitle = () -> {
         if (titleView != null) titleView.setVisibility(View.GONE);
@@ -135,6 +145,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         extension = configuredExtension(PlaybackPolicy.normalizeExtension(
                 getIntent().getStringExtra(EXTRA_EXTENSION),
                 isLiveKind(kind) ? "ts" : "mp4"));
+        if (validUrl(url)) extension = LivePreviewController.resolvedExtension(url, extension);
         categoryId = valueOr(getIntent().getStringExtra(EXTRA_CATEGORY_ID), "");
         playbackReferer = valueOr(getIntent().getStringExtra(EXTRA_REFERER), "");
         recoveryStep = preferredRecoveryStep();
@@ -142,7 +153,12 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         buildUi();
         hideSystemUi();
 
-        if (validUrl(url)) prepareResolvedUrl();
+        if (validUrl(url)) {
+            canonicalUrl = url;
+            canonicalExtension = extension;
+            canonicalReferer = playbackReferer;
+            prepareResolvedUrl();
+        }
         else if (!id.isEmpty()) resolvePlaybackLink();
         else showResolveError("بيانات المحتوى غير مكتملة.");
     }
@@ -173,6 +189,54 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private String playerSetting(String key, String fallback) {
         return getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE).getString(key, fallback);
+    }
+
+    private int media3ResizeMode() {
+        String mode = playerSetting(SettingsActivity.KEY_ASPECT, "fit");
+        if ("zoom".equals(mode)) return AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
+        if ("fill".equals(mode)) return AspectRatioFrameLayout.RESIZE_MODE_FILL;
+        return AspectRatioFrameLayout.RESIZE_MODE_FIT;
+    }
+
+    private void applySubtitleStyle() {
+        if (playerView == null || playerView.getSubtitleView() == null) return;
+        String size = playerSetting(SettingsActivity.KEY_SUBTITLE_SIZE, "medium");
+        float fraction = "small".equals(size) ? 0.043f : "large".equals(size) ? 0.062f : 0.053f;
+        playerView.getSubtitleView().setFractionalTextSize(fraction);
+    }
+
+    private int vlcSubtitleRelativeSize() {
+        String size = playerSetting(SettingsActivity.KEY_SUBTITLE_SIZE, "medium");
+        return "small".equals(size) ? 18 : "large".equals(size) ? 26 : 22;
+    }
+
+    private int vlcCacheMs() {
+        String mode = playerSetting(SettingsActivity.KEY_BUFFER, "auto");
+        if ("fast".equals(mode)) return isUltraHd() ? 500 : 300;
+        if ("stable".equals(mode)) return isUltraHd() ? 900 : 700;
+        return isUltraHd() ? 650 : 420;
+    }
+
+    private void applyVlcAspect(org.videolan.libvlc.MediaPlayer target) {
+        if (target == null) return;
+        String mode = playerSetting(SettingsActivity.KEY_ASPECT, "fit");
+        try {
+            if ("fill".equals(mode)) {
+                int width = Math.max(1, getResources().getDisplayMetrics().widthPixels);
+                int height = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+                target.getVLCVout().setWindowSize(width, height);
+                target.setAspectRatio(width + ":" + height);
+                target.setScale(0f);
+            } else if ("zoom".equals(mode)) {
+                target.setAspectRatio(null);
+                target.setScale(1.12f);
+            } else {
+                target.setAspectRatio(null);
+                target.setScale(0f);
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "vlc-aspect-not-supported mode=" + mode, error);
+        }
     }
 
     private String configuredExtension(String candidate) {
@@ -220,9 +284,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
         playerView.setKeepScreenOn(true);
         playerView.setFocusable(true);
-        playerView.setResizeMode(isLive()
-                ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                : AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        playerView.setResizeMode(media3ResizeMode());
+        applySubtitleStyle();
         root.addView(playerView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -314,8 +377,12 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void resolvePlaybackLink() {
         int token = ++resolveGeneration;
+        BlofyApi.Cancellation previousCancellation = resolveCancellation;
+        if (previousCancellation != null) previousCancellation.cancel();
         Future<?> previous = resolveTask;
         if (previous != null) previous.cancel(true);
+        BlofyApi.Cancellation cancellation = new BlofyApi.Cancellation();
+        resolveCancellation = cancellation;
         progress.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.GONE);
         String requestedId = id;
@@ -326,9 +393,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         resolveTask = network.submit(() -> {
             try {
                 String apiType = "series".equals(requestedKind) ? "episode" : requestedKind;
-                JSONObject data = new BlofyApi(this).get("/api/native-link/" + BlofyApi.encode(apiType) + "/"
+                JSONObject data = new BlofyApi(this).getPlayback("/api/native-link/" + BlofyApi.encode(apiType) + "/"
                         + BlofyApi.encode(requestedId) + "?ext=" + BlofyApi.encode(requestedExtension)
-                        + "&variant=" + BlofyApi.encode(requestedVariant));
+                        + "&variant=" + BlofyApi.encode(requestedVariant), cancellation);
                 String resolved = data.optString("url", "");
                 if (!resolved.startsWith("/api/native-play") && !resolved.startsWith("http")) {
                     throw new Exception("الخادم لم يُصدر رابط تشغيل مباشر صحيحًا.");
@@ -343,7 +410,13 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                             : BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + finalResolved;
                     extension = resolvedExtension;
                     playbackReferer = resolvedReferer;
+                    if ("canonical".equals(requestedVariant)) {
+                        canonicalUrl = url;
+                        canonicalExtension = extension;
+                        canonicalReferer = playbackReferer;
+                    }
                     prepareResolvedUrl();
+                    if (!lifecycleStarted) return;
                     if (warmLiveSwitchPending && player != null && isLive()) {
                         warmLiveSwitchPending = false;
                         replaceLiveSourceOnWarmPlayer();
@@ -356,7 +429,11 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 runOnUiThread(() -> {
                     if (token != resolveGeneration || isFinishing() || isDestroyed()) return;
                     warmLiveSwitchPending = false;
-                    showResolveError(error.getMessage());
+                    if ("direct".equals(requestedVariant) && restoreCanonicalSource()) {
+                        if (lifecycleStarted) openVlc(PlaybackPolicy.resolveErrorMessage(error));
+                        return;
+                    }
+                    showResolveError(PlaybackPolicy.resolveErrorMessage(error));
                 });
             }
         });
@@ -364,8 +441,17 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void prepareResolvedUrl() {
         if (!validUrl(url)) return;
-        resumePosition = isLive() ? 0 : getSharedPreferences("blofy_positions", MODE_PRIVATE)
-                .getLong(positionKey(), 0);
+        resumePosition = isLive() ? 0 : PlaybackProgress.get(this, kind, id);
+    }
+
+    private boolean restoreCanonicalSource() {
+        if (!validUrl(canonicalUrl)) return false;
+        url = canonicalUrl;
+        extension = PlaybackPolicy.normalizeExtension(canonicalExtension, extension);
+        playbackReferer = canonicalReferer;
+        sourceVariant = "canonical";
+        recoveryStep = 2;
+        return true;
     }
 
     private void showResolveError(String message) {
@@ -386,6 +472,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private DefaultLoadControl createLoadControl() {
         String mode = playerSetting(SettingsActivity.KEY_BUFFER, "auto");
+        if ("auto".equals(mode) && DeviceCapabilityProfile.detect(this).usesReducedPerformance()) {
+            mode = "fast";
+        }
         int minBuffer, maxBuffer, playbackBuffer, rebuffer;
         if ("fast".equals(mode) && isLive() && !isUltraHd()) {
             minBuffer = 1_500; maxBuffer = 10_000; playbackBuffer = 350; rebuffer = 1_000;
@@ -454,6 +543,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
                     .setMaxAudioChannelCount(2).build());
         }
+        String subtitlePreference = playerSetting(SettingsActivity.KEY_SUBTITLE_LANGUAGE, "ar");
+        if ("off".equals(subtitlePreference)) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+        } else if ("ar".equals(subtitlePreference)) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setPreferredTextLanguage("ar").build());
+        }
         playerView.setPlayer(player);
         playbackStartedAtMs = SystemClock.elapsedRealtime();
         Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep
@@ -486,16 +583,19 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         errorPanel.setVisibility(View.GONE);
 
         try {
+            int cacheMs = vlcCacheMs();
             ArrayList<String> options = new ArrayList<>();
             options.add("--audio-time-stretch");
             options.add("--http-reconnect");
-            options.add("--network-caching=" + (isUltraHd() ? "750" : "450"));
-            options.add("--file-caching=" + (isUltraHd() ? "750" : "450"));
+            options.add("--network-caching=" + cacheMs);
+            options.add("--file-caching=" + cacheMs);
             if ("stereo".equals(playerSetting(SettingsActivity.KEY_AUDIO_OUTPUT, "auto"))) {
                 options.add("--stereo-mode=1");
             }
+            options.add("--freetype-rel-fontsize=" + vlcSubtitleRelativeSize());
             libVLC = new LibVLC(this, options);
             vlcPlayer = new org.videolan.libvlc.MediaPlayer(libVLC);
+            vlcSubtitlePreferenceApplied = false;
             org.videolan.libvlc.MediaPlayer opened = vlcPlayer;
             int token = ++vlcGeneration;
             opened.setEventListener(event -> playbackHandler.post(() -> {
@@ -507,16 +607,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             output.attachViews();
 
             org.videolan.libvlc.Media media = new org.videolan.libvlc.Media(libVLC, Uri.parse(url));
-            media.setHWDecoderEnabled(true, false);
+            String decoderMode = playerSetting(SettingsActivity.KEY_DECODER, "auto");
+            media.setHWDecoderEnabled(!"software".equals(decoderMode), "hardware".equals(decoderMode));
             media.addOption(":http-user-agent=" + PlaybackTransportFactory.userAgent(2));
             if (!playbackReferer.isEmpty()) media.addOption(":http-referrer=" + playbackReferer);
-            media.addOption(":network-caching=" + (isUltraHd() ? "750" : "450"));
+            media.addOption(":network-caching=" + cacheMs);
             if ("stereo".equals(playerSetting(SettingsActivity.KEY_AUDIO_OUTPUT, "auto"))) {
                 media.addOption(":stereo-mode=1");
             }
+            media.addOption(":freetype-rel-fontsize=" + vlcSubtitleRelativeSize());
             opened.setMedia(media);
             media.release();
-            if (isLive()) opened.setAspectRatio("16:9");
+            applyVlcAspect(opened);
             opened.play();
             vlcSurface.requestFocus();
             schedulePlaybackTimeout();
@@ -534,6 +636,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             case org.videolan.libvlc.MediaPlayer.Event.Vout:
             case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
             case org.videolan.libvlc.MediaPlayer.Event.PositionChanged:
+                applyVlcSubtitlePreference();
                 markVlcFirstFrame();
                 break;
             case org.videolan.libvlc.MediaPlayer.Event.Buffering:
@@ -560,6 +663,31 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         long firstFrameMs = playbackStartedAtMs == 0
                 ? -1 : SystemClock.elapsedRealtime() - playbackStartedAtMs;
         Log.i(TAG, "compat-first-frame ext=" + extension + " ms=" + firstFrameMs);
+    }
+
+    private void applyVlcSubtitlePreference() {
+        if (vlcSubtitlePreferenceApplied || vlcPlayer == null) return;
+        String preference = playerSetting(SettingsActivity.KEY_SUBTITLE_LANGUAGE, "ar");
+        if ("off".equals(preference)) {
+            vlcPlayer.setSpuTrack(-1);
+            vlcSubtitlePreferenceApplied = true;
+            return;
+        }
+        if (!"ar".equals(preference)) {
+            vlcSubtitlePreferenceApplied = true;
+            return;
+        }
+        org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks = vlcPlayer.getSpuTracks();
+        if (tracks == null || tracks.length == 0) return;
+        for (org.videolan.libvlc.MediaPlayer.TrackDescription track : tracks) {
+            String name = track == null || track.name == null ? "" : track.name.toLowerCase(Locale.US);
+            if (track != null && track.id >= 0
+                    && (name.contains("arab") || name.contains("عرب") || "ar".equals(name.trim()))) {
+                vlcPlayer.setSpuTrack(track.id);
+                break;
+            }
+        }
+        vlcSubtitlePreferenceApplied = true;
     }
 
     private void replaceLiveSourceOnWarmPlayer() {
@@ -593,6 +721,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         title = media.name;
         extension = configuredExtension(PlaybackPolicy.normalizeExtension(media.extension, "ts"));
         sourceVariant = "canonical";
+        canonicalUrl = "";
+        canonicalExtension = "";
+        canonicalReferer = "";
         playbackReferer = "";
         url = null;
         resumePosition = 0;
@@ -627,6 +758,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         // Resolve the direct source once; do not add TS/HLS and Cronet retries
         // behind it. Slow startup and decoder failures go straight to LibVLC.
         if (PlaybackPolicy.isNetworkFailure(reason)
+                && !PlaybackPolicy.isStartupTimeout(reason)
                 && "canonical".equals(sourceVariant) && !id.isEmpty()) {
             releasePlayer();
             sourceVariant = "direct";
@@ -638,6 +770,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
         if (!vlcAttempted) {
             recoveryStep = 2;
+            if ("direct".equals(sourceVariant)) restoreCanonicalSource();
             openVlc(reason);
             return;
         }
@@ -667,6 +800,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         recoveryStep = preferredRecoveryStep();
         vlcAttempted = false;
         sourceVariant = "canonical";
+        canonicalUrl = "";
+        canonicalExtension = "";
+        canonicalReferer = "";
         playbackReferer = "";
         warmLiveSwitchPending = false;
         releasePlayer();
@@ -737,18 +873,13 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return error.getErrorCodeName();
     }
 
-    private String positionKey() {
-        String key = id.isEmpty() ? String.valueOf(url) : kind + ":" + id;
-        return "position_" + Integer.toHexString(key.hashCode());
-    }
-
     private void savePosition() {
         if (player == null || isLive()) return;
         long position = player.getCurrentPosition();
         long duration = player.getDuration();
         if (duration > 0 && position > duration - 30_000) position = 0;
         position = Math.max(0, position);
-        getSharedPreferences("blofy_positions", MODE_PRIVATE).edit().putLong(positionKey(), position).apply();
+        PlaybackProgress.save(this, kind, id, position);
         resumePosition = position;
     }
 
@@ -789,6 +920,16 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playbackStartedAtMs = 0;
     }
 
+    private void cancelResolve(boolean invalidateGeneration) {
+        if (invalidateGeneration) resolveGeneration++;
+        BlofyApi.Cancellation cancellation = resolveCancellation;
+        resolveCancellation = null;
+        if (cancellation != null) cancellation.cancel();
+        Future<?> task = resolveTask;
+        resolveTask = null;
+        if (task != null) task.cancel(true);
+    }
+
     private void requestPlaybackFocus() {
         if (usingVlc && vlcSurface.getVisibility() == View.VISIBLE) vlcSurface.requestFocus();
         else playerView.requestFocus();
@@ -796,14 +937,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     @Override protected void onStart() {
         super.onStart();
+        lifecycleStarted = true;
         if (validUrl(url) && errorPanel.getVisibility() != View.VISIBLE) {
             vlcAttempted = false;
             recoveryStep = preferredRecoveryStep();
             initializePlayer();
+        } else if (!id.isEmpty() && errorPanel.getVisibility() != View.VISIBLE
+                && (resolveTask == null || resolveTask.isDone())) {
+            resolvePlaybackLink();
         }
     }
 
     @Override protected void onStop() {
+        lifecycleStarted = false;
+        cancelResolve(true);
         releasePlayer();
         super.onStop();
     }
@@ -885,8 +1032,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     @Override protected void onDestroy() {
-        resolveGeneration++;
-        if (resolveTask != null) resolveTask.cancel(true);
+        lifecycleStarted = false;
+        cancelResolve(true);
         playbackHandler.removeCallbacksAndMessages(null);
         releasePlayer();
         if (liveOverlay != null) liveOverlay.close();

@@ -12,13 +12,13 @@ import java.util.Locale;
  * (or a direct provider URL for an immediate HTTP failure).
  */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 5_500;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 4_500;
-    static final int VOD_STARTUP_TIMEOUT_MS = 6_000;
-    static final int UHD_VOD_STARTUP_TIMEOUT_MS = 7_500;
-    static final int VLC_STARTUP_TIMEOUT_MS = 7_000;
-    static final int UHD_VLC_STARTUP_TIMEOUT_MS = 9_000;
-    static final int PREVIEW_STARTUP_TIMEOUT_MS = 5_000;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 4_500;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 3_500;
+    static final int VOD_STARTUP_TIMEOUT_MS = 4_500;
+    static final int UHD_VOD_STARTUP_TIMEOUT_MS = 5_500;
+    static final int VLC_STARTUP_TIMEOUT_MS = 5_500;
+    static final int UHD_VLC_STARTUP_TIMEOUT_MS = 6_500;
+    static final int PREVIEW_STARTUP_TIMEOUT_MS = 4_000;
 
     private PlaybackPolicy() {}
 
@@ -93,6 +93,24 @@ final class PlaybackPolicy {
         String value = value(reason).toUpperCase(Locale.US);
         return value.contains("DECOD") || value.contains("CODEC")
                 || value.contains("FORMAT_UNSUPPORTED") || value.contains("PARSING");
+    }
+
+    static String resolveErrorMessage(Throwable error) {
+        String message = "";
+        Throwable current = error;
+        while (current != null) {
+            String candidate = current.getMessage();
+            if (candidate != null && !candidate.trim().isEmpty()) message = candidate.trim();
+            current = current.getCause();
+        }
+        String upper = message.toUpperCase(Locale.US);
+        if (upper.contains("PLAYBACK-LINK-TIMEOUT") || upper.contains("TIMED OUT")) {
+            return "استغرق الخادم وقتًا أطول من مهلة تجهيز رابط التشغيل.";
+        }
+        if (upper.contains("PLAYBACK-LINK-CANCELLED") || upper.contains("INTERRUPTED")) {
+            return "تم إلغاء تجهيز رابط التشغيل.";
+        }
+        return message.isEmpty() ? "تعذر تجهيز رابط التشغيل." : message;
     }
 
     private static String value(String reason) {

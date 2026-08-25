@@ -300,6 +300,7 @@ final class BlofyModels {
                 if (!name.isEmpty() && seen.add(key)) result.add(new Actor(name, character, image));
             }
         }
+
         if (!result.isEmpty()) return;
         String flat = "";
         String[] flatKeys = {"castText", "cast_text", "actorsText", "actors_text", "cast", "actors"};
@@ -342,6 +343,11 @@ final class BlofyModels {
             }
         }
 
+        parseCrewGroup(data, "directors", "إخراج", result, seen);
+        parseCrewGroup(data, "writers", "كتابة", result, seen);
+        parseCrewGroup(data, "producers", "إنتاج", result, seen);
+        parseCrewGroup(data, "creators", "ابتكار", result, seen);
+
         Object rawCrew = data.opt("crew");
         if (result.isEmpty() && rawCrew instanceof String) {
             for (String raw : ((String) rawCrew).split("[,،|]")) {
@@ -359,6 +365,40 @@ final class BlofyModels {
             String key = name.toLowerCase(Locale.US);
             if (!name.isEmpty() && seen.add(key) && result.size() < 24) {
                 result.add(new Actor(name, "إخراج", ""));
+            }
+        }
+    }
+
+    private static void parseCrewGroup(JSONObject data, String key, String fallbackRole,
+                                       List<Actor> result, Set<String> seen) {
+        if (data == null || result.size() >= 24) return;
+        Object raw = data.opt(key);
+        if (raw instanceof JSONArray) {
+            JSONArray rows = (JSONArray) raw;
+            for (int index = 0; index < rows.length() && result.size() < 24; index++) {
+                Object value = rows.opt(index);
+                String name;
+                String role = fallbackRole;
+                String image = "";
+                if (value instanceof JSONObject) {
+                    JSONObject person = (JSONObject) value;
+                    name = first(person, "name", "original_name", "person", "title");
+                    String suppliedRole = first(person, "job", "role", "department");
+                    if (!suppliedRole.isEmpty()) role = suppliedRole;
+                    image = first(person, "image", "profile", "profilePath", "profile_path", "photo");
+                } else {
+                    name = value == null ? "" : String.valueOf(value).trim();
+                }
+                String seenKey = name.toLowerCase(Locale.US);
+                if (!name.isEmpty() && seen.add(seenKey)) result.add(new Actor(name, role, image));
+            }
+        } else if (raw instanceof String) {
+            for (String value : ((String) raw).split("[,،|]")) {
+                String name = value.trim();
+                String seenKey = name.toLowerCase(Locale.US);
+                if (!name.isEmpty() && seen.add(seenKey) && result.size() < 24) {
+                    result.add(new Actor(name, fallbackRole, ""));
+                }
             }
         }
     }

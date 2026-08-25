@@ -53,3 +53,4 @@ export BLOFY_BASE_URL="https://blofy-player-2026-production.up.railway.app"
 - في Deploy Logs يجب أن يظهر `native-open ... mode=direct`، ويجب ألا يظهر `ffmpeg-start` عند التشغيل من APK.
 
 > التطبيق مشغل فقط ولا يضم محتوى أو اشتراكات. استخدم مصدرًا تملك حق الوصول إليه.
+

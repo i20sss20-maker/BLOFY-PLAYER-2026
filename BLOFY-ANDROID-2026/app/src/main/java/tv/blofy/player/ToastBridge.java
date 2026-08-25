@@ -15,13 +15,8 @@ final class ToastBridge {
             return;
         }
         if (message != null && message.contains("تحديث الباقة")) {
-            CatalogDatabase database = new CatalogDatabase(context);
-            try {
-                database.putMetadata("sync_state", "refresh_requested");
-            } finally {
-                database.close();
-            }
             Intent intent = new Intent(context, MainActivity.class);
+            intent.putExtra(MainActivity.EXTRA_REFRESH_CATALOG, true);
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
             context.startActivity(intent);
             if (context instanceof Activity) ((Activity) context).finish();

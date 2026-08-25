@@ -43,6 +43,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
+    static final String EXTRA_REFRESH_CATALOG = "refresh_catalog";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private FrameLayout root;
@@ -53,6 +54,7 @@ public final class MainActivity extends Activity {
     private BlofyModels.License license;
     private BlofyModels.Session session;
     private String screen = "splash";
+    private boolean refreshCatalogRequested;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -67,6 +69,7 @@ public final class MainActivity extends Activity {
         database = new CatalogDatabase(this);
         images = new ImageLoader(api);
         playlistStore = new PlaylistStore(this);
+        refreshCatalogRequested = getIntent().getBooleanExtra(EXTRA_REFRESH_CATALOG, false);
         showSplash("جاري تشغيل BLOFY PLAYER", "تهيئة التطبيق الأصلي");
         boot();
     }
@@ -84,7 +87,12 @@ public final class MainActivity extends Activity {
                 if (license.usable() && (bootstrap == null || !bootstrap.has("playlists"))) refreshRemotePlaylists();
                 session = new BlofyModels.Session(api.get("/api/session"));
                 main.post(() -> {
-                    showPlaylistHub("");
+                    if (refreshCatalogRequested && session.present) {
+                        if (playlistStore.activeId().isEmpty()) playlistStore.setActive("current-session");
+                        importPackage();
+                    } else {
+                        showPlaylistHub("");
+                    }
                 });
             } catch (Exception error) {
                 main.post(() -> showPlaylistHub(message(error)));
@@ -416,8 +424,11 @@ public final class MainActivity extends Activity {
                 if (item.active || item.currentSessionOnly) {
                     try { api.delete("/api/session"); } catch (Exception ignored) {}
                     api.clearSession();
-                    database.beginFreshImport();
                     session = new BlofyModels.Session(null);
+                }
+                if (!item.currentSessionOnly) {
+                    String source = CatalogScope.forPlaylist(item.id);
+                    if (!source.isEmpty()) database.deleteSource(source);
                 }
                 playlistStore.delete(item.id);
                 refreshRemotePlaylists();
@@ -788,8 +799,10 @@ public final class MainActivity extends Activity {
 
         worker.execute(() -> {
             try {
-                PackageImporter importer = new PackageImporter(api, database, (value, step, note) -> main.post(() -> {
-                    progress.setProgress(value, true);
+                PackageImporter importer = new PackageImporter(api, database, playlistStore.activeId(),
+                        (value, step, note) -> main.post(() -> {
+                    if (android.os.Build.VERSION.SDK_INT >= 24) progress.setProgress(value, true);
+                    else progress.setProgress(value);
                     percent.setText(value + "%");
                     title.setText(step);
                     detail.setText(note);
@@ -1018,7 +1031,6 @@ public final class MainActivity extends Activity {
         worker.execute(() -> {
             try { api.delete("/api/session"); } catch (Exception ignored) {}
             api.clearSession();
-            database.beginFreshImport();
             playlistStore.clearActive();
             session = new BlofyModels.Session(null);
             main.post(() -> showPlaylistHub(""));

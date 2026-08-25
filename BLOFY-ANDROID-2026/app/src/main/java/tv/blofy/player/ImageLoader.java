@@ -12,16 +12,19 @@ import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 final class ImageLoader {
     private static final int MAX_IMAGE_BYTES = 6 * 1024 * 1024;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final Set<String> IN_FLIGHT = Collections.synchronizedSet(new HashSet<>());
+    private static final Map<String, Pending> IN_FLIGHT =
+            Collections.synchronizedMap(new HashMap<>());
     private static volatile ImageRuntime runtime;
 
     private final BlofyApi api;
@@ -37,7 +40,7 @@ final class ImageLoader {
                 previous.cache.evictAll();
                 previous.pool.shutdownNow();
             }
-            IN_FLIGHT.clear();
+            synchronized (IN_FLIGHT) { IN_FLIGHT.clear(); }
         }
     }
 
@@ -55,10 +58,19 @@ final class ImageLoader {
             return;
         }
         view.setImageResource(R.drawable.blofy_logo);
-        if (!IN_FLIGHT.add(path)) return;
-
-        WeakReference<ImageView> reference = new WeakReference<>(view);
+        Pending pending;
+        synchronized (IN_FLIGHT) {
+            Pending current = IN_FLIGHT.get(path);
+            if (current != null) {
+                current.targets.add(new WeakReference<>(view));
+                return;
+            }
+            pending = new Pending(resources);
+            pending.targets.add(new WeakReference<>(view));
+            IN_FLIGHT.put(path, pending);
+        }
         resources.pool.execute(() -> {
+            Bitmap bitmap = null;
             try {
                 byte[] bytes = isDirectHttp(path) ? directImage(path) : api.image(path);
                 if (bytes == null || bytes.length == 0) return;
@@ -69,18 +81,33 @@ final class ImageLoader {
                 options.inPreferredConfig = Bitmap.Config.RGB_565;
                 options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight,
                         resources.profile.imageTargetWidth(), resources.profile.imageTargetHeight());
-                Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+                bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
                 if (bitmap == null) return;
                 resources.cache.put(path, bitmap);
-                MAIN.post(() -> {
-                    ImageView target = reference.get();
-                    if (target != null && path.equals(target.getTag())) target.setImageBitmap(bitmap);
-                });
             } catch (Exception ignored) {
             } finally {
-                IN_FLIGHT.remove(path);
+                final Bitmap delivered = bitmap;
+                List<WeakReference<ImageView>> targets = complete(path, pending);
+                if (delivered != null && targets != null && !targets.isEmpty()) {
+                    MAIN.post(() -> {
+                        for (WeakReference<ImageView> reference : targets) {
+                            ImageView target = reference.get();
+                            if (target != null && path.equals(target.getTag())) {
+                                target.setImageBitmap(delivered);
+                            }
+                        }
+                    });
+                }
             }
         });
+    }
+
+    private static List<WeakReference<ImageView>> complete(String path, Pending pending) {
+        synchronized (IN_FLIGHT) {
+            if (IN_FLIGHT.get(path) != pending) return null;
+            IN_FLIGHT.remove(path);
+            return new ArrayList<>(pending.targets);
+        }
     }
 
     private static ImageRuntime resources(ImageView view) {
@@ -114,6 +141,13 @@ final class ImageLoader {
                 return thread;
             });
         }
+    }
+
+    private static final class Pending {
+        final ImageRuntime runtime;
+        final List<WeakReference<ImageView>> targets = new ArrayList<>();
+
+        Pending(ImageRuntime runtime) { this.runtime = runtime; }
     }
 
     private static int sampleSize(int width, int height, int targetWidth, int targetHeight) {

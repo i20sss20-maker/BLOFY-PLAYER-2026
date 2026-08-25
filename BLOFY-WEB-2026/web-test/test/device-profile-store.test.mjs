@@ -40,6 +40,35 @@ test("authenticated re-registration keeps the TV pairing code synchronized", asy
   assert.equal((await store.login(first.displayId, "654321")).deviceId, PRIVATE_ID);
 }));
 
+test("reinstall recovery rotates the device key only with the existing six digits", async () => fixture(async (store) => {
+  const firstKey = "C".repeat(64);
+  const replacementKey = "D".repeat(64);
+  await store.register(PRIVATE_ID, firstKey, { displayId: "BLOFY-K7", pairingCode: "731905" });
+  await assert.rejects(() => store.register(PRIVATE_ID, replacementKey,
+    { displayId: "BLOFY-K7", pairingCode: "000000" }), /تعذر استعادة/);
+  const recovered = await store.register(PRIVATE_ID, replacementKey,
+    { displayId: "BLOFY-K7", pairingCode: "731905" });
+  assert.equal(recovered.recovered, true);
+  await assert.rejects(() => store.withDeviceKey(PRIVATE_ID, firstKey), /تغيّر مفتاحه/);
+  assert.equal((await store.withDeviceKey(PRIVATE_ID, replacementKey)).deviceId, PRIVATE_ID);
+}));
+
+test("QR nonce is high-entropy, expiring, and one-time", async () => fixture(async (store) => {
+  const registered = await store.register(PRIVATE_ID, DEVICE_KEY, { displayId: "BLOFY-N8", pairingCode: "481620" });
+  const nonce = "A_secure_nonce_1234567890";
+  await store.issuePairNonce(PRIVATE_ID, registered.keyHash, nonce, 1_700_000_100_000);
+  assert.equal((await store.verifyPairNonce(PRIVATE_ID, nonce)).displayId, "BLOFY-N8");
+  assert.equal((await store.consumePairNonce(PRIVATE_ID, nonce)).deviceId, PRIVATE_ID);
+  await assert.rejects(() => store.consumePairNonce(PRIVATE_ID, nonce), /تم استخدامه/);
+}));
+
+test("portal logout revision invalidates an issued portal session", async () => fixture(async (store) => {
+  const registered = await store.register(PRIVATE_ID, DEVICE_KEY, { displayId: "BLOFY-P9", pairingCode: "993812" });
+  assert.equal((await store.portal(PRIVATE_ID, registered.portalVersion)).deviceId, PRIVATE_ID);
+  assert.equal(await store.revokePortal(PRIVATE_ID, registered.portalVersion), true);
+  await assert.rejects(() => store.portal(PRIVATE_ID, registered.portalVersion), /انتهت جلسة/);
+}));
+
 test("multi-playlist CRUD increments revision and preserves a valid default", async () => fixture(async (store) => {
   await store.register(PRIVATE_ID, DEVICE_KEY, { displayId: "BLOFY-B8", pairingCode: "483921" });
   const first = await store.createPlaylist(PRIVATE_ID, {
@@ -76,7 +105,7 @@ test("credential payload is encrypted at rest", async () => fixture(async (store
 }));
 
 test("legacy one-profile records migrate without data loss", async () => fixture(async (store, filePath) => {
-  const token = seal({ kind: "m3u", name: "قديمة", url: "https://example.com/list.m3u" });
+  const token = seal({ kind: "m3u", name: "قديمة", serverName: "example.com", url: "https://example.com/list.m3u" });
   await writeFile(filePath, JSON.stringify({ version: 1, devices: {
     [PRIVATE_ID]: { keyHash: crypto.createHash("sha256").update(DEVICE_KEY).digest("hex"), profileToken: token, createdAt: 1 },
   } }));
@@ -84,5 +113,12 @@ test("legacy one-profile records migrate without data loss", async () => fixture
   const snapshot = await restored.snapshot(PRIVATE_ID);
   assert.equal(snapshot.playlists.length, 1);
   assert.equal(snapshot.playlists[0].id, "legacy");
+  assert.equal(snapshot.playlists[0].kind, "m3u");
+  assert.equal(snapshot.playlists[0].name, "قديمة");
+  assert.equal(snapshot.playlists[0].serverName, "example.com");
   assert.equal(await restored.profileToken(PRIVATE_ID), token);
+  const migrated = JSON.parse(await readFile(filePath, "utf8"));
+  assert.equal(migrated.version, 2);
+  assert.equal(Object.hasOwn(migrated.devices[PRIVATE_ID], "profileToken"), false);
+  assert.equal(migrated.devices[PRIVATE_ID].playlists[0].kind, "m3u");
 }));

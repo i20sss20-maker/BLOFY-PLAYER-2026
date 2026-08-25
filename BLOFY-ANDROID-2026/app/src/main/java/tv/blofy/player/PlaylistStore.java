@@ -146,9 +146,15 @@ final class PlaylistStore {
         try {
             JSONArray values = new JSONArray();
             for (Playlist row : rows) values.put(row.toJson());
-            preferences.edit().putString(KEY_PAYLOAD, encrypt(values.toString())).commit();
-        } catch (Exception ignored) {
-            // Do not replace a previously valid cache if encryption is unavailable.
+            String payload = encrypt(values.toString());
+            if (!preferences.edit().putString(KEY_PAYLOAD, payload).commit()) {
+                throw new IllegalStateException("تعذر تثبيت قائمة التشغيل على ذاكرة الجهاز.");
+            }
+        } catch (Exception failure) {
+            // Preserve a previously valid cache, but never report a false success.
+            if (failure instanceof IllegalStateException) throw (IllegalStateException) failure;
+            throw new IllegalStateException(
+                    "تعذر حفظ قائمة التشغيل بأمان. أعد تشغيل الجهاز ثم حاول مرة أخرى.", failure);
         }
     }
 

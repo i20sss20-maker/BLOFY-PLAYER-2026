@@ -11,3 +11,4 @@
         <bitmap android:src="@drawable/blofy_logo" android:gravity="fill" />
     </item>
 </layer-list>
+

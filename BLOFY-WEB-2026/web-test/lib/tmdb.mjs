@@ -54,6 +54,56 @@ function ratingRows(original, score) {
   return rows;
 }
 
+function creditImage(person) {
+  return image(person?.profile_path || person?.image || person?.photo, "w185");
+}
+
+function uniquePeople(rows, keyFor) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = keyFor(row);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Convert the TMDB credits graph into the small, stable shape used by TV clients. */
+export function normalizeTmdbCredits(detail) {
+  const cast = Array.isArray(detail?.credits?.cast) ? detail.credits.cast.slice(0, 24).map((person) => ({
+    id: person.id == null ? "" : String(person.id),
+    name: String(person.name || person.original_name || ""),
+    character: String(person.character || ""),
+    image: creditImage(person),
+  })).filter((person) => person.name) : [];
+
+  const usefulJobs = new Set([
+    "director", "series director", "creator", "writer", "screenplay", "story",
+    "executive producer", "producer", "director of photography", "original music composer",
+  ]);
+  const creditCrew = Array.isArray(detail?.credits?.crew) ? detail.credits.crew : [];
+  const creators = Array.isArray(detail?.created_by) ? detail.created_by.map((person) => ({
+    ...person, job: "Creator", department: "Writing",
+  })) : [];
+  const crew = uniquePeople([...creditCrew, ...creators].map((person) => ({
+    id: person.id == null ? "" : String(person.id),
+    name: String(person.name || person.original_name || ""),
+    job: String(person.job || ""),
+    department: String(person.department || person.known_for_department || ""),
+    image: creditImage(person),
+  })).filter((person) => person.name && usefulJobs.has(person.job.toLowerCase())), (person) => (
+    `${person.id || person.name.toLocaleLowerCase("en-US")}:${person.job.toLocaleLowerCase("en-US")}`
+  )).sort((first, second) => {
+    const firstDirector = ["director", "series director"].includes(first.job.toLowerCase()) ? 0 : 1;
+    const secondDirector = ["director", "series director"].includes(second.job.toLowerCase()) ? 0 : 1;
+    return firstDirector - secondDirector;
+  }).slice(0, 16);
+  const director = uniquePeople(crew.filter((person) => (
+    ["director", "series director"].includes(person.job.toLowerCase())
+  )), (person) => person.id || person.name.toLocaleLowerCase("en-US")).map((person) => person.name).join("، ");
+  return { cast, crew, director };
+}
+
 /** Optional Arabic metadata enrichment. It is a no-op until a TMDB key is configured. */
 export async function enrichMediaDetails(item, type) {
   if (!configured() || !item) return item;
@@ -73,11 +123,9 @@ export async function enrichMediaDetails(item, type) {
   const detail = await request(`/${mediaType}/${encodeURIComponent(tmdbId)}`, {
     language: "ar-SA", append_to_response: "credits,external_ids",
   });
-  const cast = Array.isArray(detail?.credits?.cast) ? detail.credits.cast.slice(0, 24).map((person) => ({
-    name: String(person.name || person.original_name || ""),
-    character: String(person.character || ""),
-    image: image(person.profile_path, "w185"),
-  })).filter((person) => person.name) : [];
+  const normalizedCredits = normalizeTmdbCredits(detail);
+  const cast = normalizedCredits.cast.length ? normalizedCredits.cast : item.cast || [];
+  const crew = normalizedCredits.crew.length ? normalizedCredits.crew : item.crew || item.credits?.crew || [];
   const releaseDate = String(detail.release_date || detail.first_air_date || item.releaseDate || "");
   return {
     ...item,
@@ -93,7 +141,10 @@ export async function enrichMediaDetails(item, type) {
       ? String(Math.round(Number(detail.vote_average) * 10) / 10) : item.rating || "",
     ratingSource: Number(detail.vote_average) > 0 ? "TMDB" : item.ratingSource || "",
     ratings: ratingRows(item.ratings, detail.vote_average),
-    cast: cast.length ? cast : item.cast || [],
+    cast,
+    crew,
+    director: normalizedCredits.director || item.director || "",
+    credits: { cast, crew },
     tmdbId,
     imdbId: String(detail.external_ids?.imdb_id || item.imdbId || ""),
   };

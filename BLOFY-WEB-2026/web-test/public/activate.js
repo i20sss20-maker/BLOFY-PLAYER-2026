@@ -37,6 +37,7 @@ async function api(path, options = {}, timeoutMs = 25_000) {
     if (!response.ok) {
       const error = new Error(data.error || "تعذر إكمال الطلب.");
       error.status = response.status;
+      error.data = data;
       throw error;
     }
     return data;
@@ -234,11 +235,36 @@ async function playlistAction(item, action, button) {
       await loadDashboard();
       toast(action === "connect" ? "تم اختيار القائمة. اضغط اتصال في التطبيق" : "تم تعيين القائمة الافتراضية");
     }
-  } catch (error) { toast(error.message); }
+  } catch (error) {
+    if (action === "test" && error.data?.playlist) {
+      const at = state.playlists.findIndex((entry) => entry.id === item.id);
+      if (at >= 0) state.playlists[at] = { ...state.playlists[at], ...error.data.playlist };
+      renderPlaylists();
+    }
+    toast(error.message);
+  }
   finally { button.disabled = false; button.textContent = original; }
 }
 
 const query = new URLSearchParams(location.search);
 const queryDevice = String(query.get("device_id") || "").toUpperCase();
 if (/^BLOFY-[A-Z0-9]{2}$/.test(queryDevice)) $("deviceId").value = queryDevice;
-loadDashboard();
+async function bootPortal() {
+  const pairToken = query.get("pair_token") || "";
+  if (pairToken) {
+    try {
+      const data = await api("/api/device/login", { method: "POST", body: JSON.stringify({ pairToken }) });
+      state.displayId = data.displayId;
+      state.license = data.license;
+      history.replaceState({}, "", location.pathname);
+      await loadDashboard();
+      toast("تم ربط الجهاز بأمان. رابط QR استُخدم مرة واحدة");
+      return;
+    } catch (error) {
+      history.replaceState({}, "", location.pathname);
+      loginMessage.textContent = error.message;
+    }
+  }
+  await loadDashboard();
+}
+bootPortal();

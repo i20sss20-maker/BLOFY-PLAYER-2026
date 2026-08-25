@@ -253,7 +253,9 @@ public final class SevenMaxActivity extends Activity {
 
     private List<BlofyModels.Media> featuredMedia() {
         Map<String, BlofyModels.Media> unique = new LinkedHashMap<>();
-        appendUnique(unique, database.featured(18));
+        // Pull a wider verified-first pool before the final Java validation/sort.
+        // This prevents unverified provider scores from crowding out real sources.
+        appendUnique(unique, database.featured(36));
         appendUnique(unique, database.latest("movies", 12, 0));
         appendUnique(unique, database.latest("series", 12, 0));
         List<BlofyModels.Media> candidates = new ArrayList<>(unique.values());
@@ -478,7 +480,8 @@ public final class SevenMaxActivity extends Activity {
                 () -> showCatalog("series", false));
         addSidebarItem(sidebar, "★", "المفضلة", "favorites".equals(selected), this::showFavorites);
         addSidebarItem(sidebar, "◷", "المشاهدة لاحقاً", "history".equals(selected), this::showHistory);
-        addSidebarItem(sidebar, "EPG", "دليل البرامج", false, this::showLive);
+        // EPG remains hidden until a real guide view is available. Do not route a
+        // guide-looking action to an unrelated live page.
         addSidebarItem(sidebar, "⚙", "الإعدادات", false, this::openLegacySettings);
 
         View spacer = new View(this);
@@ -559,7 +562,7 @@ public final class SevenMaxActivity extends Activity {
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(dp(132), dp(32));
         statusParams.setMargins(0, 0, dp(10), 0);
         top.addView(status, statusParams);
-        addTopAction(top, "⌕  بحث", () -> showCatalog("series".equals(screen) ? "series" : "movies", true), 96);
+        addTopAction(top, "⌕  بحث", this::showUnifiedSearch, 96);
         addTopAction(top, "⚙", this::openLegacySettings, 50);
         addTopAction(top, "↻", this::openLegacyRefresh, 50);
         return top;
@@ -649,6 +652,10 @@ public final class SevenMaxActivity extends Activity {
         LiveListAdapter liveAdapter = new LiveListAdapter();
         channels.setAdapter(liveAdapter);
         channelsPanel.addView(channels, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        catAdapter.rightTarget = channels;
+        catAdapter.topTarget = search;
+        liveAdapter.leftTarget = cats;
+        liveAdapter.topTarget = search;
         LinearLayout.LayoutParams channelParams = new LinearLayout.LayoutParams(dp(338),
                 ViewGroup.LayoutParams.MATCH_PARENT);
         channelParams.setMargins(dp(10), 0, dp(10), 0);
@@ -707,18 +714,13 @@ public final class SevenMaxActivity extends Activity {
                 if (autoplay && !liveAdapter.rows.isEmpty() && liveAdapter.listener != null) {
                     liveAdapter.listener.selected(liveAdapter.rows.get(0));
                 }
-                channels.requestFocus();
+                focusFirstItem(channels);
             };
             liveAdapter.reload(category.id, search.getText().toString());
         };
         bindLiveSearch(search, value -> {
-            liveAdapter.firstPageLoaded = () -> {
-                boolean autoplay = !"off".equals(getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
-                        .getString(SettingsActivity.KEY_AUTOPLAY_LIVE, "on"));
-                if (autoplay && !liveAdapter.rows.isEmpty() && liveAdapter.listener != null) {
-                    liveAdapter.listener.selected(liveAdapter.rows.get(0));
-                }
-            };
+            // Typing must not reopen a network stream after every character.
+            liveAdapter.firstPageLoaded = null;
             liveAdapter.reload(liveAdapter.category, value);
         });
 
@@ -733,7 +735,7 @@ public final class SevenMaxActivity extends Activity {
         };
         liveAdapter.previewedId = previewedId;
         liveAdapter.reload("", "");
-        cats.requestFocus();
+        focusItem(cats, 0);
     }
 
     private LinearLayout columnPanel(String titleValue) {
@@ -797,13 +799,18 @@ public final class SevenMaxActivity extends Activity {
         media.setPadding(dp(8), 0, dp(4), dp(16));
         PosterAdapter adapter = new PosterAdapter(type, false, false);
         media.setAdapter(adapter);
+        catAdapter.rightTarget = media;
+        catAdapter.topTarget = search;
+        adapter.leftTarget = cats;
+        adapter.topTarget = search;
+        adapter.gridColumns = 5;
         LinearLayout.LayoutParams mediaParams = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.MATCH_PARENT, 1);
         mediaParams.setMargins(dp(12), 0, 0, 0);
         body.addView(media, mediaParams);
 
         catAdapter.listener = category -> {
-            adapter.firstPageLoaded = () -> media.requestFocus();
+            adapter.firstPageLoaded = () -> focusFirstItem(media);
             adapter.reload(category.id, search.getText().toString());
         };
         bindLiveSearch(search, value -> {
@@ -814,7 +821,58 @@ public final class SevenMaxActivity extends Activity {
         page.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         shell.content.addView(page, match());
         adapter.reload("", "");
-        if (focusSearch) search.requestFocus(); else cats.requestFocus();
+        if (focusSearch) search.requestFocus(); else focusItem(cats, 0);
+    }
+
+    private void showUnifiedSearch() {
+        releasePreview();
+        screen = "search";
+        ScreenShell shell = shell("search", "البحث الشامل", false);
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(24), dp(10), dp(24), dp(20));
+
+        TextView note = BlofyUi.text(this,
+                "ابحث من أول حرف في القنوات والأفلام والمسلسلات", 12, BlofyUi.MUTED);
+        note.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        note.setTextDirection(View.TEXT_DIRECTION_RTL);
+        page.addView(note, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
+
+        EditText search = BlofyUi.input(this, "اكتب اسم القناة أو الفيلم أو المسلسل", false);
+        page.addView(search, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+
+        RecyclerView results = new RecyclerView(this);
+        results.setLayoutManager(new GridLayoutManager(this, 6));
+        results.setItemAnimator(null);
+        results.setHasFixedSize(true);
+        results.setItemViewCacheSize(30);
+        results.setClipToPadding(false);
+        results.setPadding(dp(4), dp(10), dp(4), dp(18));
+        PosterAdapter adapter = new PosterAdapter("", false, false);
+        results.setAdapter(adapter);
+        LinearLayout.LayoutParams resultParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
+        resultParams.topMargin = dp(8);
+        page.addView(results, resultParams);
+
+        bindLiveSearch(search, value -> {
+            adapter.firstPageLoaded = () -> focusFirstItem(results);
+            adapter.reload("", value);
+        });
+        search.setOnKeyListener((view, keyCode, event) -> {
+            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN
+                    && keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN
+                    && adapter.getItemCount() > 0) {
+                focusFirstItem(results);
+                return true;
+            }
+            return false;
+        });
+        adapter.topTarget = search;
+        adapter.gridColumns = 6;
+        shell.content.addView(page, match());
+        search.requestFocus();
     }
 
     private void showFavorites() {
@@ -864,7 +922,20 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private void routeMedia(BlofyModels.Media item) {
-        if ("live".equals(item.type)) play(item); else openDetails(item);
+        if ("live".equals(item.type)) play(item);
+        else if ("m3u".equals(database.metadata("session_kind", ""))) playM3uVod(item);
+        else openDetails(item);
+    }
+
+    private void playM3uVod(BlofyModels.Media item) {
+        database.addHistory(item.type, item.id);
+        Intent intent = new Intent(this, VodPlayerActivity.class);
+        intent.putExtra(VodPlayerActivity.EXTRA_ID, item.id);
+        intent.putExtra(VodPlayerActivity.EXTRA_TITLE, item.name);
+        intent.putExtra(VodPlayerActivity.EXTRA_KIND,
+                "series".equals(item.type) ? "episode" : "movies");
+        intent.putExtra(VodPlayerActivity.EXTRA_EXTENSION, item.extension);
+        startActivity(intent);
     }
 
     private void play(BlofyModels.Media item) {
@@ -886,6 +957,10 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private void openDetails(BlofyModels.Media item) {
+        if ("m3u".equals(database.metadata("session_kind", ""))) {
+            playM3uVod(item);
+            return;
+        }
         Intent intent = new Intent(this, DetailsActivity.class);
         intent.putExtra(DetailsActivity.EXTRA_ITEM, item.json().toString());
         startActivity(intent);
@@ -902,11 +977,37 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private void openLegacyRefresh() {
-        ToastBridge.show(this, "تحديث الباقة سيبقى بدون تغيير حتى اكتمال واجهة BLOFY الجديدة");
+        releasePreview();
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.putExtra(MainActivity.EXTRA_REFRESH_CATALOG, true);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+        finish();
     }
 
     private String formatCount(int count, String noun) {
         return String.format(Locale.US, "%,d %s", count, noun);
+    }
+
+    private void focusFirstItem(RecyclerView list) {
+        if (list == null || list.getAdapter() == null || list.getAdapter().getItemCount() == 0) return;
+        list.scrollToPosition(0);
+        list.post(() -> {
+            RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(0);
+            if (holder != null) holder.itemView.requestFocus();
+            else list.requestFocus();
+        });
+    }
+
+    private void focusItem(RecyclerView list, int position) {
+        if (list == null || list.getAdapter() == null || list.getAdapter().getItemCount() == 0) return;
+        int target = Math.max(0, Math.min(position, list.getAdapter().getItemCount() - 1));
+        list.scrollToPosition(target);
+        list.post(() -> {
+            RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(target);
+            if (holder != null) holder.itemView.requestFocus();
+            else list.requestFocus();
+        });
     }
 
     private String formatMeta(BlofyModels.Media item) {
@@ -967,6 +1068,8 @@ public final class SevenMaxActivity extends Activity {
         final List<BlofyModels.Category> rows;
         CategoryListener listener;
         int selectedPosition;
+        RecyclerView rightTarget;
+        View topTarget;
 
         CategoryListAdapter(List<BlofyModels.Category> rows) {
             this.rows = rows;
@@ -1002,6 +1105,19 @@ public final class SevenMaxActivity extends Activity {
                 if (selectedPosition >= 0) notifyItemChanged(selectedPosition);
                 if (listener != null) listener.selected(category);
             });
+            holder.item.setOnKeyListener((view, keyCode, event) -> {
+                if (event.getAction() != android.view.KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT && rightTarget != null) {
+                    focusFirstItem(rightTarget);
+                    return true;
+                }
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
+                        && position == 0 && topTarget != null) {
+                    topTarget.requestFocus();
+                    return true;
+                }
+                return false;
+            });
         }
 
         @Override public int getItemCount() {
@@ -1028,6 +1144,8 @@ public final class SevenMaxActivity extends Activity {
         LiveListener listener;
         Runnable firstPageLoaded;
         String[] previewedId;
+        RecyclerView leftTarget;
+        View topTarget;
 
         void reload(String category, String query) {
             if (!isCurrentScreen(ownerGeneration)) return;
@@ -1126,6 +1244,22 @@ public final class SevenMaxActivity extends Activity {
             holder.card.setOnClickListener(v -> {
                 if (previewedId != null && media.id.equals(previewedId[0])) play(media);
                 else if (listener != null) listener.selected(media);
+            });
+            holder.card.setOnKeyListener((view, keyCode, event) -> {
+                if (event.getAction() != android.view.KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT && leftTarget != null) {
+                    RecyclerView.Adapter<?> value = leftTarget.getAdapter();
+                    int selected = value instanceof CategoryListAdapter
+                            ? ((CategoryListAdapter) value).selectedPosition : 0;
+                    focusItem(leftTarget, selected);
+                    return true;
+                }
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
+                        && position == 0 && topTarget != null) {
+                    topTarget.requestFocus();
+                    return true;
+                }
+                return false;
             });
         }
 
@@ -1292,6 +1426,9 @@ public final class SevenMaxActivity extends Activity {
         boolean loading;
         int generation;
         Runnable firstPageLoaded;
+        View topTarget;
+        RecyclerView leftTarget;
+        int gridColumns = 5;
 
         PosterAdapter(String type, boolean favorites, boolean history) {
             this.type = type;
@@ -1321,8 +1458,10 @@ public final class SevenMaxActivity extends Activity {
             String selectedQuery = query;
             boolean submitted = submitCatalog(() -> {
                 if (!isCurrentScreen(ownerGeneration)) return;
-                List<BlofyModels.Media> next = database.media(type, selectedCategory, selectedQuery,
-                        favorites, history, POSTER_PAGE, offset);
+                List<BlofyModels.Media> next = type.isEmpty() && !favorites && !history
+                        ? database.searchAll(selectedQuery, POSTER_PAGE, offset)
+                        : database.media(type, selectedCategory, selectedQuery,
+                                favorites, history, POSTER_PAGE, offset);
                 if (!isCurrentScreen(ownerGeneration)) return;
                 main.post(() -> {
                     if (!isCurrentScreen(ownerGeneration) || token != generation
@@ -1391,6 +1530,23 @@ public final class SevenMaxActivity extends Activity {
             holder.card.setOnLongClickListener(v -> {
                 database.toggleFavorite(media.type, media.id);
                 return true;
+            });
+            holder.card.setOnKeyListener((view, keyCode, event) -> {
+                if (event.getAction() != android.view.KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT
+                        && position % Math.max(1, gridColumns) == 0 && leftTarget != null) {
+                    RecyclerView.Adapter<?> value = leftTarget.getAdapter();
+                    int selected = value instanceof CategoryListAdapter
+                            ? ((CategoryListAdapter) value).selectedPosition : 0;
+                    focusItem(leftTarget, selected);
+                    return true;
+                }
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
+                        && position < Math.max(1, gridColumns) && topTarget != null) {
+                    topTarget.requestFocus();
+                    return true;
+                }
+                return false;
             });
         }
 

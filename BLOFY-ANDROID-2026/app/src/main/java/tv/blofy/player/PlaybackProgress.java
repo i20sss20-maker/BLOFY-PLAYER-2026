@@ -6,6 +6,7 @@ import android.text.format.DateUtils;
 import android.util.Base64;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 /** One source of truth for VOD resume positions and the last watched series episode. */
 final class PlaybackProgress {
@@ -16,27 +17,26 @@ final class PlaybackProgress {
 
     static long get(Context context, String kind, String id) {
         SharedPreferences values = prefs(context);
-        String key = positionKey(kind, id);
+        String scope = CatalogScope.active(context);
+        String key = positionKey(scope, kind, id);
         if (values.contains(key)) return values.getLong(key, 0L);
-        String legacy = legacyPositionKey(kind, id);
-        long position = values.getLong(legacy, 0L);
-        if (position > 0L) values.edit().putLong(key, position).remove(legacy).apply();
+        long position = migrateLegacyPosition(values, scope, kind, id);
         return position;
     }
 
     static void save(Context context, String kind, String id, long position) {
-        prefs(context).edit().putLong(positionKey(kind, id), Math.max(0L, position))
-                .remove(legacyPositionKey(kind, id)).apply();
+        String scope = CatalogScope.active(context);
+        prefs(context).edit().putLong(positionKey(scope, kind, id), Math.max(0L, position)).apply();
     }
 
     static void clear(Context context, String kind, String id) {
-        prefs(context).edit().remove(positionKey(kind, id))
-                .remove(legacyPositionKey(kind, id)).apply();
+        String scope = CatalogScope.active(context);
+        prefs(context).edit().remove(positionKey(scope, kind, id)).apply();
     }
 
     static void rememberEpisode(Context context, String seriesId, String episodeId,
                                 String title, String extension) {
-        String key = seriesKey(seriesId);
+        String key = seriesKey(CatalogScope.active(context), seriesId);
         prefs(context).edit()
                 .putString(key + "_id", value(episodeId))
                 .putString(key + "_title", value(title))
@@ -44,11 +44,50 @@ final class PlaybackProgress {
                 .apply();
     }
 
+    /** Remembers the ordered successor selected from the provider's real season graph. */
+    static void rememberNextEpisode(Context context, String currentEpisodeId, String seriesId,
+                                    String nextEpisodeId, String title, String extension) {
+        String key = nextKey(CatalogScope.active(context), currentEpisodeId);
+        SharedPreferences.Editor editor = prefs(context).edit();
+        if (value(nextEpisodeId).isEmpty()) {
+            editor.remove(key + "_series").remove(key + "_id")
+                    .remove(key + "_title").remove(key + "_extension").apply();
+            return;
+        }
+        editor.putString(key + "_series", value(seriesId))
+                .putString(key + "_id", value(nextEpisodeId))
+                .putString(key + "_title", value(title))
+                .putString(key + "_extension", value(extension))
+                .apply();
+    }
+
+    static NextEpisode nextEpisode(Context context, String currentEpisodeId) {
+        SharedPreferences values = prefs(context);
+        String key = nextKey(CatalogScope.active(context), currentEpisodeId);
+        String id = values.getString(key + "_id", "");
+        if (id == null || id.isEmpty()) return null;
+        return new NextEpisode(values.getString(key + "_series", ""), id,
+                values.getString(key + "_title", ""),
+                values.getString(key + "_extension", ""));
+    }
+
     static EpisodeResume episode(Context context, String seriesId) {
         SharedPreferences values = prefs(context);
-        String key = seriesKey(seriesId);
+        String scope = CatalogScope.active(context);
+        String key = seriesKey(scope, seriesId);
         String id = values.getString(key + "_id", "");
-        if (id == null || id.isEmpty()) {
+        if ((id == null || id.isEmpty()) && claimLegacyScope(values, scope)) {
+            String v2 = legacyV2SeriesKey(seriesId);
+            id = values.getString(v2 + "_id", "");
+            if (id != null && !id.isEmpty()) {
+                String title = values.getString(v2 + "_title", "");
+                String extension = values.getString(v2 + "_extension", "");
+                values.edit().putString(key + "_id", id)
+                        .putString(key + "_title", value(title))
+                        .putString(key + "_extension", value(extension)).apply();
+            }
+        }
+        if ((id == null || id.isEmpty()) && claimLegacyScope(values, scope)) {
             String legacy = legacySeriesKey(seriesId);
             id = values.getString(legacy + "_id", "");
             if (id != null && !id.isEmpty()) {
@@ -72,16 +111,65 @@ final class PlaybackProgress {
         return DateUtils.formatElapsedTime(Math.max(0L, positionMs) / 1000L);
     }
 
-    static String positionKey(String kind, String id) {
-        return "position_v2_" + encoded(value(kind) + ":" + value(id));
+    static String positionKey(String scope, String kind, String id) {
+        return "position_v3_" + encoded(value(scope)) + "_" + encoded(value(kind) + ":" + value(id));
     }
 
-    private static String seriesKey(String seriesId) {
-        return "series_last_v2_" + encoded(value(seriesId));
+    private static String seriesKey(String scope, String seriesId) {
+        return "series_last_v3_" + encoded(value(scope)) + "_" + encoded(value(seriesId));
+    }
+
+    private static String nextKey(String scope, String episodeId) {
+        return "episode_next_v3_" + encoded(value(scope)) + "_" + encoded(value(episodeId));
     }
 
     static void clearAll(Context context) {
         prefs(context).edit().clear().apply();
+    }
+
+    static void clearScope(Context context, String sourceId) {
+        SharedPreferences values = prefs(context);
+        String encodedScope = encoded(value(sourceId));
+        String positionPrefix = "position_v3_" + encodedScope + "_";
+        String seriesPrefix = "series_last_v3_" + encodedScope + "_";
+        String nextPrefix = "episode_next_v3_" + encodedScope + "_";
+        SharedPreferences.Editor editor = values.edit();
+        for (Map.Entry<String, ?> row : values.getAll().entrySet()) {
+            String key = row.getKey();
+            if (key.startsWith(positionPrefix) || key.startsWith(seriesPrefix)
+                    || key.startsWith(nextPrefix)) editor.remove(key);
+        }
+        editor.apply();
+    }
+
+    private static long migrateLegacyPosition(SharedPreferences values, String scope,
+                                              String kind, String id) {
+        if (!claimLegacyScope(values, scope)) return 0L;
+        String v2 = legacyV2PositionKey(kind, id);
+        long position = values.getLong(v2, 0L);
+        if (position <= 0L) position = values.getLong(legacyPositionKey(kind, id), 0L);
+        if (position > 0L) {
+            values.edit().putLong(positionKey(scope, kind, id), position).apply();
+        }
+        return position;
+    }
+
+    private static synchronized boolean claimLegacyScope(SharedPreferences values, String scope) {
+        String claimed = values.getString("legacy_scope_v3", "");
+        if (claimed == null || claimed.isEmpty()) {
+            // Only the first active playlist inherits pre-v323 unscoped progress.
+            values.edit().putString("legacy_scope_v3", value(scope)).commit();
+            return true;
+        }
+        return claimed.equals(value(scope));
+    }
+
+    private static String legacyV2PositionKey(String kind, String id) {
+        return "position_v2_" + encoded(value(kind) + ":" + value(id));
+    }
+
+    private static String legacyV2SeriesKey(String seriesId) {
+        return "series_last_v2_" + encoded(value(seriesId));
     }
 
     private static String legacyPositionKey(String kind, String id) {
@@ -117,5 +205,19 @@ final class PlaybackProgress {
         }
 
         boolean available() { return position >= RESUME_THRESHOLD_MS; }
+    }
+
+    static final class NextEpisode {
+        final String seriesId;
+        final String id;
+        final String title;
+        final String extension;
+
+        NextEpisode(String seriesId, String id, String title, String extension) {
+            this.seriesId = value(seriesId);
+            this.id = value(id);
+            this.title = value(title);
+            this.extension = value(extension);
+        }
     }
 }

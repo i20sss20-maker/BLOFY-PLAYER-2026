@@ -107,8 +107,8 @@ public final class SettingsActivity extends Activity {
 
         LinearLayout sound = section(page, "الصوت والترجمة", "اللغة والمخرج المفضلان عند بداية التشغيل");
         Button audio = cycleButton("الصوت", KEY_AUDIO_OUTPUT,
-                new String[]{"auto", "stereo", "passthrough"}, new String[]{"تلقائي", "ستيريو 2.0", "Dolby / تمرير"});
-        addSettingRow(sound, "مخرج الصوت", "اختيار تلقائي أو ستيريو أو تمرير الصوت المحيطي", audio);
+                new String[]{"auto", "stereo"}, new String[]{"تلقائي", "تفضيل ستيريو"});
+        addSettingRow(sound, "مخرج الصوت", "تلقائي أو تفضيل المسارات ذات قناتين عندما يدعمها المصدر", audio);
         Button subtitle = cycleButton("الترجمة", KEY_SUBTITLE_LANGUAGE,
                 new String[]{"ar", "auto", "off"}, new String[]{"العربية أولًا", "تلقائي", "إيقاف"});
         addSettingRow(sound, "لغة الترجمة", "يفضّل المسار العربي إذا كان موجودًا داخل الملف", subtitle);
@@ -194,9 +194,6 @@ public final class SettingsActivity extends Activity {
             try { api.delete("/api/session"); } catch (Exception ignored) {}
             api.clearSession();
             new PlaylistStore(this).clearActive();
-            CatalogDatabase database = new CatalogDatabase(this);
-            database.beginFreshImport();
-            database.close();
             runOnUiThread(this::openPlaylistHub);
         }, "blofy-playlist-logout").start();
     }
