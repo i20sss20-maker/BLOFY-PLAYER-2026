@@ -302,9 +302,12 @@ export class XtreamClient {
     })) : [];
   }
 
-  streamUrl(type, id, extension = "") {
+  streamUrl(type, id, extension = "", variant = "canonical") {
     const segment = type === "live" ? "live" : type === "episode" ? "series" : "movie";
     const ext = String(extension || (type === "live" ? "ts" : "mp4")).replace(/[^a-zA-Z0-9]/g, "") || (type === "live" ? "ts" : "mp4");
+    if (variant === "no-extension") {
+      return `${this.base}/${segment}/${encodeURIComponent(this.username)}/${encodeURIComponent(this.password)}/${encodeURIComponent(id)}`;
+    }
     return `${this.base}/${segment}/${encodeURIComponent(this.username)}/${encodeURIComponent(this.password)}/${encodeURIComponent(id)}.${ext}`;
   }
 }

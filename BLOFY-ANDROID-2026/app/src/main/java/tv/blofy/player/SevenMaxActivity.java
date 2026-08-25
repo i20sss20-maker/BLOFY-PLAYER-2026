@@ -796,6 +796,8 @@ public final class SevenMaxActivity extends Activity {
     private void play(BlofyModels.Media item) {
         String warmUrl = "live".equals(item.type) && livePreview != null
                 ? livePreview.resolvedUrl(item) : "";
+        String warmReferer = "live".equals(item.type) && livePreview != null
+                ? livePreview.resolvedReferer(item) : "";
         releasePreview();
         database.addHistory(item.type, item.id);
         Intent intent = new Intent(this, PlayerActivity.class);
@@ -805,6 +807,7 @@ public final class SevenMaxActivity extends Activity {
         intent.putExtra(PlayerActivity.EXTRA_EXTENSION, item.extension);
         intent.putExtra(PlayerActivity.EXTRA_CATEGORY_ID, item.categoryId);
         if (!warmUrl.isEmpty()) intent.putExtra(PlayerActivity.EXTRA_URL, warmUrl);
+        if (!warmReferer.isEmpty()) intent.putExtra(PlayerActivity.EXTRA_REFERER, warmReferer);
         startActivity(intent);
     }
 

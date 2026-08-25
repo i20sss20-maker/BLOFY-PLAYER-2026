@@ -12,8 +12,7 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
-import androidx.media3.datasource.DefaultDataSource;
-import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.DataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -43,6 +42,7 @@ final class LivePreviewController implements Player.Listener {
     private final AtomicInteger generation = new AtomicInteger();
     private int openedGeneration = -1;
     private ExoPlayer player;
+    private String playerReferer = "";
     private Runnable pending;
     private Listener listener;
 
@@ -56,20 +56,25 @@ final class LivePreviewController implements Player.Listener {
         view.setKeepScreenOn(false);
         view.setFocusable(false);
         view.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        ensurePlayer();
     }
 
     PlayerView view() { return view; }
 
     String resolvedUrl(BlofyModels.Media item) {
         if (item == null) return "";
-        String key = item.id + ":" + PlaybackPolicy.normalizeExtension(item.extension, "ts");
+        String key = cacheKey(item);
         Resolved value = URL_CACHE.get(key);
         if (value == null || value.expired()) {
             URL_CACHE.remove(key);
             return "";
         }
         return value.url;
+    }
+
+    String resolvedReferer(BlofyModels.Media item) {
+        if (item == null) return "";
+        Resolved value = URL_CACHE.get(cacheKey(item));
+        return value == null || value.expired() ? "" : value.referer;
     }
 
     void setListener(Listener listener) { this.listener = listener; }
@@ -85,10 +90,10 @@ final class LivePreviewController implements Player.Listener {
 
     private void startPreview(BlofyModels.Media item, int token) {
         if (item == null) return;
-        String cacheKey = item.id + ":" + PlaybackPolicy.normalizeExtension(item.extension, "ts");
+        String cacheKey = cacheKey(item);
         Resolved cached = URL_CACHE.get(cacheKey);
         if (cached != null && !cached.expired()) {
-            if (token == generation.get()) open(cached.url, cached.extension, token);
+            if (token == generation.get()) open(cached.url, cached.extension, cached.referer, token);
             return;
         }
         if (cached != null) URL_CACHE.remove(cacheKey);
@@ -99,11 +104,12 @@ final class LivePreviewController implements Player.Listener {
                         + "?ext=" + BlofyApi.encode(ext));
                 String url = result.optString("url", "");
                 String resolvedExt = PlaybackPolicy.normalizeExtension(result.optString("extension", ext), ext);
+                String referer = result.optString("referer", "");
                 if (!url.startsWith("http")) throw new IllegalStateException("invalid preview url");
-                URL_CACHE.put(cacheKey, new Resolved(url, resolvedExt));
+                URL_CACHE.put(cacheKey, new Resolved(url, resolvedExt, referer));
                 main.post(() -> {
                     if (token != generation.get()) return;
-                    open(url, resolvedExt, token);
+                    open(url, resolvedExt, referer, token);
                 });
             } catch (Exception ignored) {
                 main.post(() -> {
@@ -114,14 +120,22 @@ final class LivePreviewController implements Player.Listener {
         });
     }
 
-    private void ensurePlayer() {
-        if (player != null) return;
-        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(4_500)
-                .setReadTimeoutMs(8_000)
-                .setUserAgent("BLOFY-ANDROID-PREVIEW/" + BuildConfig.VERSION_NAME);
-        DefaultDataSource.Factory data = new DefaultDataSource.Factory(context, http);
+    private String cacheKey(BlofyModels.Media item) {
+        return api.playbackSessionKey() + ":" + item.id + ":"
+                + PlaybackPolicy.normalizeExtension(item.extension, "ts");
+    }
+
+    private void ensurePlayer(String referer) {
+        String normalized = referer == null ? "" : referer;
+        if (player != null && normalized.equals(playerReferer)) return;
+        if (player != null) {
+            view.setPlayer(null);
+            player.release();
+            player = null;
+        }
+        playerReferer = normalized;
+        DataSource.Factory data = PlaybackTransportFactory.create(context, false, network,
+                4_500, 8_000, 2, normalized);
         DefaultLoadControl load = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(600, 6_000, 120, 350)
                 .setPrioritizeTimeOverSizeThresholds(true)
@@ -135,9 +149,9 @@ final class LivePreviewController implements Player.Listener {
         view.setPlayer(player);
     }
 
-    private void open(String url, String extension, int token) {
+    private void open(String url, String extension, String referer, int token) {
         if (token != generation.get()) return;
-        ensurePlayer();
+        ensurePlayer(referer);
         openedGeneration = token;
         MediaItem.Builder item = new MediaItem.Builder().setUri(url);
         String mime = PlaybackPolicy.mimeType(extension);
@@ -172,10 +186,12 @@ final class LivePreviewController implements Player.Listener {
     private static final class Resolved {
         final String url;
         final String extension;
+        final String referer;
         final long createdAt = android.os.SystemClock.elapsedRealtime();
-        Resolved(String url, String extension) {
+        Resolved(String url, String extension, String referer) {
             this.url = url;
             this.extension = extension;
+            this.referer = referer == null ? "" : referer;
         }
         boolean expired() {
             return android.os.SystemClock.elapsedRealtime() - createdAt > 10 * 60_000L;

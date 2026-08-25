@@ -39,6 +39,7 @@ test("Xtream live streams default to transport stream and honor provider extensi
   const client = new XtreamClient({ serverUrl: "https://provider.example", username: "user", password: "pass" });
   assert.equal(client.streamUrl("live", "123"), "https://provider.example/live/user/pass/123.ts");
   assert.equal(client.streamUrl("live", "123", "m3u8"), "https://provider.example/live/user/pass/123.m3u8");
+  assert.equal(client.streamUrl("live", "123", "ts", "no-extension"), "https://provider.example/live/user/pass/123");
   assert.equal(extensionFromUrl("https://cdn.example/live/123.m3u8?token=private"), "m3u8");
   assert.equal(extensionFromUrl("https://cdn.example/live/123"), "");
 });

@@ -1,6 +1,7 @@
 package tv.blofy.player;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -135,6 +136,14 @@ public final class SettingsActivity extends Activity {
         addSettingRow(guide, "حركة الواجهة", "تأثير التركيز والانتقال بين العناصر", motion);
 
         LinearLayout system = section(page, "التخزين والنظام", "إدارة البيانات وفحص حالة التطبيق");
+        Button switchPlaylist = BlofyUi.button(this, "اختيار قائمة التشغيل", false);
+        switchPlaylist.setOnClickListener(v -> openPlaylistHub());
+        addSettingRow(system, "قوائم التشغيل",
+                "العودة إلى القائمة المحفوظة أو إضافة سيرفر جديد", switchPlaylist);
+        Button logoutPlaylist = BlofyUi.button(this, "تسجيل الخروج", false);
+        logoutPlaylist.setOnClickListener(v -> logoutCurrentPlaylist());
+        addSettingRow(system, "الخروج من القائمة الحالية",
+                "حذف جلسة السيرفر الحالية والعودة إلى إضافة قائمة تشغيل", logoutPlaylist);
         Button clearProgress = BlofyUi.button(this, "مسح سجل المشاهدة", false);
         clearProgress.setOnClickListener(v -> {
             PlaybackProgress.clearAll(this);
@@ -163,6 +172,29 @@ public final class SettingsActivity extends Activity {
         shell.addView(scroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         setContentView(shell);
         stream.requestFocus();
+    }
+
+    private void openPlaylistHub() {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+        finish();
+    }
+
+    private void logoutCurrentPlaylist() {
+        ToastBridge.show(this, "جاري تسجيل الخروج من قائمة التشغيل");
+        new Thread(() -> {
+            BlofyApi api = new BlofyApi(this);
+            try { api.delete("/api/device/profile"); }
+            catch (Exception ignored) {
+                try { api.delete("/api/session"); } catch (Exception ignoredAgain) {}
+            }
+            api.clearSession();
+            CatalogDatabase database = new CatalogDatabase(this);
+            database.beginFreshImport();
+            database.close();
+            runOnUiThread(this::openPlaylistHub);
+        }, "blofy-playlist-logout").start();
     }
 
     private LinearLayout section(LinearLayout page, String title, String description) {

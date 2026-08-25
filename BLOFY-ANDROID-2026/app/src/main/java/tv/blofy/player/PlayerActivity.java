@@ -29,6 +29,7 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -59,6 +60,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     public static final String EXTRA_KIND = "kind";
     public static final String EXTRA_EXTENSION = "extension";
     public static final String EXTRA_CATEGORY_ID = "category_id";
+    public static final String EXTRA_REFERER = "referer";
 
     private PlayerView playerView;
     private ProgressBar progress;
@@ -75,6 +77,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private String kind;
     private String extension;
     private String categoryId;
+    private String playbackReferer = "";
+    private String sourceVariant = "canonical";
     private long resumePosition;
     private int recoveryStep;
     private boolean resolving;
@@ -119,6 +123,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 getIntent().getStringExtra(EXTRA_EXTENSION),
                 isLiveKind(kind) ? "ts" : "mp4"));
         categoryId = valueOr(getIntent().getStringExtra(EXTRA_CATEGORY_ID), "");
+        playbackReferer = valueOr(getIntent().getStringExtra(EXTRA_REFERER), "");
         recoveryStep = preferredRecoveryStep();
 
         buildUi();
@@ -301,7 +306,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
             try {
                 String apiType = "series".equals(kind) ? "episode" : kind;
                 JSONObject data = new BlofyApi(this).get("/api/native-link/" + BlofyApi.encode(apiType) + "/"
-                        + BlofyApi.encode(id) + "?ext=" + BlofyApi.encode(extension));
+                        + BlofyApi.encode(id) + "?ext=" + BlofyApi.encode(extension)
+                        + "&variant=" + BlofyApi.encode(sourceVariant));
                 String resolved = data.optString("url", "");
                 if (!resolved.startsWith("/api/native-play") && !resolved.startsWith("http")) {
                     throw new Exception("الخادم لم يُصدر رابط تشغيل مباشر صحيحًا.");
@@ -310,6 +316,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                         : BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + resolved;
                 extension = configuredExtension(PlaybackPolicy.normalizeExtension(
                         data.optString("extension", extension), extension));
+                playbackReferer = data.optString("referer", playbackReferer);
                 runOnUiThread(() -> {
                     resolving = false;
                     prepareResolvedUrl();
@@ -347,7 +354,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private DataSource.Factory createDataSourceFactory() {
-        return PlaybackTransportFactory.create(this, useCronetNow(), cronetExecutor);
+        return PlaybackTransportFactory.create(this, useCronetNow(), cronetExecutor,
+                3_500, 10_000, recoveryStep, playbackReferer);
     }
 
     private DefaultLoadControl createLoadControl() {
@@ -380,7 +388,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         String mimeType = PlaybackPolicy.mimeType(extension);
         if (mimeType != null) itemBuilder.setMimeType(mimeType);
         MediaItem item = itemBuilder.build();
-        return PlaybackPolicy.isHls(extension)
+        return PlaybackPolicy.isHls(extension) && !"no-extension".equals(sourceVariant)
                 ? new HlsMediaSource.Factory(dataSourceFactory)
                     .setExtractorFactory(new DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
                 : mediaSourceFactory.createMediaSource(item);
@@ -454,6 +462,8 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         id = media.id;
         title = media.name;
         extension = configuredExtension(PlaybackPolicy.normalizeExtension(media.extension, "ts"));
+        sourceVariant = "canonical";
+        playbackReferer = "";
         url = null;
         resumePosition = 0;
         recoveryStep = preferredRecoveryStep();
@@ -485,6 +495,14 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if (isLive() && allowAlternateLiveFormat() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
             reopenResolvedSource(false); return;
         }
+        if (isLive() && allowAlternateLiveFormat() && recoveryStep == 4
+                && !"no-extension".equals(sourceVariant) && !id.isEmpty()) {
+            sourceVariant = "no-extension";
+            url = null;
+            Log.i(TAG, "live-url-fallback variant=no-extension transport=" + activeTransportName());
+            resolvePlaybackLink();
+            return;
+        }
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
         errorText.setText("تعذر تشغيل المصدر. آخر سبب: " + reason + "\nالصيغة: " + extension
@@ -500,9 +518,12 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void manualRetry() {
         recoveryStep = preferredRecoveryStep();
+        sourceVariant = "canonical";
+        playbackReferer = "";
         warmLiveSwitchPending = false;
         releasePlayer();
-        reopenResolvedSource(!validUrl(url));
+        url = null;
+        reopenResolvedSource(true);
     }
 
     @Override public void onPlaybackStateChanged(int playbackState) {
@@ -552,7 +573,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 return;
             } catch (Exception ignored) {}
         }
-        recoverFromFailure(error.getErrorCodeName());
+        recoverFromFailure(playbackErrorReason(error));
+    }
+
+    private static String playbackErrorReason(PlaybackException error) {
+        if (error == null) return "Media3 error";
+        Throwable cause = error;
+        while (cause != null) {
+            if (cause instanceof HttpDataSource.InvalidResponseCodeException) {
+                int status = ((HttpDataSource.InvalidResponseCodeException) cause).responseCode;
+                return "HTTP " + status;
+            }
+            cause = cause.getCause();
+        }
+        return error.getErrorCodeName();
     }
 
     private String positionKey() {

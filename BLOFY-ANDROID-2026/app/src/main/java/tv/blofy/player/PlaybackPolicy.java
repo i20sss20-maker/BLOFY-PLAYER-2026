@@ -10,7 +10,7 @@ import java.util.Locale;
 final class PlaybackPolicy {
     static final int INITIAL_STARTUP_TIMEOUT_MS = 3_500;
     static final int RETRY_STARTUP_TIMEOUT_MS = 5_500;
-    static final int MAX_RECOVERY_STEPS = 3;
+    static final int MAX_RECOVERY_STEPS = 4;
 
     private PlaybackPolicy() {}
 

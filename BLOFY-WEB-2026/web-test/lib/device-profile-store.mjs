@@ -100,6 +100,21 @@ export class DeviceProfileStore {
       return record.profileToken || "";
     });
   }
+
+  clearWithDeviceKey(deviceId, deviceKey) {
+    return this.locked(async () => {
+      const id = cleanDeviceId(deviceId);
+      const record = this.data.devices[id];
+      const suppliedHash = keyHash(deviceKey);
+      if (!record || !safeEqual(record.keyHash, suppliedHash)) {
+        throw new Error("الجهاز غير مسجل أو تغيّر مفتاحه.");
+      }
+      record.profileToken = "";
+      record.updatedAt = Date.now();
+      await this.persist();
+      return { deviceId: id, configured: false, updatedAt: record.updatedAt };
+    });
+  }
 }
 
 export async function persistDeviceSessionFromHeaders(store, headers = {}, profileToken = "") {

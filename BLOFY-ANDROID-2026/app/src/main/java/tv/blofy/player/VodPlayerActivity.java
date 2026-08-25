@@ -33,6 +33,7 @@ import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -87,11 +88,14 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private String kind;
     private String extension;
     private String resolvedUrl;
+    private String playbackReferer = "";
+    private String sourceVariant = "canonical";
     private long resumePosition;
     private boolean useCronet;
     private boolean usingVlc;
     private boolean firstFrame;
     private boolean resolving;
+    private boolean alternateSourceAttempted;
     private boolean stoppedByLifecycle;
     private int attempt;
     private int vlcAudioIndex = -1;
@@ -311,6 +315,9 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
             attempt = 0;
             useCronet = false;
             usingVlc = false;
+            sourceVariant = "canonical";
+            alternateSourceAttempted = false;
+            playbackReferer = "";
             releaseAllEngines();
             resolvedUrl = "";
             resolving = false;
@@ -338,7 +345,8 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 String apiType = "episode".equals(kind) || "series".equals(kind) ? "episode" : "movies";
                 JSONObject data = new BlofyApi(this).get(
                         "/api/native-link/" + BlofyApi.encode(apiType) + "/" + BlofyApi.encode(id)
-                                + "?ext=" + BlofyApi.encode(extension));
+                                + "?ext=" + BlofyApi.encode(extension)
+                                + "&variant=" + BlofyApi.encode(sourceVariant));
                 String result = data.optString("url", "");
                 if (result.startsWith("/")) {
                     result = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + result;
@@ -347,10 +355,12 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 String finalUrl = result;
                 String finalExtension = PlaybackPolicy.normalizeExtension(
                         data.optString("extension", extension), extension);
+                String finalReferer = data.optString("referer", playbackReferer);
                 main.post(() -> {
                     if (destroyed || token != resolveGeneration || isFinishing()) return;
                     resolvedUrl = finalUrl;
                     extension = finalExtension;
+                    playbackReferer = finalReferer;
                     resolving = false;
                     if (!lifecycleStopped) openMedia3();
                 });
@@ -375,7 +385,8 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         DataSource.Factory source = PlaybackTransportFactory.create(
                 this, useCronet, cronetExecutor,
                 ultraHd() ? 6_000 : 4_000,
-                ultraHd() ? 45_000 : 30_000);
+                ultraHd() ? 45_000 : 30_000,
+                attempt, playbackReferer);
         DefaultExtractorsFactory extractors = new DefaultExtractorsFactory();
         DefaultMediaSourceFactory mediaSources = new DefaultMediaSourceFactory(source, extractors);
         DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
@@ -423,7 +434,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 .setUri(PlaybackPolicy.directPlaybackUrl(resolvedUrl))
                 .setMediaId(title);
         String mime = PlaybackPolicy.mimeType(extension);
-        if (mime != null && !"mkv".equalsIgnoreCase(extension) && !"webm".equalsIgnoreCase(extension)) {
+        if (mime != null && (PlaybackPolicy.isHls(extension) || "mpd".equalsIgnoreCase(extension))) {
             item.setMimeType(mime);
         }
         player.setMediaItem(item.build(), Math.max(0, resumePosition));
@@ -465,7 +476,8 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
         org.videolan.libvlc.Media media = new org.videolan.libvlc.Media(libVLC, Uri.parse(resolvedUrl));
         media.setHWDecoderEnabled(true, false);
-        media.addOption(":http-user-agent=BLOFY-PLAYER/2026 AndroidTV");
+        media.addOption(":http-user-agent=" + PlaybackTransportFactory.userAgent(2));
+        if (!playbackReferer.isEmpty()) media.addOption(":http-referrer=" + playbackReferer);
         media.addOption(":network-caching=" + (ultraHd() ? "1000" : "700"));
         if (stereoMode) media.addOption(":stereo-mode=1");
         vlcPlayer.setMedia(media);
@@ -525,11 +537,24 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private void recover(String reason) {
         main.removeCallbacks(startupTimeout);
         savePosition();
+        String upperReason = reason == null ? "" : reason.toUpperCase(Locale.US);
+        boolean networkFailure = upperReason.contains("HTTP") || upperReason.contains("IO_")
+                || upperReason.contains("NETWORK") || upperReason.contains("CONNECTION");
+        if (!usingVlc && networkFailure && !alternateSourceAttempted && !id.isEmpty()) {
+            alternateSourceAttempted = true;
+            sourceVariant = "direct";
+            attempt = 0;
+            useCronet = false;
+            releaseAllEngines();
+            resolvedUrl = "";
+            resolving = false;
+            resolve();
+            return;
+        }
         if (usingVlc) {
             showError(reason + "\nالصيغة: " + extension + "\nتمت تجربة Media3 وVLC");
             return;
         }
-        String upperReason = reason == null ? "" : reason.toUpperCase(Locale.US);
         boolean decoderFailure = upperReason.contains("DECOD") || upperReason.contains("CODEC")
                 || upperReason.contains("FORMAT_UNSUPPORTED") || ultraHd();
         if (decoderFailure) {
@@ -581,7 +606,20 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
     @Override public void onPlayerError(PlaybackException error) {
         if (usingVlc) return;
-        recover(error == null ? "Media3 error" : error.getErrorCodeName());
+        recover(playbackErrorReason(error));
+    }
+
+    private static String playbackErrorReason(PlaybackException error) {
+        if (error == null) return "Media3 error";
+        Throwable cause = error;
+        while (cause != null) {
+            if (cause instanceof HttpDataSource.InvalidResponseCodeException) {
+                int status = ((HttpDataSource.InvalidResponseCodeException) cause).responseCode;
+                return "HTTP " + status;
+            }
+            cause = cause.getCause();
+        }
+        return error.getErrorCodeName();
     }
 
     private long positionMs() {
