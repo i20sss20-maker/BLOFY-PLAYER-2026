@@ -16,10 +16,11 @@ jobs:
         run: |
           set -euo pipefail
           build_tools="$(find "${ANDROID_SDK_ROOT}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          mkdir -p /tmp/blofy-signing-tools/lib
+          mkdir -p /tmp/blofy-signing-tools/lib /tmp/blofy-signing-tools/lib64
           cp "${build_tools}/apksigner" /tmp/blofy-signing-tools/
           cp "${build_tools}/zipalign" /tmp/blofy-signing-tools/
           cp "${build_tools}/lib/apksigner.jar" /tmp/blofy-signing-tools/lib/
+          cp "${build_tools}/lib64/libc++.so" /tmp/blofy-signing-tools/lib64/
           chmod +x /tmp/blofy-signing-tools/apksigner /tmp/blofy-signing-tools/zipalign
 
       - name: Upload signing tools
