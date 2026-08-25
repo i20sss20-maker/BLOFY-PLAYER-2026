@@ -39,6 +39,7 @@ import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import androidx.media3.ui.PlayerView;
+import androidx.media3.ui.AspectRatioFrameLayout;
 
 import org.json.JSONObject;
 
@@ -57,6 +58,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     public static final String EXTRA_TITLE = "title";
     public static final String EXTRA_KIND = "kind";
     public static final String EXTRA_EXTENSION = "extension";
+    public static final String EXTRA_CATEGORY_ID = "category_id";
 
     private PlayerView playerView;
     private ProgressBar progress;
@@ -72,6 +74,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private String title;
     private String kind;
     private String extension;
+    private String categoryId;
     private long resumePosition;
     private int recoveryStep;
     private boolean resolving;
@@ -115,6 +118,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         extension = configuredExtension(PlaybackPolicy.normalizeExtension(
                 getIntent().getStringExtra(EXTRA_EXTENSION),
                 isLiveKind(kind) ? "ts" : "mp4"));
+        categoryId = valueOr(getIntent().getStringExtra(EXTRA_CATEGORY_ID), "");
         recoveryStep = preferredRecoveryStep();
 
         buildUi();
@@ -196,6 +200,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
         playerView.setKeepScreenOn(true);
         playerView.setFocusable(true);
+        playerView.setResizeMode(isLive()
+                ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                : AspectRatioFrameLayout.RESIZE_MODE_FIT);
         root.addView(playerView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -223,7 +230,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         root.addView(progress, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
 
         if (isLive()) {
-            liveOverlay = new LiveChannelOverlay(this, this::switchLiveChannel);
+            liveOverlay = new LiveChannelOverlay(this, categoryId, this::switchLiveChannel);
             View overlayView = liveOverlay.view();
             overlayView.setElevation(dp(20));
             root.addView(overlayView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -349,10 +356,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         if ("fast".equals(mode) && isLive() && !isUltraHd()) {
             minBuffer = 1_500; maxBuffer = 10_000; playbackBuffer = 350; rebuffer = 1_000;
         } else if ("stable".equals(mode) || (isLive() && isUltraHd())) {
-            minBuffer = isLive() ? 12_000 : 18_000;
-            maxBuffer = isLive() ? 60_000 : 90_000;
-            playbackBuffer = isLive() ? 1_500 : 1_800;
-            rebuffer = isLive() ? 6_000 : 4_000;
+            minBuffer = isLive() ? 5_000 : 12_000;
+            maxBuffer = isLive() ? 35_000 : 75_000;
+            playbackBuffer = isLive() ? 850 : 1_200;
+            rebuffer = isLive() ? 2_500 : 3_000;
         } else if (isLive()) {
             minBuffer = 2_500; maxBuffer = 18_000; playbackBuffer = 600; rebuffer = 1_800;
         } else {
@@ -620,6 +627,12 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                     if (isLive() && liveOverlay != null && !liveOverlay.isVisible()) {
                         liveOverlay.show(id); return true;
                     }
+                    break;
+                case KeyEvent.KEYCODE_CHANNEL_UP:
+                    if (isLive() && liveOverlay != null) { liveOverlay.selectRelative(id, -1); return true; }
+                    break;
+                case KeyEvent.KEYCODE_CHANNEL_DOWN:
+                    if (isLive() && liveOverlay != null) { liveOverlay.selectRelative(id, 1); return true; }
                     break;
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                     if (player != null) { if (player.isPlaying()) player.pause(); else player.play(); }
