@@ -9,6 +9,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.GridLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -36,7 +37,160 @@ public final class SettingsActivity extends Activity {
         getWindow().setStatusBarColor(BlofyUi.BLACK);
         getWindow().setNavigationBarColor(BlofyUi.BLACK);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        build();
+        buildGrid();
+    }
+
+    /** Remote-first settings grid matching the compact BLOFY launcher. */
+    private void buildGrid() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackground(BlofyUi.screenGradient());
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        page.setPadding(dp(34), dp(22), dp(34), dp(24));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        Button back = BlofyUi.button(this, "↩  رجوع", false);
+        back.setOnClickListener(v -> finish());
+        header.addView(back, new LinearLayout.LayoutParams(dp(150), dp(52)));
+        View space = new View(this);
+        header.addView(space, new LinearLayout.LayoutParams(0, 1, 1f));
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        TextView title = BlofyUi.title(this, "الإعدادات", 29);
+        title.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        TextView subtitle = BlofyUi.text(this,
+                "تحكم كامل بالتشغيل والصوت والترجمة من شاشة واحدة", 12, BlofyUi.MUTED);
+        subtitle.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        titles.addView(title, new LinearLayout.LayoutParams(dp(600), dp(38)));
+        titles.addView(subtitle, new LinearLayout.LayoutParams(dp(600), dp(26)));
+        header.addView(titles, new LinearLayout.LayoutParams(dp(620), dp(66)));
+        page.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(76)));
+
+        GridLayout grid = new GridLayout(this);
+        int columns = BlofyUi.isTv(this) ? 4 : 2;
+        grid.setColumnCount(columns);
+        grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
+        grid.setUseDefaultMargins(false);
+
+        addGridSetting(grid, gridCycle("⚡  وضع الأداء", DeviceCapabilityProfile.KEY_PERFORMANCE_MODE,
+                new String[]{"auto", "fast", "quality"},
+                new String[]{"تلقائي", "سريع", "جودة أعلى"}, ImageLoader::resetRuntime));
+        addGridSetting(grid, gridCycle("◉  صيغة البث", KEY_STREAM,
+                new String[]{"auto", "ts", "hls"}, new String[]{"تلقائي", "MPEG-TS", "HLS"}, null));
+        addGridSetting(grid, gridCycle("▶  مشغل الفيديو", KEY_DECODER,
+                new String[]{"auto", "hardware", "software"},
+                new String[]{"تلقائي", "عتادي", "برمجي"}, null));
+        addGridSetting(grid, gridCycle("↻  التخزين المؤقت", KEY_BUFFER,
+                new String[]{"fast", "auto", "stable"},
+                new String[]{"سريع", "تلقائي", "ثابت / 4K"}, null));
+
+        addGridSetting(grid, gridCycle("▣  حجم الصورة", KEY_ASPECT,
+                new String[]{"fit", "zoom", "fill"},
+                new String[]{"ملاءمة", "تكبير", "ملء الشاشة"}, null));
+        addGridSetting(grid, gridCycle("♫  مخرج الصوت", KEY_AUDIO_OUTPUT,
+                new String[]{"auto", "stereo"}, new String[]{"تلقائي", "ستيريو 2.0"}, null));
+        addGridSetting(grid, gridCycle("CC  لغة الترجمة", KEY_SUBTITLE_LANGUAGE,
+                new String[]{"ar", "auto", "off"},
+                new String[]{"العربية أولًا", "تلقائي", "إيقاف"}, null));
+        addGridSetting(grid, gridCycle("A  حجم الترجمة", KEY_SUBTITLE_SIZE,
+                new String[]{"small", "medium", "large"},
+                new String[]{"صغير", "متوسط", "كبير"}, null));
+
+        addGridSetting(grid, gridCycle("◉  معاينة المباشر", KEY_AUTOPLAY_LIVE,
+                new String[]{"on", "off"}, new String[]{"تلقائي", "يدوي"}, null));
+        addGridSetting(grid, gridCycle("◷  مواصلة المشاهدة", KEY_RESUME_PROMPT,
+                new String[]{"on", "off"}, new String[]{"اسألني", "تشغيل مباشر"}, null));
+        addGridSetting(grid, gridCycle("▶  الحلقة التالية", KEY_AUTO_NEXT,
+                new String[]{"ask", "on", "off"},
+                new String[]{"اسألني", "تلقائي", "إيقاف"}, null));
+        addGridSetting(grid, gridCycle("◴  توقيت الدليل", KEY_EPG_TIMEZONE,
+                new String[]{"device", "riyadh", "utc"},
+                new String[]{"وقت الجهاز", "الرياض", "UTC"}, null));
+
+        addGridSetting(grid, gridCycle("✦  حركة الواجهة", KEY_MOTION,
+                new String[]{"smooth", "reduced"}, new String[]{"سلسة", "خفيفة"}, null));
+        addGridSetting(grid, gridAction("▤  تغيير قائمة التشغيل", "القوائم المحفوظة",
+                this::openPlaylistHub));
+        addGridSetting(grid, gridAction("⌫  مسح سجل المشاهدة", "المفضلة لا تتأثر", () -> {
+            PlaybackProgress.clearAll(this);
+            ToastBridge.show(this, "تم مسح سجل المشاهدة");
+        }));
+        addGridSetting(grid, gridAction("✓  فحص التشغيل", "Media3 + VLC + FFmpeg", () ->
+                ToastBridge.show(this, "المحركات جاهزة • Media3 + VLC + FFmpeg")));
+
+        addGridSetting(grid, gridAction("↻  تحديث القائمة", "إعادة جلب القنوات والمحتوى", () -> {
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.putExtra(MainActivity.EXTRA_REFRESH_CATALOG, true);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            startActivity(intent);
+            finish();
+        }));
+        addGridSetting(grid, gridAction("⟲  استعادة التلقائي", "إلغاء التعديلات", () -> {
+            prefs.edit().clear().apply();
+            buildGrid();
+        }));
+        addGridSetting(grid, gridAction("↪  فصل القائمة", "إبقاء بيانات القوائم محفوظة",
+                this::logoutCurrentPlaylist));
+        addGridSetting(grid, gridAction("ℹ  معلومات الجهاز",
+                DeviceIdentity.displayId(this) + "  •  " + DeviceIdentity.activationCode(this),
+                () -> ToastBridge.show(this, "BLOFY PLAYER v328")));
+
+        page.addView(grid, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView footer = BlofyUi.text(this,
+                "BLOFY PLAYER v328    •    " + DeviceIdentity.displayId(this),
+                11, BlofyUi.MUTED);
+        footer.setGravity(Gravity.CENTER);
+        footer.setTextDirection(View.TEXT_DIRECTION_LTR);
+        LinearLayout.LayoutParams footerParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        footerParams.setMargins(0, dp(14), 0, 0);
+        page.addView(footer, footerParams);
+
+        scroll.addView(page);
+        setContentView(scroll);
+        if (grid.getChildCount() > 0) grid.getChildAt(0).requestFocus();
+    }
+
+    private Button gridCycle(String title, String key, String[] values, String[] labels,
+                             Runnable afterChange) {
+        Button button = BlofyUi.button(this, "", false);
+        Runnable refresh = () -> {
+            int index = indexOf(values, prefs.getString(key, values[0]));
+            button.setText(title + "\n" + labels[index]);
+        };
+        refresh.run();
+        button.setOnClickListener(v -> {
+            int current = indexOf(values, prefs.getString(key, values[0]));
+            int next = (current + 1) % values.length;
+            prefs.edit().putString(key, values[next]).apply();
+            if (afterChange != null) afterChange.run();
+            refresh.run();
+        });
+        return button;
+    }
+
+    private Button gridAction(String title, String status, Runnable action) {
+        Button button = BlofyUi.button(this, title + "\n" + status, false);
+        button.setOnClickListener(v -> action.run());
+        return button;
+    }
+
+    private void addGridSetting(GridLayout grid, Button button) {
+        GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+        params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
+        params.width = 0;
+        params.height = dp(88);
+        params.setMargins(dp(5), dp(5), dp(5), dp(5));
+        grid.addView(button, params);
     }
 
     private void build() {
