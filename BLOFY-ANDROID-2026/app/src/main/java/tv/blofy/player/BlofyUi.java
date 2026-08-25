@@ -262,8 +262,13 @@ final class BlofyUi {
 
     static void attachScaleFocus(View view, float scale) {
         view.setOnFocusChangeListener((v, focused) -> {
-            float target = focused ? scale : 1f;
-            v.animate().scaleX(target).scaleY(target).setDuration(105).start();
+            String motion = v.getContext().getSharedPreferences(SettingsActivity.PREFS,
+                    Context.MODE_PRIVATE).getString(SettingsActivity.KEY_MOTION, "smooth");
+            float effectiveScale = "reduced".equals(motion) ? Math.min(scale, 1.01f) : scale;
+            float target = focused ? effectiveScale : 1f;
+            v.animate().cancel();
+            v.animate().scaleX(target).scaleY(target)
+                    .setDuration("reduced".equals(motion) ? 70 : 115).start();
             v.setElevation(focused ? dp(v.getContext(), 12) : 0);
         });
     }
