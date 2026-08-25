@@ -1,5 +1,5 @@
-name: Prepare v326 APK handoff
-# One-time private signing handoff and live deployment verification for v326.
+name: Prepare v327 APK handoff
+# One-time private signing handoff for the CI-verified v327 Android package.
 
 on:
   push:
@@ -25,40 +25,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/v326-release /tmp/v326-handoff
-          gh release download v326-unsigned-1419163757dc \
+          mkdir -p /tmp/v327-release /tmp/v327-handoff
+          gh release download v327-unsigned-8f27b77e83c5 \
             --pattern 'BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk' \
-            --dir /tmp/v326-release
-          APK=/tmp/v326-release/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
+            --dir /tmp/v327-release
+          APK=/tmp/v327-release/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
           test -s "$APK"
-          zip -9 -j /tmp/BLOFY-PLAYER-v326-UNSIGNED.zip "$APK"
-          base64 -w 2000000 /tmp/BLOFY-PLAYER-v326-UNSIGNED.zip \
-            | split -d -a 3 -l 1 - /tmp/v326-handoff/chunk-
+          zip -9 -j /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip "$APK"
+          base64 -w 2000000 /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip \
+            | split -d -a 3 -l 1 - /tmp/v327-handoff/chunk-
           {
             printf 'apk_sha256='; sha256sum "$APK" | cut -d' ' -f1
             printf 'apk_size='; stat -c '%s' "$APK"
-            printf 'zip_sha256='; sha256sum /tmp/BLOFY-PLAYER-v326-UNSIGNED.zip | cut -d' ' -f1
-            printf 'zip_size='; stat -c '%s' /tmp/BLOFY-PLAYER-v326-UNSIGNED.zip
-            printf 'chunk_count='; find /tmp/v326-handoff -name 'chunk-*' -type f | wc -l
-          } > /tmp/v326-handoff/manifest.txt
-
-      - name: Verify live Railway deployment
-        shell: bash
-        run: |
-          set -euo pipefail
-          HEALTH=/tmp/v326-handoff/deployment-health.json
-          for attempt in $(seq 1 60); do
-            response=$(curl -fsS --max-time 15 \
-              https://blofy-player-2026-production.up.railway.app/api/health || true)
-            printf '%s\n' "$response" > "$HEALTH"
-            if grep -Fq '"version":"2026.08.26.2-v326"' "$HEALTH" \
-              && grep -Fq '"portal":"v326-device-recovery"' "$HEALTH"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          sed -n '1,5p' "$HEALTH"
-          exit 1
+            printf 'zip_sha256='; sha256sum /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip | cut -d' ' -f1
+            printf 'zip_size='; stat -c '%s' /tmp/BLOFY-PLAYER-v327-UNSIGNED.zip
+            printf 'chunk_count='; find /tmp/v327-handoff -name 'chunk-*' -type f | wc -l
+          } > /tmp/v327-handoff/manifest.txt
 
       - name: Publish private handoff branch
         shell: bash
@@ -66,10 +48,10 @@ jobs:
           set -euo pipefail
           git config user.name blofy-ci
           git config user.email actions@users.noreply.github.com
-          git checkout --orphan v326-apk-handoff
+          git checkout --orphan v327-apk-handoff
           git rm -rf .
-          mkdir -p v326-handoff
-          cp /tmp/v326-handoff/* v326-handoff/
-          git add v326-handoff
-          git commit -m 'ci: verify v326 deployment and prepare APK handoff'
-          git push --force origin HEAD:refs/heads/v326-apk-handoff
+          mkdir -p v327-handoff
+          cp /tmp/v327-handoff/* v327-handoff/
+          git add v327-handoff
+          git commit -m 'ci: prepare v327 unsigned APK handoff'
+          git push --force origin HEAD:refs/heads/v327-apk-handoff
