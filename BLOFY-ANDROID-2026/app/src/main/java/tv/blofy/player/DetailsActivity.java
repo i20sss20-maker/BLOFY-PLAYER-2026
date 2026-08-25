@@ -144,6 +144,10 @@ public final class DetailsActivity extends Activity {
         scrim.setBackground(BlofyUi.heroScrim());
         hero.addView(scrim, match());
 
+        int screenHeightDp = Math.round(getResources().getDisplayMetrics().heightPixels
+                / getResources().getDisplayMetrics().density);
+        int posterHeight = screenHeightDp < 620 ? 238 : 316;
+        int posterWidth = Math.round(posterHeight * 0.69f);
         ImageView poster = new ImageView(this);
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
         poster.setClipToOutline(true);
@@ -152,7 +156,7 @@ public final class DetailsActivity extends Activity {
         String posterImage = detail.image.isEmpty() ? item.image : detail.image;
         images.load(poster, posterImage);
         FrameLayout.LayoutParams posterParams = new FrameLayout.LayoutParams(
-                dp(218), dp(316), Gravity.LEFT | Gravity.CENTER_VERTICAL);
+                dp(posterWidth), dp(posterHeight), Gravity.LEFT | Gravity.CENTER_VERTICAL);
         posterParams.leftMargin = dp(24);
         hero.addView(poster, posterParams);
 
@@ -271,7 +275,7 @@ public final class DetailsActivity extends Activity {
         FrameLayout.LayoutParams infoParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        infoParams.leftMargin = dp(258);
+        infoParams.leftMargin = dp(posterWidth + 40);
         infoParams.rightMargin = dp(24);
         hero.addView(info, infoParams);
         LinearLayout.LayoutParams heroParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
