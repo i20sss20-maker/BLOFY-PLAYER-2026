@@ -96,7 +96,6 @@ final class BlofyModels {
         final String releaseDate;
         final String ratingSource;
         final String updatedAt;
-        final String director;
 
         Media(String id, String name, String image, String backdrop, String categoryId,
               String rating, String year, String extension, String type) {
@@ -227,6 +226,7 @@ final class BlofyModels {
         final String releaseDate;
         final String ratingSource;
         final String updatedAt;
+        final String director;
         final List<Season> seasons = new ArrayList<>();
         final List<Actor> cast = new ArrayList<>();
         final List<Rating> ratings = new ArrayList<>();
