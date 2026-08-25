@@ -1,5 +1,5 @@
 name: Prepare v326 APK handoff
-# One-time private signing handoff for the verified v326 build.
+# One-time private signing handoff and live deployment verification for v326.
 
 on:
   push:
@@ -42,6 +42,24 @@ jobs:
             printf 'chunk_count='; find /tmp/v326-handoff -name 'chunk-*' -type f | wc -l
           } > /tmp/v326-handoff/manifest.txt
 
+      - name: Verify live Railway deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          HEALTH=/tmp/v326-handoff/deployment-health.json
+          for attempt in $(seq 1 60); do
+            response=$(curl -fsS --max-time 15 \
+              https://blofy-player-2026-production.up.railway.app/api/health || true)
+            printf '%s\n' "$response" > "$HEALTH"
+            if grep -Fq '"version":"2026.08.26.2-v326"' "$HEALTH" \
+              && grep -Fq '"portal":"v326-device-recovery"' "$HEALTH"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          sed -n '1,5p' "$HEALTH"
+          exit 1
+
       - name: Publish private handoff branch
         shell: bash
         run: |
@@ -53,5 +71,5 @@ jobs:
           mkdir -p v326-handoff
           cp /tmp/v326-handoff/* v326-handoff/
           git add v326-handoff
-          git commit -m 'ci: prepare v326 unsigned APK handoff'
+          git commit -m 'ci: verify v326 deployment and prepare APK handoff'
           git push --force origin HEAD:refs/heads/v326-apk-handoff
