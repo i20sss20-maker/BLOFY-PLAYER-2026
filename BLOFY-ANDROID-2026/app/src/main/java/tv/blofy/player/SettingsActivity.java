@@ -18,6 +18,15 @@ public final class SettingsActivity extends Activity {
     static final String KEY_STREAM = "stream_mode";
     static final String KEY_DECODER = "decoder_mode";
     static final String KEY_BUFFER = "buffer_mode";
+    static final String KEY_AUDIO_OUTPUT = "audio_output";
+    static final String KEY_SUBTITLE_LANGUAGE = "subtitle_language";
+    static final String KEY_SUBTITLE_SIZE = "subtitle_size";
+    static final String KEY_ASPECT = "aspect_mode";
+    static final String KEY_AUTOPLAY_LIVE = "autoplay_live";
+    static final String KEY_RESUME_PROMPT = "resume_prompt";
+    static final String KEY_AUTO_NEXT = "auto_next_episode";
+    static final String KEY_EPG_TIMEZONE = "epg_timezone";
+    static final String KEY_MOTION = "motion_mode";
 
     private SharedPreferences prefs;
 
@@ -46,7 +55,8 @@ public final class SettingsActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
         selectedParams.topMargin = dp(42);
         sidebar.addView(selected, selectedParams);
-        TextView device = BlofyUi.text(this, "معرّف الجهاز\n" + DeviceIdentity.id(this), 11, BlofyUi.MUTED);
+        TextView device = BlofyUi.text(this, "معرّف الجهاز\n" + DeviceIdentity.displayId(this)
+                + "\nرمز الجهاز  " + DeviceIdentity.activationCode(this), 11, BlofyUi.MUTED);
         device.setTextDirection(View.TEXT_DIRECTION_LTR);
         device.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams deviceParams = new LinearLayout.LayoutParams(
@@ -76,14 +86,7 @@ public final class SettingsActivity extends Activity {
                 14, BlofyUi.MUTED);
         page.addView(note, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(18), dp(14), dp(18), dp(14));
-        panel.setBackground(BlofyUi.panel(this, Color.argb(228, 15, 13, 28), 18, BlofyUi.STROKE));
-        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        pp.setMargins(0, dp(18), 0, 0);
-        page.addView(panel, pp);
-
+        LinearLayout panel = section(page, "التشغيل والأداء", "سرعة البداية والتوافق مع صيغ البث المختلفة");
         Button stream = cycleButton("صيغة البث", KEY_STREAM, new String[]{"auto", "ts", "hls"}, new String[]{"Auto", "MPEG-TS", "HLS"});
         addSettingRow(panel, "صيغة البث", "اختيار الصيغة الأنسب للقنوات المباشرة", stream);
         Button decoder = cycleButton("فك الترميز", KEY_DECODER, new String[]{"auto", "hardware", "software"}, new String[]{"Auto", "Hardware", "Software fallback"});
@@ -91,12 +94,57 @@ public final class SettingsActivity extends Activity {
         Button buffer = cycleButton("Buffer", KEY_BUFFER, new String[]{"fast", "auto", "stable"}, new String[]{"Fast", "Auto", "Stable / 4K"});
         addSettingRow(panel, "التخزين المؤقت", "Fast للسرعة، وStable للبث الثقيل و4K", buffer);
 
-        TextView info = BlofyUi.text(this,
-                "• Fast: أسرع فتح للقنوات العادية\n• Auto: توازن السرعة والثبات\n• Stable / 4K: Buffer أكبر للقنوات الثقيلة\n• Software fallback يستخدم فقط عند تعذر الـHardware decoder.",
-                13, BlofyUi.MUTED);
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        ip.setMargins(0, dp(15), 0, dp(15));
-        page.addView(info, ip);
+        Button aspect = cycleButton("حجم الصورة", KEY_ASPECT,
+                new String[]{"fit", "zoom", "fill"}, new String[]{"ملاءمة", "تكبير", "ملء الشاشة"});
+        addSettingRow(panel, "نسبة عرض الفيديو", "تثبيت طريقة عرض الصورة في الأفلام والمسلسلات", aspect);
+
+        LinearLayout sound = section(page, "الصوت والترجمة", "اللغة والمخرج المفضلان عند بداية التشغيل");
+        Button audio = cycleButton("الصوت", KEY_AUDIO_OUTPUT,
+                new String[]{"auto", "stereo", "passthrough"}, new String[]{"تلقائي", "ستيريو 2.0", "Dolby / تمرير"});
+        addSettingRow(sound, "مخرج الصوت", "اختيار تلقائي أو ستيريو أو تمرير الصوت المحيطي", audio);
+        Button subtitle = cycleButton("الترجمة", KEY_SUBTITLE_LANGUAGE,
+                new String[]{"ar", "auto", "off"}, new String[]{"العربية أولًا", "تلقائي", "إيقاف"});
+        addSettingRow(sound, "لغة الترجمة", "يفضّل المسار العربي إذا كان موجودًا داخل الملف", subtitle);
+        Button subtitleSize = cycleButton("الحجم", KEY_SUBTITLE_SIZE,
+                new String[]{"small", "medium", "large"}, new String[]{"صغير", "متوسط", "كبير"});
+        addSettingRow(sound, "حجم الترجمة", "حجم النص الظاهر فوق الفيديو", subtitleSize);
+
+        LinearLayout live = section(page, "البث المباشر", "سلوك المعاينة والتنقل بين القنوات");
+        Button autoplay = cycleButton("التشغيل", KEY_AUTOPLAY_LIVE,
+                new String[]{"on", "off"}, new String[]{"تشغيل أول قناة", "انتظار الاختيار"});
+        addSettingRow(live, "التشغيل التلقائي", "تشغيل أول قناة ظاهرة عند دخول الفئة", autoplay);
+        addSettingRow(live, "تبديل القنوات", "الأسهم داخل القائمة و CH+/CH- داخل نفس الفئة",
+                lockedButton("مفعّل"));
+
+        LinearLayout vod = section(page, "الأفلام والمسلسلات", "الاستئناف وترتيب الحلقات");
+        Button resume = cycleButton("الاستئناف", KEY_RESUME_PROMPT,
+                new String[]{"on", "off"}, new String[]{"إظهار دائمًا", "تشغيل مباشر"});
+        addSettingRow(vod, "نافذة الاستئناف", "استئناف المشاهدة أو البدء من جديد", resume);
+        Button nextEpisode = cycleButton("التالي", KEY_AUTO_NEXT,
+                new String[]{"ask", "on", "off"}, new String[]{"اسألني", "تشغيل تلقائي", "إيقاف"});
+        addSettingRow(vod, "الحلقة التالية", "اختيار سلوك التطبيق عند نهاية الحلقة", nextEpisode);
+        addSettingRow(vod, "ترتيب الحلقات", "من الحلقة 1 إلى آخر حلقة داخل كل موسم",
+                lockedButton("1 ← الأخير"));
+
+        LinearLayout guide = section(page, "دليل البرامج والمظهر", "الوقت والحركة داخل واجهة التلفزيون");
+        Button timezone = cycleButton("المنطقة", KEY_EPG_TIMEZONE,
+                new String[]{"device", "riyadh", "utc"}, new String[]{"وقت الجهاز", "الرياض", "UTC"});
+        addSettingRow(guide, "المنطقة الزمنية EPG", "ضبط أوقات البرنامج الحالي والقادم", timezone);
+        Button motion = cycleButton("الحركة", KEY_MOTION,
+                new String[]{"smooth", "reduced"}, new String[]{"سلسة", "خفيفة للأجهزة الضعيفة"});
+        addSettingRow(guide, "حركة الواجهة", "تأثير التركيز والانتقال بين العناصر", motion);
+
+        LinearLayout system = section(page, "التخزين والنظام", "إدارة البيانات وفحص حالة التطبيق");
+        Button clearProgress = BlofyUi.button(this, "مسح سجل المشاهدة", false);
+        clearProgress.setOnClickListener(v -> {
+            PlaybackProgress.clearAll(this);
+            ToastBridge.show(this, "تم مسح سجل المشاهدة");
+        });
+        addSettingRow(system, "سجل المشاهدة", "حذف مواضع الاستئناف والحلقات الأخيرة", clearProgress);
+        Button diagnostic = BlofyUi.button(this, "تشغيل الفحص", false);
+        diagnostic.setOnClickListener(v -> ToastBridge.show(this,
+                "الجهاز جاهز • اختبر مصدر البث من شاشة القناة عند وجود مشكلة"));
+        addSettingRow(system, "فحص التشغيل", "حالة الجهاز والشبكة ومحركات الفيديو", diagnostic);
 
         Button reset = BlofyUi.button(this, "استعادة الإعدادات التلقائية", false);
         reset.setOnClickListener(v -> {
@@ -115,6 +163,32 @@ public final class SettingsActivity extends Activity {
         shell.addView(scroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         setContentView(shell);
         stream.requestFocus();
+    }
+
+    private LinearLayout section(LinearLayout page, String title, String description) {
+        TextView heading = BlofyUi.title(this, title, 19);
+        heading.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        hp.setMargins(0, dp(20), 0, 0);
+        page.addView(heading, hp);
+        TextView detail = BlofyUi.text(this, description, 12, BlofyUi.MUTED);
+        page.addView(detail, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(18), dp(12), dp(18), dp(12));
+        panel.setBackground(BlofyUi.panel(this, Color.argb(228, 15, 13, 28), 18, BlofyUi.STROKE));
+        page.addView(panel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return panel;
+    }
+
+    private Button lockedButton(String label) {
+        Button button = BlofyUi.button(this, label, false);
+        button.setEnabled(false);
+        button.setAlpha(.78f);
+        return button;
     }
 
     private void addSettingRow(LinearLayout panel, String title, String description, Button action) {
