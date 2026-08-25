@@ -39,6 +39,7 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.ui.PlayerView;
+import androidx.media3.ui.AspectRatioFrameLayout;
 
 import org.json.JSONObject;
 import org.videolan.libvlc.interfaces.IVLCVout;
@@ -133,6 +134,8 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         kind = value(getIntent().getStringExtra(EXTRA_KIND));
         extension = PlaybackPolicy.normalizeExtension(getIntent().getStringExtra(EXTRA_EXTENSION), "mp4");
         resumePosition = PlaybackProgress.get(this, kind, id);
+        stereoMode = "stereo".equals(getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
+                .getString(SettingsActivity.KEY_AUDIO_OUTPUT, "auto"));
         PlaybackTransportFactory.warmUpCronet(this);
         buildUi();
         hideSystemUi();
@@ -161,6 +164,12 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
         playerView.setKeepScreenOn(true);
         playerView.setFocusable(true);
+        String aspect = getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
+                .getString(SettingsActivity.KEY_ASPECT, "fit");
+        playerView.setResizeMode("zoom".equals(aspect)
+                ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                : "fill".equals(aspect) ? AspectRatioFrameLayout.RESIZE_MODE_FILL
+                : AspectRatioFrameLayout.RESIZE_MODE_FIT);
         root.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
 
         spinner = new ProgressBar(this);
@@ -194,9 +203,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         engineView.setMaxLines(1);
         engineView.setPadding(dp(14), 0, dp(14), 0);
         engineView.setBackground(cinemaPanel(Color.argb(220, 24, 17, 43), 18, 1, Color.rgb(102, 49, 190)));
-        LinearLayout.LayoutParams engineParams = new LinearLayout.LayoutParams(dp(220), dp(34));
-        engineParams.leftMargin = dp(16);
-        heading.addView(engineView, engineParams);
+        engineView.setVisibility(View.GONE);
         controls.addView(heading, new LinearLayout.LayoutParams(-1, dp(44)));
 
         LinearLayout row = new LinearLayout(this);
@@ -246,6 +253,13 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         LinearLayout.LayoutParams stereoParams = new LinearLayout.LayoutParams(dp(220), dp(42));
         stereoParams.leftMargin = dp(10);
         trackRow.addView(stereoButton, stereoParams);
+        audioButton.setId(View.generateViewId());
+        subtitleButton.setId(View.generateViewId());
+        stereoButton.setId(View.generateViewId());
+        audioButton.setNextFocusRightId(subtitleButton.getId());
+        subtitleButton.setNextFocusLeftId(audioButton.getId());
+        subtitleButton.setNextFocusRightId(stereoButton.getId());
+        stereoButton.setNextFocusLeftId(subtitleButton.getId());
         controls.addView(trackRow, new LinearLayout.LayoutParams(-1, dp(46)));
 
         LinearLayout footer = new LinearLayout(this);
@@ -298,7 +312,9 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
             useCronet = false;
             usingVlc = false;
             releaseAllEngines();
-            if (validUrl(resolvedUrl)) openMedia3(); else resolve();
+            resolvedUrl = "";
+            resolving = false;
+            resolve();
         });
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(dp(260), dp(56));
         rp.topMargin = dp(22);
@@ -355,7 +371,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         firstFrame = false;
         playerView.setVisibility(View.VISIBLE);
         vlcSurface.setVisibility(View.GONE);
-        engineView.setText(useCronet ? "Media3 • Cronet" : "Media3 • HTTP");
 
         DataSource.Factory source = PlaybackTransportFactory.create(
                 this, useCronet, cronetExecutor,
@@ -367,10 +382,10 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
 
-        int min = ultraHd() ? 18_000 : 8_000;
-        int max = ultraHd() ? 120_000 : 60_000;
-        int start = ultraHd() ? 1_600 : 700;
-        int rebuffer = ultraHd() ? 4_000 : 1_800;
+        int min = ultraHd() ? 8_000 : 5_000;
+        int max = ultraHd() ? 60_000 : 35_000;
+        int start = ultraHd() ? 800 : 450;
+        int rebuffer = ultraHd() ? 2_500 : 1_200;
         DefaultLoadControl load = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(min, max, start, rebuffer)
                 .setPrioritizeTimeOverSizeThresholds(true)
@@ -394,6 +409,15 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                     .setMaxAudioChannelCount(2)
                     .build());
         }
+        String subtitlePreference = getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE)
+                .getString(SettingsActivity.KEY_SUBTITLE_LANGUAGE, "ar");
+        if ("off".equals(subtitlePreference)) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+        } else if ("ar".equals(subtitlePreference)) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setPreferredTextLanguage("ar").build());
+        }
 
         MediaItem.Builder item = new MediaItem.Builder()
                 .setUri(PlaybackPolicy.directPlaybackUrl(resolvedUrl))
@@ -405,7 +429,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         player.setMediaItem(item.build(), Math.max(0, resumePosition));
         player.prepare();
         player.play();
-        startWatchdog(ultraHd() ? 20_000 : 13_000);
+        startWatchdog(ultraHd() ? 16_000 : 10_000);
     }
 
     private void openVlc(String reason) {
@@ -417,12 +441,11 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         vlcSurface.setVisibility(View.VISIBLE);
         spinner.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.GONE);
-        engineView.setText("VLC • HEVC/4K fallback");
 
         ArrayList<String> options = new ArrayList<>();
         options.add("--audio-time-stretch");
-        options.add("--network-caching=" + (ultraHd() ? "2500" : "1500"));
-        options.add("--file-caching=" + (ultraHd() ? "2500" : "1500"));
+        options.add("--network-caching=" + (ultraHd() ? "1000" : "700"));
+        options.add("--file-caching=" + (ultraHd() ? "1000" : "700"));
         options.add("--http-reconnect");
         options.add("--no-drop-late-frames");
         options.add("--no-skip-frames");
@@ -443,7 +466,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         org.videolan.libvlc.Media media = new org.videolan.libvlc.Media(libVLC, Uri.parse(resolvedUrl));
         media.setHWDecoderEnabled(true, false);
         media.addOption(":http-user-agent=BLOFY-PLAYER/2026 AndroidTV");
-        media.addOption(":network-caching=" + (ultraHd() ? "2500" : "1500"));
+        media.addOption(":network-caching=" + (ultraHd() ? "1000" : "700"));
         if (stereoMode) media.addOption(":stereo-mode=1");
         vlcPlayer.setMedia(media);
         media.release();
@@ -456,7 +479,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 }
             }, 900);
         }
-        startWatchdog(ultraHd() ? 28_000 : 18_000);
+        startWatchdog(ultraHd() ? 20_000 : 13_000);
         errorText.setText(reason == null ? "" : reason);
     }
 
@@ -726,7 +749,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         }
         if (selected < 0) return;
         vlcAudioIndex = selected;
-        engineView.setText("VLC • صوت: " + tracks[selected].name);
         audioButton.setText("🔊  الصوت: " + tracks[selected].name);
         showControls();
     }
@@ -746,7 +768,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         }
         if (selected < 0) return;
         vlcSubtitleIndex = selected;
-        engineView.setText("VLC • ترجمة: " + tracks[selected].name);
         subtitleButton.setText(tracks[selected].id < 0
                 ? "CC  الترجمة: إيقاف" : "CC  الترجمة: " + tracks[selected].name);
         showControls();
@@ -835,7 +856,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                     if (audioButton != null) audioButton.requestFocus();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_DOWN:
-                    cycleSubtitle();
+                    showControls();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
@@ -870,7 +891,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private void savePosition() {
         long p = positionMs();
         long d = durationMs();
-        if (d > 0 && p > d - 30_000) p = 0;
+        if (d > 0 && p * 10L >= d * 9L) p = 0;
         resumePosition = Math.max(0, p);
         persistPosition(resumePosition);
     }
@@ -965,7 +986,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         button.setClickable(true);
         button.setBackground(BlofyUi.focusDrawable(this,
                 Color.argb(205, 20, 18, 31), Color.rgb(73, 29, 132), BlofyUi.PURPLE_LIGHT));
-        BlofyUi.attachScaleFocus(button, 1.025f);
         return button;
     }
 
