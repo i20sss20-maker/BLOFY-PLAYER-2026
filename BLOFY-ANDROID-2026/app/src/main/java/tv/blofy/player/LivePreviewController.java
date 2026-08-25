@@ -118,10 +118,11 @@ final class LivePreviewController implements Player.Listener {
                 String resolvedExt = PlaybackPolicy.normalizeExtension(result.optString("extension", ext), ext);
                 String referer = result.optString("referer", "");
                 if (!url.startsWith("http")) throw new IllegalStateException("invalid preview url");
-                URL_CACHE.put(cacheKey, new Resolved(url, resolvedExt, referer));
+                final String resolvedUrl = url;
+                URL_CACHE.put(cacheKey, new Resolved(resolvedUrl, resolvedExt, referer));
                 main.post(() -> {
                     if (token != generation.get()) return;
-                    open(url, resolvedExt, referer, token);
+                    open(resolvedUrl, resolvedExt, referer, token);
                 });
             } catch (Exception ignored) {
                 main.post(() -> {
