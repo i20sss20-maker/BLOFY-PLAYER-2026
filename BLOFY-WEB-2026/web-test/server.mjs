@@ -29,7 +29,7 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
-const APP_VERSION = "2026.08.26.1-v325";
+const APP_VERSION = "2026.08.26.2-v326";
 const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
@@ -417,7 +417,7 @@ async function handleApi(req, res, url) {
       nativePlayback: NATIVE_PLAYBACK_MODE,
       mediaProxy: false,
       transcoding: false,
-      portal: "v325-device-recovery",
+      portal: "v326-device-recovery",
       pairing: "one-time-token-or-six-digits",
       storage: production ? "persistent-required" : "local-development",
       time: new Date().toISOString(),

@@ -18,6 +18,9 @@ final class DeviceIdentity {
     private static final String KEY_PAIRING_CODE = "pairing_code";
     private static final String KEY_PUBLIC_REGISTERED = "public_identity_registered";
     private static final String KEY_PRIVATE_ID = "private_device_id";
+    private static final String KEY_RECOVERY_PENDING = "fresh_identity_recovery_pending";
+    private static final String KEY_PREVIOUS_PRIVATE_ID = "previous_private_device_id";
+    private static final String KEY_PREVIOUS_SECRET = "previous_device_secret";
 
     private DeviceIdentity() {}
 
@@ -44,6 +47,17 @@ final class DeviceIdentity {
      * cannot be recovered. This never replaces or claims that server record.
      */
     static String startFreshPrivateIdentity(Context context) {
+        android.content.SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (preferences.getBoolean(KEY_RECOVERY_PENDING, false)) {
+            String pendingId = preferences.getString(KEY_PRIVATE_ID, "");
+            String pendingSecret = preferences.getString(KEY_SECRET, "");
+            if (isPrivateId(pendingId) && pendingSecret != null && pendingSecret.matches("[A-F0-9]{64}")) {
+                return pendingId;
+            }
+            throw new IllegalStateException("هوية استعادة الجهاز غير مكتملة. لا يمكن تدويرها مرة أخرى.");
+        }
+        String previousId = id(context);
+        String previousSecret = secret(context);
         byte[] idRandom = new byte[8];
         byte[] keyRandom = new byte[32];
         SecureRandom random = new SecureRandom();
@@ -51,9 +65,12 @@ final class DeviceIdentity {
         random.nextBytes(keyRandom);
         String privateId = formatPrivateId(idRandom);
         String privateKey = hex(keyRandom);
-        boolean saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        boolean saved = preferences.edit()
+                .putString(KEY_PREVIOUS_PRIVATE_ID, previousId)
+                .putString(KEY_PREVIOUS_SECRET, previousSecret)
                 .putString(KEY_PRIVATE_ID, privateId)
                 .putString(KEY_SECRET, privateKey)
+                .putBoolean(KEY_RECOVERY_PENDING, true)
                 .remove(KEY_DISPLAY_ID)
                 .remove(KEY_PAIRING_CODE)
                 .remove(KEY_PAIR_TOKEN)
@@ -61,6 +78,11 @@ final class DeviceIdentity {
                 .commit();
         if (!saved) throw new IllegalStateException("تعذر حفظ هوية الجهاز الجديدة.");
         return privateId;
+    }
+
+    static boolean isFreshPrivateIdentityPending(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_RECOVERY_PENDING, false);
     }
 
     static boolean isPrivateId(String value) {
@@ -132,8 +154,12 @@ final class DeviceIdentity {
         edit.putString(KEY_DISPLAY_ID, displayId);
         edit.putString(KEY_PAIRING_CODE, pairingCode);
         edit.putBoolean(KEY_PUBLIC_REGISTERED, true);
-        edit.apply();
-        return true;
+        // Accepting the complete server response commits the fresh identity and
+        // removes the temporary rollback material in the same durable write.
+        edit.remove(KEY_RECOVERY_PENDING);
+        edit.remove(KEY_PREVIOUS_PRIVATE_ID);
+        edit.remove(KEY_PREVIOUS_SECRET);
+        return edit.commit();
     }
 
     static boolean hasRegisteredPublicIdentity(Context context) {

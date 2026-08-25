@@ -39,15 +39,17 @@ final class BlofyApi {
     }
 
     static boolean isDeviceRecoveryConflict(Throwable failure) {
-        if (failure instanceof ApiException) {
-            ApiException apiFailure = (ApiException) failure;
-            if (apiFailure.status == 409
-                    && "DEVICE_IDENTITY_CONFLICT".equals(apiFailure.code)) return true;
-        }
-        String message = failure == null || failure.getMessage() == null ? "" : failure.getMessage();
+        if (!(failure instanceof ApiException)) return false;
+        ApiException apiFailure = (ApiException) failure;
+        if (apiFailure.status == 409
+                && "DEVICE_IDENTITY_CONFLICT".equals(apiFailure.code)) return true;
         // Compatibility with the already deployed v324 server, which returned
-        // this same conflict as a generic 500 before the structured 409 contract.
-        return message.contains("تعذر استعادة الجهاز");
+        // this exact conflict as a generic 500 before the structured 409 contract.
+        // Do not rotate identity for network/local failures or unrelated 5xx errors.
+        String message = apiFailure.getMessage() == null ? "" : apiFailure.getMessage().trim();
+        return apiFailure.status == 500
+                && apiFailure.code.isEmpty()
+                && "تعذر استعادة الجهاز. تحقق من رقم الجهاز ورمز الربط.".equals(message);
     }
 
     /** Cancels the active native-link/redirect connection, not just its Future. */
