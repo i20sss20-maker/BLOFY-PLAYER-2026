@@ -5,20 +5,18 @@ import java.util.Locale;
 /**
  * BLOFY playback recovery policy.
  *
- * Recovery is deliberately bounded.  Older builds walked through every HTTP
- * transport, container and decoder in series, so one dead source could keep a
- * television on the spinner for more than twenty seconds.  The player now
- * gives Media3 one realistic window and then moves to the compatibility engine
- * (or a direct provider URL for an immediate HTTP failure).
+ * IPTV servers and low-power televisions can need several seconds before the
+ * first decodable keyframe arrives. Keep the watchdog long enough for a real
+ * source to start; network and decoder errors still trigger recovery at once.
  */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 4_500;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 3_500;
-    static final int VOD_STARTUP_TIMEOUT_MS = 4_500;
-    static final int UHD_VOD_STARTUP_TIMEOUT_MS = 5_500;
-    static final int VLC_STARTUP_TIMEOUT_MS = 5_500;
-    static final int UHD_VLC_STARTUP_TIMEOUT_MS = 6_500;
-    static final int PREVIEW_STARTUP_TIMEOUT_MS = 4_000;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 60_000;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 90_000;
+    static final int VOD_STARTUP_TIMEOUT_MS = 60_000;
+    static final int UHD_VOD_STARTUP_TIMEOUT_MS = 90_000;
+    static final int VLC_STARTUP_TIMEOUT_MS = 90_000;
+    static final int UHD_VLC_STARTUP_TIMEOUT_MS = 90_000;
+    static final int PREVIEW_STARTUP_TIMEOUT_MS = 20_000;
 
     private PlaybackPolicy() {}
 

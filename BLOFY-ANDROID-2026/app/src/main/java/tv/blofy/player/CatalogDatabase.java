@@ -164,8 +164,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         String token = UUID.randomUUID().toString();
         database.beginTransaction();
         try {
-            database.delete("categories_staging", null, null);
-            database.delete("media_staging", null, null);
+            resetStagingTables(database);
             putMetadata(database, "sync_state", "in_progress");
             database.setTransactionSuccessful();
         } finally { database.endTransaction(); }
@@ -186,7 +185,6 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         try {
             database.delete("categories", "source_id=?", new String[]{cleanSource});
             database.delete("media", "source_id=?", new String[]{cleanSource});
-            database.delete("media_fts", "source_id=?", new String[]{cleanSource});
             database.execSQL("INSERT INTO categories(source_id,type,id,name,sort_order) " +
                     "SELECT ?,type,id,name,sort_order FROM categories_staging WHERE import_token=?",
                     new Object[]{cleanSource, importToken});
@@ -207,9 +205,13 @@ final class CatalogDatabase extends SQLiteOpenHelper {
                         new Object[]{cleanSource, previousSource});
                 putMetadata(database, "personal_scope_migrated_v7", cleanSource);
             }
-            rebuildFts(database, cleanSource);
-            database.delete("categories_staging", "import_token=?", new String[]{importToken});
-            database.delete("media_staging", "import_token=?", new String[]{importToken});
+            // Rebuilding an FTS4 table for very large IPTV packages can keep a
+            // low-power TV on the final import frame for several minutes. The
+            // catalog already stores normalized names and uses them directly,
+            // so committing the playable package must not wait for FTS.
+            // Leave the staging pages in place after the atomic swap. The next
+            // import drops the staging tables in one operation, which is much
+            // faster than deleting tens of thousands of rows on this screen.
             putMetadata(database, "active_source_id", cleanSource);
             putMetadata(database, "source_identity", cleanSource);
             putMetadata(database, "server_name", serverName);
@@ -230,10 +232,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         SQLiteDatabase database = getWritableDatabase();
         database.beginTransaction();
         try {
-            if (importToken != null) {
-                database.delete("categories_staging", "import_token=?", new String[]{importToken});
-                database.delete("media_staging", "import_token=?", new String[]{importToken});
-            }
+            resetStagingTables(database);
             putMetadata(database, "sync_state", "failed");
             database.setTransactionSuccessful();
         } finally { database.endTransaction(); }
@@ -361,14 +360,9 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         List<BlofyModels.Media> result = new ArrayList<>();
         String originalSearch = search == null ? "" : search.trim();
         String cleanSearch = ArabicNormalizer.normalizeForSearch(originalSearch);
-        String ftsQuery = CatalogSearch.prefixQuery(originalSearch);
         boolean searching = !originalSearch.isEmpty();
 
         StringBuilder sql = new StringBuilder("SELECT ").append(MEDIA_COLUMNS).append(" FROM media m ");
-        if (searching && !ftsQuery.isEmpty()) {
-            sql.append("INNER JOIN media_fts ON media_fts.source_id=m.source_id " +
-                    "AND media_fts.type=m.type AND media_fts.id=m.id ");
-        }
         if (favoritesOnly) {
             sql.append("INNER JOIN favorites f ON f.source_id=m.source_id AND f.type=m.type AND f.id=m.id ");
         }
@@ -382,13 +376,17 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         if (type != null && !type.isEmpty()) { where.add("m.type=?"); args.add(type); }
         if (category != null && !category.isEmpty()) { where.add("m.category_id=?"); args.add(category); }
         if (searching) {
-            if (ftsQuery.isEmpty()) where.add("0");
-            else { where.add("media_fts.search_name MATCH ?"); args.add(ftsQuery); }
+            String[] words = cleanSearch.split("\\s+");
+            for (String word : words) {
+                if (word.isEmpty()) continue;
+                where.add("m.search_name LIKE ? ESCAPE '\\'");
+                args.add("%" + escapeLike(word) + "%");
+            }
         }
         sql.append("WHERE ").append(TextUtils.join(" AND ", where)).append(' ');
         if (historyOnly) {
             sql.append("ORDER BY h.watched_at DESC ");
-        } else if (searching && !ftsQuery.isEmpty()) {
+        } else if (searching) {
             sql.append("ORDER BY CASE WHEN m.search_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END," +
                     "CASE m.type WHEN 'live' THEN 0 WHEN 'movies' THEN 1 ELSE 2 END,m.sort_order ASC ");
             args.add(escapeLike(cleanSearch) + "%");
@@ -529,6 +527,12 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         database.delete("media_fts", "source_id=?", new String[]{source});
         database.execSQL("INSERT INTO media_fts(source_id,type,id,search_name) " +
                 "SELECT source_id,type,id,search_name FROM media WHERE source_id=?", new Object[]{source});
+    }
+
+    private static void resetStagingTables(SQLiteDatabase database) {
+        database.execSQL("DROP TABLE IF EXISTS categories_staging");
+        database.execSQL("DROP TABLE IF EXISTS media_staging");
+        createStagingTables(database);
     }
 
     private static void putMetadata(SQLiteDatabase database, String key, String value) {
