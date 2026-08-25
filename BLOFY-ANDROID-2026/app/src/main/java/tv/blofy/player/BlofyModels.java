@@ -96,6 +96,7 @@ final class BlofyModels {
         final String releaseDate;
         final String ratingSource;
         final String updatedAt;
+        final String director;
 
         Media(String id, String name, String image, String backdrop, String categoryId,
               String rating, String year, String extension, String type) {
@@ -246,6 +247,7 @@ final class BlofyModels {
             releaseDate = first(data, "releaseDate", "release_date", "airDate", "air_date", "lastAirDate", "last_air_date");
             ratingSource = first(data, "ratingSource", "rating_source", "voteSource", "vote_source");
             updatedAt = first(data, "updatedAt", "updated_at", "addedAt", "added_at", "dateAdded", "date_added", "added");
+            director = first(data, "director", "directors", "creator", "created_by");
             JSONArray values = data == null ? null : data.optJSONArray("seasons");
             if (values != null) for (int index = 0; index < values.length(); index++) {
                 JSONObject season = values.optJSONObject(index);
