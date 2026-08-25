@@ -1,0 +1,56 @@
+name: Prepare v324 APK handoff
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/v324-apk-handoff.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and split the verified unsigned APK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/v324-release /tmp/v324-handoff
+          gh release download v324-unsigned-7f3cec8cf213 \
+            --pattern 'BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk' \
+            --dir /tmp/v324-release
+          APK=/tmp/v324-release/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
+          test -s "$APK"
+          zip -9 -j /tmp/BLOFY-PLAYER-v324-UNSIGNED.zip "$APK"
+          base64 -w 2000000 /tmp/BLOFY-PLAYER-v324-UNSIGNED.zip \
+            | split -d -a 3 -l 1 - /tmp/v324-handoff/chunk-
+          {
+            printf 'apk_sha256='; sha256sum "$APK" | cut -d' ' -f1
+            printf 'apk_size='; stat -c '%s' "$APK"
+            printf 'zip_sha256='; sha256sum /tmp/BLOFY-PLAYER-v324-UNSIGNED.zip | cut -d' ' -f1
+            printf 'zip_size='; stat -c '%s' /tmp/BLOFY-PLAYER-v324-UNSIGNED.zip
+            printf 'chunk_count='; find /tmp/v324-handoff -name 'chunk-*' -type f | wc -l
+          } > /tmp/v324-handoff/manifest.txt
+
+      - name: Publish private handoff branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name blofy-ci
+          git config user.email actions@users.noreply.github.com
+          git checkout --orphan v324-apk-handoff
+          git rm -rf .
+          mkdir -p v324-handoff
+          cp /tmp/v324-handoff/* v324-handoff/
+          git add v324-handoff
+          git commit -m 'ci: prepare v324 unsigned APK handoff'
+          git push --force origin HEAD:refs/heads/v324-apk-handoff
