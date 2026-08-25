@@ -14,6 +14,7 @@ import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.AspectRatioFrameLayout;
@@ -23,6 +24,7 @@ import org.json.JSONObject;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @OptIn(markerClass = UnstableApi.class)
@@ -37,7 +39,7 @@ final class LivePreviewController implements Player.Listener {
     private final Context context;
     private final PlayerView view;
     private final BlofyApi api;
-    private final ExecutorService network = Executors.newSingleThreadExecutor();
+    private final ExecutorService network = Executors.newFixedThreadPool(2);
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicInteger generation = new AtomicInteger();
     private int openedGeneration = -1;
@@ -45,6 +47,12 @@ final class LivePreviewController implements Player.Listener {
     private String playerReferer = "";
     private Runnable pending;
     private Listener listener;
+    private Future<?> resolveTask;
+    private final Runnable previewTimeout = () -> {
+        if (openedGeneration != generation.get()) return;
+        if (player != null) player.stop();
+        if (listener != null) listener.error();
+    };
 
     LivePreviewController(Context context) {
         this.context = context;
@@ -84,6 +92,7 @@ final class LivePreviewController implements Player.Listener {
         int token = generation.incrementAndGet();
         if (listener != null) listener.loading();
         if (pending != null) main.removeCallbacks(pending);
+        if (resolveTask != null) resolveTask.cancel(true);
         pending = () -> startPreview(item, token);
         main.postDelayed(pending, 110L);
     }
@@ -97,12 +106,15 @@ final class LivePreviewController implements Player.Listener {
             return;
         }
         if (cached != null) URL_CACHE.remove(cacheKey);
-        network.execute(() -> {
+        resolveTask = network.submit(() -> {
             try {
                 String ext = PlaybackPolicy.normalizeExtension(item.extension, "ts");
                 JSONObject result = api.get("/api/native-link/live/" + BlofyApi.encode(item.id)
                         + "?ext=" + BlofyApi.encode(ext));
                 String url = result.optString("url", "");
+                if (url.startsWith("/")) {
+                    url = BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + url;
+                }
                 String resolvedExt = PlaybackPolicy.normalizeExtension(result.optString("extension", ext), ext);
                 String referer = result.optString("referer", "");
                 if (!url.startsWith("http")) throw new IllegalStateException("invalid preview url");
@@ -135,12 +147,15 @@ final class LivePreviewController implements Player.Listener {
         }
         playerReferer = normalized;
         DataSource.Factory data = PlaybackTransportFactory.create(context, false, network,
-                4_500, 8_000, 2, normalized);
+                3_000, 7_000, 0, normalized);
         DefaultLoadControl load = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(600, 6_000, 120, 350)
+                .setBufferDurationsMs(800, 6_000, 250, 450)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
-        player = new ExoPlayer.Builder(context)
+        DefaultRenderersFactory renderers = new DefaultRenderersFactory(context)
+                .setEnableDecoderFallback(true)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
+        player = new ExoPlayer.Builder(context, renderers)
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(data))
                 .setLoadControl(load)
                 .build();
@@ -153,6 +168,7 @@ final class LivePreviewController implements Player.Listener {
         if (token != generation.get()) return;
         ensurePlayer(referer);
         openedGeneration = token;
+        main.removeCallbacks(previewTimeout);
         MediaItem.Builder item = new MediaItem.Builder().setUri(url);
         String mime = PlaybackPolicy.mimeType(extension);
         if (mime != null) item.setMimeType(mime);
@@ -161,20 +177,29 @@ final class LivePreviewController implements Player.Listener {
         player.setMediaItem(item.build());
         player.prepare();
         player.play();
+        main.postDelayed(previewTimeout, PlaybackPolicy.PREVIEW_STARTUP_TIMEOUT_MS);
     }
 
     @Override public void onRenderedFirstFrame() {
-        if (openedGeneration == generation.get() && listener != null) listener.firstFrame();
+        if (openedGeneration == generation.get()) {
+            main.removeCallbacks(previewTimeout);
+            if (listener != null) listener.firstFrame();
+        }
     }
 
     @Override public void onPlayerError(PlaybackException error) {
-        if (openedGeneration == generation.get() && listener != null) listener.error();
+        if (openedGeneration == generation.get()) {
+            main.removeCallbacks(previewTimeout);
+            if (listener != null) listener.error();
+        }
     }
 
     void release() {
         generation.incrementAndGet();
         openedGeneration = -1;
         if (pending != null) main.removeCallbacks(pending);
+        if (resolveTask != null) resolveTask.cancel(true);
+        main.removeCallbacks(previewTimeout);
         if (player != null) {
             view.setPlayer(null);
             player.release();

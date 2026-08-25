@@ -49,6 +49,7 @@ public final class MainActivity extends Activity {
     private BlofyApi api;
     private CatalogDatabase database;
     private ImageLoader images;
+    private PlaylistStore playlistStore;
     private BlofyModels.License license;
     private BlofyModels.Session session;
     private String screen = "splash";
@@ -65,6 +66,7 @@ public final class MainActivity extends Activity {
         api = new BlofyApi(this);
         database = new CatalogDatabase(this);
         images = new ImageLoader(api);
+        playlistStore = new PlaylistStore(this);
         showSplash("جاري تشغيل BLOFY PLAYER", "تهيئة التطبيق الأصلي");
         boot();
     }
@@ -74,7 +76,12 @@ public final class MainActivity extends Activity {
             try {
                 registerDevice();
                 license = new BlofyModels.License(api.get("/api/license?device_id=" + BlofyApi.encode(api.deviceId())));
-                if (license.usable()) tryRemoteSetup();
+                JSONObject bootstrap = license.usable() ? tryRemoteSetup() : null;
+                if (bootstrap != null) {
+                    DeviceIdentity.updatePublicIdentity(this, bootstrap);
+                    playlistStore.applyRemote(bootstrap);
+                }
+                if (license.usable() && (bootstrap == null || !bootstrap.has("playlists"))) refreshRemotePlaylists();
                 session = new BlofyModels.Session(api.get("/api/session"));
                 main.post(() -> {
                     showPlaylistHub("");
@@ -90,13 +97,23 @@ public final class MainActivity extends Activity {
             JSONObject body = new JSONObject();
             body.put("deviceId", api.deviceId());
             body.put("deviceKey", DeviceIdentity.secret(this));
+            body.put("displayId", DeviceIdentity.displayId(this));
+            body.put("pairingCode", DeviceIdentity.activationCode(this));
             JSONObject result = api.post("/api/device/register", body);
             DeviceIdentity.pairToken(this, result.optString("pairToken", ""));
+            DeviceIdentity.updatePublicIdentity(this, result);
         } catch (Exception ignored) {}
     }
 
-    private void tryRemoteSetup() {
-        try { api.get("/api/device/bootstrap?device_id=" + BlofyApi.encode(api.deviceId())); }
+    private JSONObject tryRemoteSetup() {
+        try {
+            return api.get("/api/device/bootstrap?device_id=" + BlofyApi.encode(api.deviceId())
+                    + "&revision=" + playlistStore.revision() + "&connect=0");
+        } catch (Exception ignored) { return null; }
+    }
+
+    private void refreshRemotePlaylists() {
+        try { playlistStore.applyRemote(api.get("/api/device/playlists")); }
         catch (Exception ignored) {}
     }
 
@@ -124,7 +141,7 @@ public final class MainActivity extends Activity {
         root.addView(content, match());
     }
 
-    /** Quiet first screen: saved playlists only. Credentials live on a separate page. */
+    /** Premium launcher: saved sources are visible, but never connected automatically. */
     private void showPlaylistHub(String error) {
         screen = "playlists";
         root.removeAllViews();
@@ -132,86 +149,313 @@ public final class MainActivity extends Activity {
         page.setOrientation(BlofyUi.isTv(this) ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         page.setGravity(Gravity.CENTER);
         page.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        page.setPadding(dp(34), dp(28), dp(34), dp(28));
+        page.setPadding(dp(34), dp(26), dp(34), dp(26));
 
         LinearLayout device = devicePanel(false);
         LinearLayout.LayoutParams deviceParams = new LinearLayout.LayoutParams(
-                BlofyUi.isTv(this) ? dp(315) : ViewGroup.LayoutParams.MATCH_PARENT,
+                BlofyUi.isTv(this) ? dp(300) : ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
-        deviceParams.setMargins(dp(10), dp(10), dp(18), dp(10));
+        deviceParams.setMargins(dp(8), dp(8), dp(20), dp(8));
         page.addView(device, deviceParams);
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        content.setPadding(dp(34), dp(30), dp(34), dp(30));
-        content.setBackground(BlofyUi.panel(this, Color.argb(238, 10, 9, 19), 22, BlofyUi.STROKE));
-        content.addView(BlofyUi.brand(this, "P L A Y E R"),
-                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(62)));
-        TextView title = BlofyUi.title(this, "قوائم التشغيل", 29);
+        content.setPadding(dp(32), dp(26), dp(32), dp(26));
+        content.setBackground(BlofyUi.gradientPanel(this, Color.argb(246, 13, 11, 24),
+                Color.argb(244, 7, 7, 15), 24, BlofyUi.STROKE));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.VERTICAL);
+        TextView title = BlofyUi.title(this, "قوائم التشغيل", 30);
         title.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        content.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
-        TextView note = BlofyUi.text(this, "اختر قائمتك المحفوظة ثم اضغط اتصال، أو أضف قائمة جديدة.", 14, BlofyUi.MUTED);
-        content.addView(note, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        TextView note = BlofyUi.text(this,
+                "اختر قائمتك ثم اضغط اتصال. لن يبدأ أي سيرفر من تلقاء نفسه.", 14, BlofyUi.MUTED);
+        heading.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        heading.addView(note, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
+        header.addView(heading, new LinearLayout.LayoutParams(0, dp(82), 1f));
+        Button sync = BlofyUi.button(this, "↻  مزامنة", false);
+        sync.setOnClickListener(v -> syncPlaylistHub(sync));
+        header.addView(sync, new LinearLayout.LayoutParams(dp(145), dp(52)));
+        content.addView(header);
 
-        Button primary;
-        if (session != null && session.present) {
-            LinearLayout saved = new LinearLayout(this);
-            saved.setOrientation(LinearLayout.HORIZONTAL);
-            saved.setGravity(Gravity.CENTER_VERTICAL);
-            saved.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-            saved.setPadding(dp(22), dp(14), dp(22), dp(14));
-            saved.setBackground(BlofyUi.panel(this, Color.argb(230, 20, 16, 35), 18, Color.rgb(76, 48, 116)));
-            LinearLayout labels = new LinearLayout(this);
-            labels.setOrientation(LinearLayout.VERTICAL);
-            TextView playlistName = BlofyUi.title(this,
-                    session.name == null || session.name.isEmpty() ? "قائمتي" : session.name, 20);
-            playlistName.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-            TextView savedLabel = BlofyUi.text(this, "قائمة محفوظة على هذا الجهاز", 12, BlofyUi.MUTED);
-            labels.addView(playlistName, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
-            labels.addView(savedLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
-            saved.addView(labels, new LinearLayout.LayoutParams(0, dp(72), 1));
-            primary = BlofyUi.button(this, "اتصال", true);
-            primary.setOnClickListener(v -> {
-                boolean ready = "complete".equals(database.metadata("sync_state", ""))
-                        && database.count("live") + database.count("movies") + database.count("series") > 0;
-                if (ready) showHome(); else importPackage();
-            });
-            saved.addView(primary, new LinearLayout.LayoutParams(dp(155), dp(56)));
-            LinearLayout.LayoutParams savedParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(110));
-            savedParams.setMargins(0, dp(20), 0, dp(18));
-            content.addView(saved, savedParams);
-        } else {
-            TextView empty = BlofyUi.text(this, "لا توجد قائمة تشغيل محفوظة حتى الآن.", 15, BlofyUi.MUTED);
+        List<PlaylistStore.Playlist> rows = playlistStore.all();
+        if (rows.isEmpty() && session != null && session.present) {
+            rows = new ArrayList<>();
+            rows.add(PlaylistStore.Playlist.fromSession(session));
+        }
+
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        List<Button[]> focusRows = new ArrayList<>();
+        if (rows.isEmpty()) {
+            LinearLayout empty = new LinearLayout(this);
+            empty.setOrientation(LinearLayout.VERTICAL);
             empty.setGravity(Gravity.CENTER);
-            content.addView(empty, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(120)));
-            primary = null;
+            empty.setPadding(dp(24), dp(18), dp(24), dp(18));
+            empty.setBackground(BlofyUi.panel(this, Color.argb(190, 18, 15, 31), 18, BlofyUi.STROKE));
+            TextView emptyTitle = BlofyUi.title(this, "ابدأ بإضافة قائمتك الأولى", 19);
+            emptyTitle.setGravity(Gravity.CENTER);
+            TextView emptyNote = BlofyUi.text(this,
+                    "يمكنك إضافتها من التلفزيون أو من موقع BLOFY باستخدام رقم الجهاز والرمز.",
+                    13, BlofyUi.MUTED);
+            emptyNote.setGravity(Gravity.CENTER);
+            empty.addView(emptyTitle, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+            empty.addView(emptyNote, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+            LinearLayout.LayoutParams emptyParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(112));
+            emptyParams.setMargins(0, dp(14), 0, dp(12));
+            list.addView(empty, emptyParams);
+        } else {
+            for (PlaylistStore.Playlist item : rows) addPlaylistCard(list, item, focusRows);
         }
+        content.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        Button add = BlofyUi.button(this, "＋  إضافة قائمة تشغيل", primary == null);
-        add.setOnClickListener(v -> showLogin(""));
-        content.addView(add, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)));
+        Button add = BlofyUi.button(this, "＋  إضافة قائمة تشغيل", rows.isEmpty());
+        add.setOnClickListener(v -> showPlaylistEditor(null, ""));
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
+        addParams.setMargins(0, dp(8), 0, 0);
+        content.addView(add, addParams);
+
         if (error != null && !error.isEmpty()) {
-            TextView status = BlofyUi.text(this, error, 12, BlofyUi.ERROR);
+            TextView status = BlofyUi.text(this, error, 13,
+                    error.startsWith("تم ") ? BlofyUi.SUCCESS : BlofyUi.ERROR);
             status.setGravity(Gravity.CENTER);
-            content.addView(status, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+            content.addView(status, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
         }
 
+        linkPlaylistFocus(focusRows, add, sync);
         LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(
                 BlofyUi.isTv(this) ? 0 : ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT, BlofyUi.isTv(this) ? 1f : 0f);
-        contentParams.setMargins(dp(10), dp(10), dp(10), dp(10));
+        contentParams.setMargins(dp(8), dp(8), dp(8), dp(8));
         page.addView(content, contentParams);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
+        scroll.setSmoothScrollingEnabled(true);
         scroll.addView(page);
         root.addView(scroll, match());
-        (primary == null ? add : primary).requestFocus();
+        Button initial = focusRows.isEmpty() ? add : focusRows.get(0)[2];
+        for (Button[] row : focusRows) {
+            Object tag = row[2].getTag();
+            if (Boolean.TRUE.equals(tag)) { initial = row[2]; break; }
+        }
+        initial.requestFocus();
     }
 
-    private void showLogin(String error) {
-        screen = "login";
+    private void addPlaylistCard(LinearLayout list, PlaylistStore.Playlist item,
+                                 List<Button[]> focusRows) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        card.setPadding(dp(20), dp(12), dp(20), dp(12));
+        int stroke = item.active ? BlofyUi.PURPLE_LIGHT : BlofyUi.STROKE;
+        card.setBackground(BlofyUi.gradientPanel(this, Color.argb(236, 28, 20, 49),
+                Color.argb(232, 16, 14, 29), 18, stroke));
+
+        LinearLayout labels = new LinearLayout(this);
+        labels.setOrientation(LinearLayout.VERTICAL);
+        TextView playlistName = BlofyUi.title(this, item.displayName(), 19);
+        playlistName.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        String state = item.active ? "●  القائمة المستخدمة آخر مرة"
+                : item.isDefault ? "●  القائمة الافتراضية"
+                : "healthy".equals(item.status) || "ready".equals(item.status) ? "●  جاهزة للاتصال"
+                : "error".equals(item.status) ? "●  تحتاج فحص البيانات"
+                : "●  محفوظة";
+        int stateColor = item.active || item.isDefault
+                || "healthy".equals(item.status) || "ready".equals(item.status)
+                ? BlofyUi.SUCCESS : "error".equals(item.status) ? BlofyUi.ERROR : BlofyUi.MUTED;
+        TextView meta = BlofyUi.text(this, item.kindLabel() + "     " + state, 12, stateColor);
+        labels.addView(playlistName, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
+        labels.addView(meta, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+        card.addView(labels, new LinearLayout.LayoutParams(0, dp(70), 1f));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        Button delete = BlofyUi.button(this, "حذف", false);
+        Button edit = BlofyUi.button(this, "تعديل", false);
+        Button connect = BlofyUi.button(this, "اتصال", true);
+        delete.setId(View.generateViewId()); edit.setId(View.generateViewId()); connect.setId(View.generateViewId());
+        delete.setNextFocusRightId(edit.getId());
+        edit.setNextFocusLeftId(delete.getId()); edit.setNextFocusRightId(connect.getId());
+        connect.setNextFocusLeftId(edit.getId());
+        delete.setOnClickListener(v -> confirmDeletePlaylist(item));
+        edit.setOnClickListener(v -> openPlaylistEditor(item));
+        connect.setOnClickListener(v -> connectPlaylist(item, connect));
+        connect.setTag(item.active || item.isDefault);
+        actions.addView(delete, new LinearLayout.LayoutParams(dp(90), dp(50)));
+        LinearLayout.LayoutParams editParams = new LinearLayout.LayoutParams(dp(95), dp(50));
+        editParams.setMargins(dp(8), 0, dp(8), 0);
+        actions.addView(edit, editParams);
+        actions.addView(connect, new LinearLayout.LayoutParams(dp(120), dp(50)));
+        card.addView(actions, new LinearLayout.LayoutParams(dp(321), dp(56)));
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(98));
+        cardParams.setMargins(0, dp(8), 0, dp(8));
+        list.addView(card, cardParams);
+        focusRows.add(new Button[]{delete, edit, connect});
+    }
+
+    private void linkPlaylistFocus(List<Button[]> rows, Button add, Button sync) {
+        add.setId(View.generateViewId()); sync.setId(View.generateViewId());
+        for (int row = 0; row < rows.size(); row++) {
+            Button[] current = rows.get(row);
+            for (int column = 0; column < current.length; column++) {
+                if (row > 0) current[column].setNextFocusUpId(rows.get(row - 1)[column].getId());
+                else current[column].setNextFocusUpId(sync.getId());
+                if (row + 1 < rows.size()) current[column].setNextFocusDownId(rows.get(row + 1)[column].getId());
+                else current[column].setNextFocusDownId(add.getId());
+            }
+        }
+        if (!rows.isEmpty()) {
+            add.setNextFocusUpId(rows.get(rows.size() - 1)[2].getId());
+            sync.setNextFocusDownId(rows.get(0)[2].getId());
+        }
+    }
+
+    private void syncPlaylistHub(Button button) {
+        button.setEnabled(false);
+        button.setText("جاري المزامنة…");
+        worker.execute(() -> {
+            String result = "تم تحديث القوائم من الموقع.";
+            try {
+                registerDevice();
+                JSONObject response = api.get("/api/device/playlists");
+                playlistStore.applyRemote(response);
+                session = new BlofyModels.Session(api.get("/api/session"));
+            } catch (Exception failure) { result = message(failure); }
+            String finalResult = result;
+            main.post(() -> showPlaylistHub(finalResult));
+        });
+    }
+
+    private void connectPlaylist(PlaylistStore.Playlist item, Button button) {
+        if (license == null || !license.usable()) {
+            showPlaylistHub("فعّل الجهاز أولًا من موقع BLOFY ثم اضغط مزامنة.");
+            return;
+        }
+        button.setEnabled(false);
+        button.setText("جاري الاتصال…");
+        worker.execute(() -> {
+            try {
+                if (item.currentSessionOnly) {
+                    session = new BlofyModels.Session(api.get("/api/session"));
+                } else if (item.remote) {
+                    api.post("/api/device/playlists/" + BlofyApi.encode(item.id) + "/connect", new JSONObject());
+                    session = new BlofyModels.Session(api.get("/api/session"));
+                } else if (item.canConnectLocally()) {
+                    api.post("/api/session", item.sessionBody());
+                    session = new BlofyModels.Session(api.get("/api/session"));
+                } else {
+                    throw new Exception("بيانات هذه القائمة غير مكتملة. افتح تعديل وأدخل بيانات الاتصال.");
+                }
+                if (session == null || !session.present) throw new Exception("لم يتم إنشاء جلسة للقائمة المختارة.");
+                playlistStore.setActive(item.id);
+                main.post(this::importPackage);
+            } catch (Exception failure) {
+                main.post(() -> showPlaylistHub(message(failure)));
+            }
+        });
+    }
+
+    private void confirmDeletePlaylist(PlaylistStore.Playlist item) {
+        android.app.Dialog dialog = new android.app.Dialog(this);
+        dialog.getWindow();
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER);
+        panel.setPadding(dp(30), dp(26), dp(30), dp(26));
+        panel.setBackground(BlofyUi.gradientPanel(this, Color.rgb(31, 20, 52),
+                Color.rgb(12, 11, 23), 22, BlofyUi.PURPLE_LIGHT));
+        TextView title = BlofyUi.title(this, "حذف " + item.displayName() + "؟", 23);
+        title.setGravity(Gravity.CENTER);
+        panel.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        TextView message = BlofyUi.text(this,
+                "سيتم حذف هذه القائمة فقط، ولن تُحذف بقية قوائمك.", 14, BlofyUi.MUTED);
+        message.setGravity(Gravity.CENTER);
+        panel.addView(message, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER);
+        Button cancel = BlofyUi.button(this, "إلغاء", true);
+        Button delete = BlofyUi.button(this, "حذف القائمة", false);
+        cancel.setId(View.generateViewId()); delete.setId(View.generateViewId());
+        cancel.setNextFocusRightId(delete.getId()); delete.setNextFocusLeftId(cancel.getId());
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        delete.setOnClickListener(v -> { dialog.dismiss(); deletePlaylist(item); });
+        actions.addView(cancel, new LinearLayout.LayoutParams(dp(160), dp(54)));
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(180), dp(54));
+        deleteParams.setMargins(dp(10), 0, 0, 0);
+        actions.addView(delete, deleteParams);
+        panel.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(62)));
+        dialog.setContentView(panel, new ViewGroup.LayoutParams(dp(570), ViewGroup.LayoutParams.WRAP_CONTENT));
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            dialog.getWindow().setDimAmount(.72f);
+            dialog.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        dialog.setOnShowListener(ignored -> cancel.requestFocus());
+        dialog.show();
+    }
+
+    private void deletePlaylist(PlaylistStore.Playlist item) {
+        showSplash("جاري حذف القائمة", item.displayName());
+        worker.execute(() -> {
+            try {
+                if (item.remote) api.delete("/api/device/playlists/" + BlofyApi.encode(item.id));
+                if (item.active || item.currentSessionOnly) {
+                    try { api.delete("/api/session"); } catch (Exception ignored) {}
+                    api.clearSession();
+                    database.beginFreshImport();
+                    session = new BlofyModels.Session(null);
+                }
+                playlistStore.delete(item.id);
+                refreshRemotePlaylists();
+                main.post(() -> showPlaylistHub("تم حذف القائمة."));
+            } catch (Exception failure) {
+                main.post(() -> showPlaylistHub(message(failure)));
+            }
+        });
+    }
+
+    private void showLogin(String error) { showPlaylistEditor(null, error); }
+
+    private void openPlaylistEditor(PlaylistStore.Playlist item) {
+        if (item == null || !item.remote || item.currentSessionOnly) {
+            showPlaylistEditor(item, "");
+            return;
+        }
+        showSplash("جاري فتح القائمة", "قراءة البيانات الآمنة من موقع BLOFY");
+        worker.execute(() -> {
+            PlaylistStore.Playlist detail = item.copy();
+            String warning = "";
+            try {
+                JSONObject response = api.get("/api/device/playlists/" + BlofyApi.encode(item.id));
+                JSONObject data = response.optJSONObject("playlist");
+                if (data == null) data = response;
+                detail.serverUrl = data.optString("serverUrl", detail.serverUrl).trim();
+                detail.username = data.optString("username", detail.username).trim();
+                detail.url = data.optString("url", detail.url).trim();
+            } catch (Exception failure) {
+                warning = "تعذر قراءة التفاصيل الحالية؛ يمكنك تعديل الاسم أو إدخال بيانات جديدة.";
+            }
+            String finalWarning = warning;
+            main.post(() -> showPlaylistEditor(detail, finalWarning));
+        });
+    }
+
+    private void showPlaylistEditor(PlaylistStore.Playlist editing, String error) {
+        screen = "playlist_editor";
         root.removeAllViews();
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -219,141 +463,230 @@ public final class MainActivity extends Activity {
         page.setOrientation(BlofyUi.isTv(this) ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         page.setGravity(Gravity.CENTER);
         page.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        page.setPadding(dp(28), dp(24), dp(28), dp(24));
+        page.setPadding(dp(28), dp(22), dp(28), dp(22));
 
         LinearLayout device = devicePanel(true);
-        LinearLayout.LayoutParams deviceParams = new LinearLayout.LayoutParams(BlofyUi.isTv(this) ? dp(340) : ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        deviceParams.setMargins(dp(10), dp(10), dp(10), dp(10));
+        LinearLayout.LayoutParams deviceParams = new LinearLayout.LayoutParams(
+                BlofyUi.isTv(this) ? dp(315) : ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        deviceParams.setMargins(dp(8), dp(8), dp(12), dp(8));
         page.addView(device, deviceParams);
 
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         form.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        form.setPadding(dp(26), dp(22), dp(26), dp(22));
-        form.setBackground(BlofyUi.panel(this, Color.argb(235, 13, 13, 25), 20, Color.rgb(48, 42, 72)));
-        form.addView(BlofyUi.brand(this, "P L A Y E R  •  N A T I V E"));
-        form.addView(BlofyUi.title(this, "كل محتواك في مكان واحد، بسرعة ووضوح", 25));
-        TextView intro = BlofyUi.text(this, "أدخل بيانات الباقة هنا، أو امسح الباركود وأرسلها من جوالك إلى الجهاز.", 14, BlofyUi.MUTED);
-        form.addView(intro);
+        form.setPadding(dp(28), dp(24), dp(28), dp(24));
+        form.setBackground(BlofyUi.gradientPanel(this, Color.argb(244, 18, 14, 32),
+                Color.argb(244, 9, 8, 18), 22, BlofyUi.STROKE));
+        form.addView(BlofyUi.brand(this, "P L A Y E R  •  N A T I V E"),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        String heading = editing == null ? "إضافة قائمة تشغيل" : "تعديل قائمة التشغيل";
+        TextView title = BlofyUi.title(this, heading, 27);
+        title.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        form.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        TextView intro = BlofyUi.text(this,
+                editing != null && editing.remote
+                        ? "عدّل الاسم، وأدخل فقط بيانات الاتصال التي تريد تغييرها. ترك كلمة المرور فارغة يبقيها كما هي."
+                        : "احفظ البيانات أولًا، ثم ارجع واختر القائمة واضغط اتصال.",
+                13, BlofyUi.MUTED);
+        form.addView(intro, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
 
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
         tabs.setGravity(Gravity.RIGHT);
+        tabs.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         Button xtreamTab = BlofyUi.button(this, "Xtream Codes", true);
         Button m3uTab = BlofyUi.button(this, "M3U / M3U8", false);
-        tabs.addView(xtreamTab, new LinearLayout.LayoutParams(dp(180), dp(52)));
-        LinearLayout.LayoutParams secondTab = new LinearLayout.LayoutParams(dp(180), dp(52));
+        tabs.addView(xtreamTab, new LinearLayout.LayoutParams(dp(180), dp(50)));
+        LinearLayout.LayoutParams secondTab = new LinearLayout.LayoutParams(dp(180), dp(50));
         secondTab.setMargins(dp(10), 0, 0, 0);
         tabs.addView(m3uTab, secondTab);
-        LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tabsParams.topMargin = dp(18);
+        LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tabsParams.topMargin = dp(12);
         form.addView(tabs, tabsParams);
 
         LinearLayout fields = new LinearLayout(this);
         fields.setOrientation(LinearLayout.VERTICAL);
-        EditText name = addField(fields, "اسم القائمة (اختياري)", false);
-        EditText server = addField(fields, "رابط الخادم", false);
-        EditText username = addField(fields, "اسم المستخدم", false);
-        EditText password = addField(fields, "كلمة المرور", false);
+        EditText name = addField(fields, "اسم القائمة", false);
+        EditText server = addField(fields, editing != null && editing.remote
+                ? "رابط خادم جديد (اختياري)" : "رابط الخادم", false);
+        EditText username = addField(fields, editing != null && editing.remote
+                ? "اسم مستخدم جديد (اختياري)" : "اسم المستخدم", false);
+        EditText password = addField(fields, editing != null && editing.remote
+                ? "كلمة مرور جديدة (اختياري)" : "كلمة المرور", false);
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        EditText playlist = addField(fields, "رابط M3U أو M3U8", false);
-        playlist.setVisibility(View.GONE);
+        EditText playlist = addField(fields, editing != null && editing.remote
+                ? "رابط M3U جديد (اختياري)" : "رابط M3U أو M3U8", false);
         form.addView(fields);
 
-        TextView status = BlofyUi.text(this, error, 13, error.isEmpty() ? BlofyUi.MUTED : BlofyUi.ERROR);
+        xtreamTab.setId(View.generateViewId()); m3uTab.setId(View.generateViewId());
+        name.setId(View.generateViewId()); server.setId(View.generateViewId());
+        username.setId(View.generateViewId()); password.setId(View.generateViewId());
+        playlist.setId(View.generateViewId());
+        xtreamTab.setNextFocusLeftId(m3uTab.getId());
+        m3uTab.setNextFocusRightId(xtreamTab.getId());
+        server.setNextFocusUpId(name.getId()); server.setNextFocusDownId(username.getId());
+        username.setNextFocusUpId(server.getId()); username.setNextFocusDownId(password.getId());
+        password.setNextFocusUpId(username.getId());
+        playlist.setNextFocusUpId(name.getId());
+
+        if (editing != null) {
+            name.setText(editing.name);
+            server.setText(editing.serverUrl);
+            username.setText(editing.username);
+            if (!editing.remote) password.setText(editing.password);
+            playlist.setText(editing.url);
+        }
+
+        TextView status = BlofyUi.text(this, error == null ? "" : error, 13,
+                error == null || error.isEmpty() ? BlofyUi.MUTED : BlofyUi.ERROR);
         status.setGravity(Gravity.RIGHT);
-        form.addView(status);
+        form.addView(status, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
 
-        Button login = BlofyUi.button(this, "إضافة الباقة وقراءتها", true);
-        LinearLayout.LayoutParams loginParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
-        loginParams.topMargin = dp(10);
-        form.addView(login, loginParams);
+        LinearLayout footer = new LinearLayout(this);
+        footer.setOrientation(LinearLayout.HORIZONTAL);
+        footer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        Button save = BlofyUi.button(this, "حفظ القائمة", true);
+        Button cancel = BlofyUi.button(this, "إلغاء", false);
+        save.setId(View.generateViewId()); cancel.setId(View.generateViewId());
+        save.setNextFocusLeftId(cancel.getId());
+        cancel.setNextFocusRightId(save.getId());
+        password.setNextFocusDownId(save.getId()); playlist.setNextFocusDownId(save.getId());
+        footer.addView(save, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(dp(150), dp(56));
+        cancelParams.setMargins(dp(10), 0, 0, 0);
+        footer.addView(cancel, cancelParams);
+        form.addView(footer);
+        cancel.setOnClickListener(v -> showPlaylistHub(""));
 
-        final boolean[] xtream = {true};
-        xtreamTab.setOnClickListener(view -> {
-            xtream[0] = true;
-            server.setVisibility(View.VISIBLE);
-            username.setVisibility(View.VISIBLE);
-            password.setVisibility(View.VISIBLE);
-            playlist.setVisibility(View.GONE);
-            xtreamTab.setText("Xtream Codes ✓");
-            m3uTab.setText("M3U / M3U8");
-            server.requestFocus();
-        });
-        m3uTab.setOnClickListener(view -> {
-            xtream[0] = false;
-            server.setVisibility(View.GONE);
-            username.setVisibility(View.GONE);
-            password.setVisibility(View.GONE);
-            playlist.setVisibility(View.VISIBLE);
-            xtreamTab.setText("Xtream Codes");
-            m3uTab.setText("M3U / M3U8 ✓");
-            playlist.requestFocus();
-        });
-        login.setOnClickListener(view -> {
-            if (license == null || !license.usable()) {
-                status.setText("فعّل الجهاز أولًا، أو اضغط تحديث التفعيل بعد التفعيل من الباركود.");
+        final boolean[] xtream = {editing == null || !"m3u".equals(editing.kind)};
+        Runnable refreshMode = () -> {
+            server.setVisibility(xtream[0] ? View.VISIBLE : View.GONE);
+            username.setVisibility(xtream[0] ? View.VISIBLE : View.GONE);
+            password.setVisibility(xtream[0] ? View.VISIBLE : View.GONE);
+            playlist.setVisibility(xtream[0] ? View.GONE : View.VISIBLE);
+            xtreamTab.setText(xtream[0] ? "Xtream Codes  ✓" : "Xtream Codes");
+            m3uTab.setText(xtream[0] ? "M3U / M3U8" : "M3U / M3U8  ✓");
+            xtreamTab.setNextFocusDownId(name.getId()); m3uTab.setNextFocusDownId(name.getId());
+            name.setNextFocusUpId(xtream[0] ? xtreamTab.getId() : m3uTab.getId());
+            name.setNextFocusDownId(xtream[0] ? server.getId() : playlist.getId());
+            save.setNextFocusUpId(xtream[0] ? password.getId() : playlist.getId());
+            cancel.setNextFocusUpId(xtream[0] ? password.getId() : playlist.getId());
+        };
+        refreshMode.run();
+        xtreamTab.setOnClickListener(view -> { xtream[0] = true; refreshMode.run(); server.requestFocus(); });
+        m3uTab.setOnClickListener(view -> { xtream[0] = false; refreshMode.run(); playlist.requestFocus(); });
+
+        save.setOnClickListener(view -> {
+            boolean remoteEdit = editing != null && editing.remote && !editing.currentSessionOnly;
+            String enteredName = value(name);
+            if (enteredName.isEmpty()) enteredName = "قائمتي";
+            if (xtream[0] && !remoteEdit
+                    && (value(server).isEmpty() || value(username).isEmpty() || value(password).isEmpty())) {
+                status.setText("أدخل رابط الخادم واسم المستخدم وكلمة المرور.");
                 status.setTextColor(BlofyUi.ERROR);
                 return;
             }
+            if (!xtream[0] && !remoteEdit && value(playlist).isEmpty()) {
+                status.setText("أدخل رابط M3U أو M3U8.");
+                status.setTextColor(BlofyUi.ERROR);
+                return;
+            }
+            PlaylistStore.Playlist draft = editing == null || editing.currentSessionOnly
+                    ? new PlaylistStore.Playlist() : editing.copy();
+            draft.name = enteredName;
+            draft.kind = xtream[0] ? "xtream" : "m3u";
+            if (!value(server).isEmpty()) draft.serverUrl = value(server);
+            if (!value(username).isEmpty()) draft.username = value(username);
+            if (!value(password).isEmpty()) draft.password = value(password);
+            if (!value(playlist).isEmpty()) draft.url = value(playlist);
+
             JSONObject body = new JSONObject();
             try {
-                body.put("kind", xtream[0] ? "xtream" : "m3u");
-                body.put("name", value(name));
+                body.put("name", draft.name).put("kind", draft.kind);
                 if (xtream[0]) {
-                    body.put("serverUrl", value(server));
-                    body.put("username", value(username));
-                    body.put("password", value(password));
-                } else body.put("url", value(playlist));
+                    if (!value(server).isEmpty()) body.put("serverUrl", value(server));
+                    if (!value(username).isEmpty()) body.put("username", value(username));
+                    if (!value(password).isEmpty()) body.put("password", value(password));
+                } else if (!value(playlist).isEmpty()) body.put("url", value(playlist));
             } catch (Exception ignored) {}
-            status.setText("جاري التحقق من بيانات الباقة…");
-            status.setTextColor(BlofyUi.MUTED);
-            login.setEnabled(false);
-            worker.execute(() -> {
-                try {
-                    api.post("/api/session", body);
-                    session = new BlofyModels.Session(api.get("/api/session"));
-                    main.post(this::importPackage);
-                } catch (Exception failure) {
-                    main.post(() -> {
-                        login.setEnabled(true);
-                        status.setText(message(failure));
-                        status.setTextColor(BlofyUi.ERROR);
-                    });
-                }
-            });
+            savePlaylist(editing, draft, body, save, status);
         });
 
-        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(BlofyUi.isTv(this) ? 0 : ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, BlofyUi.isTv(this) ? 1f : 0f);
-        formParams.setMargins(dp(10), dp(10), dp(10), dp(10));
+        LinearLayout.LayoutParams formParams = new LinearLayout.LayoutParams(
+                BlofyUi.isTv(this) ? 0 : ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, BlofyUi.isTv(this) ? 1f : 0f);
+        formParams.setMargins(dp(8), dp(8), dp(8), dp(8));
         page.addView(form, formParams);
         scroll.addView(page);
         root.addView(scroll, match());
-        main.postDelayed(() -> {
-            View focus = license != null && !license.usable() ? device.findViewWithTag("activation_code") : server;
-            if (focus != null) focus.requestFocus();
-        }, 100);
+        main.postDelayed(() -> name.requestFocus(), 100);
+    }
+
+    private void savePlaylist(PlaylistStore.Playlist editing, PlaylistStore.Playlist draft,
+                              JSONObject body, Button save, TextView status) {
+        if (license == null || !license.usable()) {
+            status.setText("فعّل الجهاز أولًا من موقع BLOFY.");
+            status.setTextColor(BlofyUi.ERROR);
+            return;
+        }
+        save.setEnabled(false);
+        save.setText("جاري الحفظ…");
+        status.setText("يتم حفظ القائمة، ولن يتم الاتصال بها الآن.");
+        status.setTextColor(BlofyUi.MUTED);
+        worker.execute(() -> {
+            try {
+                boolean editingRemote = editing != null && editing.remote && !editing.currentSessionOnly;
+                boolean editingLocal = editing != null && !editing.remote && !editing.currentSessionOnly;
+                if (editingLocal) {
+                    playlistStore.saveLocal(draft);
+                } else {
+                    try {
+                        if (editingRemote) {
+                            api.patch("/api/device/playlists/" + BlofyApi.encode(editing.id), body);
+                        } else {
+                            api.post("/api/device/playlists", body);
+                        }
+                        refreshRemotePlaylists();
+                    } catch (BlofyApi.ApiException failure) {
+                        if (failure.status != 404 && failure.status != 405) throw failure;
+                        if (editingRemote) throw new Exception("تحديث الموقع غير متاح على إصدار الخادم الحالي.");
+                        playlistStore.saveLocal(draft);
+                    }
+                }
+                main.post(() -> showPlaylistHub("تم حفظ القائمة. اخترها واضغط اتصال."));
+            } catch (Exception failure) {
+                main.post(() -> {
+                    save.setEnabled(true);
+                    save.setText("حفظ القائمة");
+                    status.setText(message(failure));
+                    status.setTextColor(BlofyUi.ERROR);
+                });
+            }
+        });
     }
 
     private LinearLayout devicePanel(boolean showActivationActions) {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setGravity(Gravity.CENTER);
-        panel.setPadding(dp(22), dp(20), dp(22), dp(20));
-        panel.setBackground(BlofyUi.panel(this, Color.argb(235, 15, 16, 30), 20, Color.rgb(61, 44, 94)));
+        panel.setPadding(dp(20), dp(18), dp(20), dp(18));
+        panel.setBackground(BlofyUi.gradientPanel(this, Color.argb(238, 25, 18, 46),
+                Color.argb(240, 10, 10, 21), 22, Color.rgb(75, 48, 116)));
         ImageView smallLogo = new ImageView(this);
         smallLogo.setImageResource(R.drawable.blofy_logo);
         smallLogo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        panel.addView(smallLogo, new LinearLayout.LayoutParams(dp(115), dp(115)));
-        TextView heading = BlofyUi.title(this, "حالة الجهاز", 19);
+        panel.addView(smallLogo, new LinearLayout.LayoutParams(dp(88), dp(88)));
+        TextView heading = BlofyUi.title(this, "جهاز BLOFY", 17);
         heading.setGravity(Gravity.CENTER);
         panel.addView(heading);
-        TextView id = BlofyUi.title(this, DeviceIdentity.displayId(this), 18);
+        TextView id = BlofyUi.title(this, DeviceIdentity.displayId(this), 20);
         id.setTextDirection(View.TEXT_DIRECTION_LTR);
         id.setGravity(Gravity.CENTER);
         id.setTextIsSelectable(true);
         panel.addView(id);
-        TextView pairing = BlofyUi.text(this, "رمز الجهاز  " + DeviceIdentity.activationCode(this), 13,
+        TextView pairing = BlofyUi.text(this, "رمز الدخول   " + DeviceIdentity.activationCode(this), 14,
                 BlofyUi.PURPLE_LIGHT);
         pairing.setTextDirection(View.TEXT_DIRECTION_LTR);
         pairing.setGravity(Gravity.CENTER);
@@ -367,38 +700,32 @@ public final class MainActivity extends Activity {
         ImageView qr = new ImageView(this);
         qr.setBackgroundColor(Color.WHITE);
         qr.setPadding(dp(7), dp(7), dp(7), dp(7));
-        qr.setImageBitmap(qr(api.activationUrl(license), 260));
-        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(190), dp(190));
+        qr.setImageBitmap(qr(api.activationUrl(license), 240));
+        int qrSize = showActivationActions ? 158 : 142;
+        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(qrSize), dp(qrSize));
         qrParams.topMargin = dp(12);
         panel.addView(qr, qrParams);
-        TextView qrText = BlofyUi.text(this, "امسح الباركود للتفعيل وإرسال بيانات الباقة", 12, BlofyUi.MUTED);
+        TextView qrText = BlofyUi.text(this, "امسح الباركود لفتح لوحة الجهاز وإدارة القوائم", 11, BlofyUi.MUTED);
         qrText.setGravity(Gravity.CENTER);
         panel.addView(qrText);
 
         if (!showActivationActions) return panel;
-        EditText code = BlofyUi.input(this, "رمز التفعيل", false);
-        code.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(12)});
-        code.setTag("activation_code");
-        LinearLayout.LayoutParams codeParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
-        codeParams.topMargin = dp(12);
-        panel.addView(code, codeParams);
-        Button activate = BlofyUi.button(this, "تفعيل / تحديث من الموقع", true);
+        Button activate = BlofyUi.button(this, "↻  تحديث من الموقع", true);
         LinearLayout.LayoutParams activateParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
-        activateParams.topMargin = dp(9);
+        activateParams.topMargin = dp(12);
         panel.addView(activate, activateParams);
         activate.setOnClickListener(view -> {
             activate.setEnabled(false);
-            String supplied = value(code);
             worker.execute(() -> {
                 try {
-                    if (!supplied.isEmpty()) {
-                        JSONObject body = new JSONObject();
-                        body.put("deviceId", api.deviceId());
-                        body.put("code", supplied);
-                        api.post("/api/activate", body);
-                    }
+                    registerDevice();
                     license = new BlofyModels.License(api.get("/api/license?device_id=" + BlofyApi.encode(api.deviceId())));
-                    tryRemoteSetup();
+                    JSONObject bootstrap = tryRemoteSetup();
+                    if (bootstrap != null) {
+                        DeviceIdentity.updatePublicIdentity(this, bootstrap);
+                        playlistStore.applyRemote(bootstrap);
+                    }
+                    refreshRemotePlaylists();
                     session = new BlofyModels.Session(api.get("/api/session"));
                     main.post(() -> {
                         Toast.makeText(this, license.usable() ? "تم تحديث التفعيل" : "الجهاز غير مفعّل", Toast.LENGTH_LONG).show();
@@ -492,8 +819,8 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(dp(280), dp(58));
         retryParams.topMargin = dp(18);
         panel.addView(retry, retryParams);
-        Button logout = BlofyUi.button(this, "تغيير بيانات الباقة", false);
-        logout.setOnClickListener(view -> logout());
+        Button logout = BlofyUi.button(this, "العودة لقوائم التشغيل", false);
+        logout.setOnClickListener(view -> showPlaylistHub(""));
         LinearLayout.LayoutParams logoutParams = new LinearLayout.LayoutParams(dp(280), dp(58));
         logoutParams.topMargin = dp(10);
         panel.addView(logout, logoutParams);
@@ -687,11 +1014,12 @@ public final class MainActivity extends Activity {
     }
 
     private void logout() {
-        showSplash("جاري تغيير الباقة", "إنهاء الجلسة الحالية");
+        showSplash("جاري فصل القائمة", "ستبقى القائمة محفوظة في جهازك");
         worker.execute(() -> {
             try { api.delete("/api/session"); } catch (Exception ignored) {}
             api.clearSession();
             database.beginFreshImport();
+            playlistStore.clearActive();
             session = new BlofyModels.Session(null);
             main.post(() -> showPlaylistHub(""));
         });
@@ -711,7 +1039,7 @@ public final class MainActivity extends Activity {
     }
 
     private void scaleOnFocus(View view) {
-        view.setOnFocusChangeListener((target, focused) -> target.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f).setDuration(110).start());
+        BlofyUi.attachScaleFocus(view, 1.008f);
     }
 
     private FrameLayout.LayoutParams match() {
@@ -747,8 +1075,14 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if ("home".equals(screen) || "login".equals(screen) || "splash".equals(screen)) finish();
-        else showHome();
+        if ("playlist_editor".equals(screen) || "login".equals(screen)
+                || "import".equals(screen) || "settings".equals(screen)) {
+            showPlaylistHub("");
+        } else if ("playlists".equals(screen) || "splash".equals(screen)) {
+            finish();
+        } else {
+            showPlaylistHub("");
+        }
     }
 
     @Override

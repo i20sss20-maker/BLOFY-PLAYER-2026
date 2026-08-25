@@ -74,6 +74,7 @@ final class BlofyApi {
 
     JSONObject delete(String path) throws Exception { return request("DELETE", path, null); }
     JSONObject post(String path, JSONObject body) throws Exception { return request("POST", path, body); }
+    JSONObject patch(String path, JSONObject body) throws Exception { return request("PATCH", path, body); }
 
     JSONObject request(String method, String path, JSONObject body) throws Exception {
         HttpURLConnection connection = open(path, method);

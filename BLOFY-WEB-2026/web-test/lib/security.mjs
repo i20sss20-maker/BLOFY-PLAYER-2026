@@ -72,6 +72,28 @@ export function licenseCookie(token, maxAge = 60 * 60 * 24 * 400) {
   ].filter(Boolean).join("; ");
 }
 
+export function portalCookie(token, maxAge = 60 * 60 * 12) {
+  return [
+    `blofy_portal=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    production ? "Secure" : "",
+    `Max-Age=${maxAge}`,
+  ].filter(Boolean).join("; ");
+}
+
+export function clearPortalCookie() {
+  return [
+    "blofy_portal=",
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    production ? "Secure" : "",
+    "Max-Age=0",
+  ].filter(Boolean).join("; ");
+}
+
 export function clearSessionCookie() {
   return [
     "blofy_session=",

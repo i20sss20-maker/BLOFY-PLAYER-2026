@@ -20,16 +20,26 @@ import java.util.concurrent.Executors;
 
 final class ImageLoader {
     private static final int MAX_IMAGE_BYTES = 6 * 1024 * 1024;
-    private static final LruCache<String, Bitmap> CACHE = new LruCache<String, Bitmap>(48 * 1024) {
-        @Override protected int sizeOf(String key, Bitmap value) { return Math.max(1, value.getByteCount() / 1024); }
-    };
-    private static final ExecutorService POOL = Executors.newFixedThreadPool(8);
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Set<String> IN_FLIGHT = Collections.synchronizedSet(new HashSet<>());
+    private static volatile ImageRuntime runtime;
 
     private final BlofyApi api;
 
     ImageLoader(BlofyApi api) { this.api = api; }
+
+    /** Recreate image resources after the viewer changes performance mode. */
+    static void resetRuntime() {
+        synchronized (ImageLoader.class) {
+            ImageRuntime previous = runtime;
+            runtime = null;
+            if (previous != null) {
+                previous.cache.evictAll();
+                previous.pool.shutdownNow();
+            }
+            IN_FLIGHT.clear();
+        }
+    }
 
     void load(ImageView view, String path) {
         if (path == null || path.trim().isEmpty()) {
@@ -37,8 +47,9 @@ final class ImageLoader {
             view.setTag(null);
             return;
         }
+        ImageRuntime resources = resources(view);
         view.setTag(path);
-        Bitmap cached = CACHE.get(path);
+        Bitmap cached = resources.cache.get(path);
         if (cached != null && !cached.isRecycled()) {
             view.setImageBitmap(cached);
             return;
@@ -47,7 +58,7 @@ final class ImageLoader {
         if (!IN_FLIGHT.add(path)) return;
 
         WeakReference<ImageView> reference = new WeakReference<>(view);
-        POOL.execute(() -> {
+        resources.pool.execute(() -> {
             try {
                 byte[] bytes = isDirectHttp(path) ? directImage(path) : api.image(path);
                 if (bytes == null || bytes.length == 0) return;
@@ -56,10 +67,11 @@ final class ImageLoader {
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
                 BitmapFactory.Options options = new BitmapFactory.Options();
                 options.inPreferredConfig = Bitmap.Config.RGB_565;
-                options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, 720, 1080);
+                options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight,
+                        resources.profile.imageTargetWidth(), resources.profile.imageTargetHeight());
                 Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
                 if (bitmap == null) return;
-                CACHE.put(path, bitmap);
+                resources.cache.put(path, bitmap);
                 MAIN.post(() -> {
                     ImageView target = reference.get();
                     if (target != null && path.equals(target.getTag())) target.setImageBitmap(bitmap);
@@ -69,6 +81,39 @@ final class ImageLoader {
                 IN_FLIGHT.remove(path);
             }
         });
+    }
+
+    private static ImageRuntime resources(ImageView view) {
+        ImageRuntime current = runtime;
+        if (current != null) return current;
+        synchronized (ImageLoader.class) {
+            current = runtime;
+            if (current == null) {
+                current = new ImageRuntime(DeviceCapabilityProfile.detect(view.getContext()));
+                runtime = current;
+            }
+            return current;
+        }
+    }
+
+    private static final class ImageRuntime {
+        final DeviceCapabilityProfile profile;
+        final LruCache<String, Bitmap> cache;
+        final ExecutorService pool;
+
+        ImageRuntime(DeviceCapabilityProfile profile) {
+            this.profile = profile;
+            this.cache = new LruCache<String, Bitmap>(profile.imageCacheKilobytes()) {
+                @Override protected int sizeOf(String key, Bitmap value) {
+                    return Math.max(1, value.getByteCount() / 1024);
+                }
+            };
+            this.pool = Executors.newFixedThreadPool(profile.imageWorkerCount(), runnable -> {
+                Thread thread = new Thread(runnable, "blofy-artwork");
+                thread.setPriority(Thread.NORM_PRIORITY - 1);
+                return thread;
+            });
+        }
     }
 
     private static int sampleSize(int width, int height, int targetWidth, int targetHeight) {

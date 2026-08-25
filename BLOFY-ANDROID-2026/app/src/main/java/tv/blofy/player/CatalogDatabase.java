@@ -11,7 +11,7 @@ import java.util.List;
 
 final class CatalogDatabase extends SQLiteOpenHelper {
     private static final String NAME = "blofy_catalog.db";
-    private static final int VERSION = 5;
+    private static final int VERSION = 6;
     private static final String MEDIA_COLUMNS =
             "m.id,m.name,m.image,m.backdrop,m.category_id,m.rating,m.year,m.extension,m.type," +
                     "m.release_date,m.rating_source,m.updated_at";
@@ -25,11 +25,12 @@ final class CatalogDatabase extends SQLiteOpenHelper {
     @Override
     public void onCreate(SQLiteDatabase database) {
         database.execSQL("CREATE TABLE categories(type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(type,id))");
-        database.execSQL("CREATE TABLE media(type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,image TEXT,backdrop TEXT,category_id TEXT,rating TEXT,year TEXT,extension TEXT,release_date TEXT NOT NULL DEFAULT '',rating_source TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT '',sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(type,id))");
+        database.execSQL("CREATE TABLE media(type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,search_name TEXT NOT NULL DEFAULT '',image TEXT,backdrop TEXT,category_id TEXT,rating TEXT,year TEXT,extension TEXT,release_date TEXT NOT NULL DEFAULT '',rating_source TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT '',sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(type,id))");
         database.execSQL("CREATE INDEX media_type_category_order ON media(type,category_id,sort_order)");
         database.execSQL("CREATE INDEX media_type_order ON media(type,sort_order)");
         database.execSQL("CREATE INDEX media_type_release ON media(type,release_date,year)");
         database.execSQL("CREATE INDEX media_name_search ON media(type,name)");
+        database.execSQL("CREATE INDEX media_normalized_search ON media(type,search_name)");
         database.execSQL("CREATE TABLE favorites(type TEXT NOT NULL,id TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(type,id))");
         database.execSQL("CREATE TABLE history(type TEXT NOT NULL,id TEXT NOT NULL,watched_at INTEGER NOT NULL,PRIMARY KEY(type,id))");
         database.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
@@ -56,6 +57,14 @@ final class CatalogDatabase extends SQLiteOpenHelper {
             try { database.execSQL("ALTER TABLE media ADD COLUMN rating_source TEXT NOT NULL DEFAULT ''"); } catch (Exception ignored) {}
             try { database.execSQL("ALTER TABLE media ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"); } catch (Exception ignored) {}
             database.execSQL("CREATE INDEX IF NOT EXISTS media_type_release ON media(type,release_date,year)");
+        }
+        if (oldVersion < 6) {
+            try { database.execSQL("ALTER TABLE media ADD COLUMN search_name TEXT NOT NULL DEFAULT ''"); } catch (Exception ignored) {}
+            database.execSQL("CREATE INDEX IF NOT EXISTS media_normalized_search ON media(type,search_name)");
+            // Catalog rows are remote/cache data. Reimporting avoids a long, blocking Java backfill
+            // across very large IPTV libraries while favorites and watch history stay untouched.
+            database.delete("categories", null, null);
+            database.delete("media", null, null);
         }
         ContentValues values = new ContentValues();
         values.put("key", "sync_state");
@@ -102,6 +111,7 @@ final class CatalogDatabase extends SQLiteOpenHelper {
                 values.put("type", item.type);
                 values.put("id", item.id);
                 values.put("name", item.name);
+                values.put("search_name", ArabicNormalizer.normalizeForSearch(item.name));
                 values.put("image", item.image);
                 values.put("backdrop", item.backdrop);
                 values.put("category_id", item.categoryId);
@@ -141,14 +151,19 @@ final class CatalogDatabase extends SQLiteOpenHelper {
         List<String> args = new ArrayList<>();
         if (type != null && !type.isEmpty()) { where.add("m.type=?"); args.add(type); }
         if (category != null && !category.isEmpty()) { where.add("m.category_id=?"); args.add(category); }
-        String cleanSearch = search == null ? "" : search.trim();
+        String originalSearch = search == null ? "" : search.trim();
+        String cleanSearch = ArabicNormalizer.normalizeForSearch(originalSearch);
         String escapedSearch = escapeLike(cleanSearch);
-        if (!cleanSearch.isEmpty()) { where.add("m.name LIKE ? ESCAPE '\\'"); args.add("%" + escapedSearch + "%"); }
+        if (!cleanSearch.isEmpty()) {
+            where.add("(m.search_name LIKE ? ESCAPE '\\' OR (m.search_name='' AND m.name LIKE ? ESCAPE '\\'))");
+            args.add("%" + escapedSearch + "%");
+            args.add("%" + escapeLike(originalSearch) + "%");
+        }
         if (!where.isEmpty()) sql.append("WHERE ").append(android.text.TextUtils.join(" AND ", where)).append(' ');
         if (historyOnly) {
             sql.append("ORDER BY h.watched_at DESC ");
         } else if (!cleanSearch.isEmpty()) {
-            sql.append("ORDER BY CASE WHEN m.name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END,m.sort_order ASC ");
+            sql.append("ORDER BY CASE WHEN m.search_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END,m.sort_order ASC ");
             args.add(escapedSearch + "%");
         } else {
             sql.append("ORDER BY m.sort_order ASC ");

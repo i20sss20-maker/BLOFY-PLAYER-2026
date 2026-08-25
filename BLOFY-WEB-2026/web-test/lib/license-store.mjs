@@ -50,18 +50,14 @@ export class LicenseStore {
   }
 
   async persist() {
-    const directory = path.dirname(this.filePath);
-    await mkdir(directory, { recursive: true });
+    await mkdir(path.dirname(this.filePath), { recursive: true });
     const temporary = `${this.filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
     await writeFile(temporary, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, this.filePath);
   }
 
   locked(operation) {
-    const run = this.queue.then(async () => {
-      await this.ensureLoaded();
-      return operation();
-    });
+    const run = this.queue.then(async () => { await this.ensureLoaded(); return operation(); });
     this.queue = run.catch(() => {});
     return run;
   }
@@ -73,13 +69,8 @@ export class LicenseStore {
     const active = activatedUntil > now;
     const expiresAt = active ? activatedUntil : trialExpiresAt;
     const plan = active ? "active" : trialExpiresAt > now ? "trial" : "expired";
-    return {
-      deviceId,
-      plan,
-      status: plan === "active" ? "مفعّل" : plan === "trial" ? "تجريبي" : "منتهي",
-      expiresAt,
-      remainingDays: Math.max(0, Math.ceil((expiresAt - now) / DAY_MS)),
-    };
+    return { deviceId, plan, status: plan === "active" ? "مفعّل" : plan === "trial" ? "تجريبي" : "منتهي", expiresAt,
+      remainingDays: Math.max(0, Math.ceil((expiresAt - now) / DAY_MS)) };
   }
 
   get(deviceId, { create = true } = {}) {
@@ -91,8 +82,7 @@ export class LicenseStore {
         this.data.devices[cleanId] = record;
         await this.persist();
       }
-      if (!record) return null;
-      return this.statusFor(cleanId, record);
+      return record ? this.statusFor(cleanId, record) : null;
     });
   }
 
@@ -107,11 +97,9 @@ export class LicenseStore {
       entry.devices = Array.isArray(entry.devices) ? entry.devices : [];
       const alreadyRedeemed = entry.devices.includes(cleanId);
       if (!alreadyRedeemed && entry.devices.length >= Number(entry.maxUses || 1)) throw new Error("تم استخدام رمز التفعيل بالكامل.");
-
       const record = this.data.devices[cleanId] || { startedAt: now, activatedUntil: 0, createdAt: now };
       if (!alreadyRedeemed) {
-        const days = boundedInteger(entry.days, 30, 1, 3650);
-        record.activatedUntil = Math.max(now, Number(record.activatedUntil || 0)) + days * DAY_MS;
+        record.activatedUntil = Math.max(now, Number(record.activatedUntil || 0)) + boundedInteger(entry.days, 30, 1, 3650) * DAY_MS;
         record.lastCode = code;
         record.updatedAt = now;
         entry.devices.push(cleanId);
@@ -126,24 +114,13 @@ export class LicenseStore {
   createCode({ code, days = 30, maxUses = 1, validDays = 365, label = "" } = {}) {
     return this.locked(async () => {
       let generated = code;
-      if (!generated) {
-        do {
-          generated = String(crypto.randomInt(0, 100_000_000)).padStart(8, "0");
-        } while (this.data.codes[generated]);
-      }
+      if (!generated) do { generated = String(crypto.randomInt(0, 100_000_000)).padStart(8, "0"); } while (this.data.codes[generated]);
       const clean = cleanCode(generated);
       if (this.data.codes[clean]) throw new Error("رمز التفعيل موجود مسبقًا.");
       const now = this.now();
-      const entry = {
-        code: clean,
-        days: boundedInteger(days, 30, 1, 3650),
-        maxUses: boundedInteger(maxUses, 1, 1, 10000),
-        label: String(label || "").slice(0, 80),
-        createdAt: now,
-        expiresAt: now + boundedInteger(validDays, 365, 1, 3650) * DAY_MS,
-        devices: [],
-        disabled: false,
-      };
+      const entry = { code: clean, days: boundedInteger(days, 30, 1, 3650), maxUses: boundedInteger(maxUses, 1, 1, 10000),
+        label: String(label || "").slice(0, 80), createdAt: now,
+        expiresAt: now + boundedInteger(validDays, 365, 1, 3650) * DAY_MS, devices: [], disabled: false };
       this.data.codes[clean] = entry;
       await this.persist();
       return { ...entry, used: 0 };

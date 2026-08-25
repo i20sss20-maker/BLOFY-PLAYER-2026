@@ -34,8 +34,21 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void fastStartupTimeoutsAreBounded() {
-        assertEquals(8_000, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(3_500, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(5_500, PlaybackPolicy.startupTimeoutMs(0));
+        assertEquals(4_500, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(6_000, PlaybackPolicy.vodStartupTimeoutMs(false));
+        assertEquals(7_500, PlaybackPolicy.vodStartupTimeoutMs(true));
+        assertEquals(7_000, PlaybackPolicy.vlcStartupTimeoutMs(false));
+        assertEquals(9_000, PlaybackPolicy.vlcStartupTimeoutMs(true));
+    }
+
+    @Test
+    public void failuresAreClassifiedWithoutGuessingTrackSupport() {
+        assertTrue(PlaybackPolicy.isNetworkFailure("HTTP 400"));
+        assertTrue(PlaybackPolicy.isNetworkFailure("ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"));
+        assertTrue(PlaybackPolicy.isDecoderFailure("ERROR_CODE_DECODING_FORMAT_UNSUPPORTED"));
+        assertTrue(PlaybackPolicy.isStartupTimeout("انتهت مهلة بدء التشغيل"));
+        assertFalse(PlaybackPolicy.isNetworkFailure("ERROR_CODE_DECODER_INIT_FAILED"));
     }
 
     @Test
@@ -44,18 +57,4 @@ public final class PlaybackPolicyTest {
         assertEquals("ts", PlaybackPolicy.alternateLiveExtension("m3u8"));
     }
 
-    @Test
-    public void recoveryUsesHttpFirstThenCronetThenAlternateFormat() {
-        assertFalse(PlaybackPolicy.useCronet(0));
-        assertTrue(PlaybackPolicy.useCronet(1));
-        assertFalse(PlaybackPolicy.useCronet(2));
-        assertTrue(PlaybackPolicy.useCronet(3));
-
-        assertTrue(PlaybackPolicy.shouldRetrySameFormat(1));
-        assertFalse(PlaybackPolicy.shouldRetrySameFormat(2));
-        assertTrue(PlaybackPolicy.shouldTryAlternateLiveFormat(2));
-        assertTrue(PlaybackPolicy.shouldRetryAlternateFormat(3));
-        assertFalse(PlaybackPolicy.exhausted(4));
-        assertTrue(PlaybackPolicy.exhausted(5));
-    }
 }

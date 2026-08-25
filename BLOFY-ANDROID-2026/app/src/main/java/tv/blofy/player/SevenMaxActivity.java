@@ -25,8 +25,12 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -129,7 +133,7 @@ public final class SevenMaxActivity extends Activity {
         copy.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         copy.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
 
-        TextView eyebrow = BlofyUi.chip(this, featured == null ? "BLOFY ORIGINAL" : "مقترح لك  •  BLOFY");
+        TextView eyebrow = BlofyUi.chip(this, featured == null ? "BLOFY PLAYER" : heroLabel(featured));
         eyebrow.setGravity(Gravity.CENTER);
         copy.addView(eyebrow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
 
@@ -208,7 +212,7 @@ public final class SevenMaxActivity extends Activity {
                 candidates.addAll(loaded);
                 BlofyModels.Media first = candidates.get(0);
                 active[0] = first;
-                eyebrow.setText("مقترح لك  •  BLOFY");
+                eyebrow.setText(heroLabel(first));
                 title.setText(first.name);
                 meta.setText(formatMeta(first));
                 description.setText("اكتشف التفاصيل وابدأ المشاهدة بتجربة BLOFY السينمائية الجديدة.");
@@ -228,7 +232,7 @@ public final class SevenMaxActivity extends Activity {
                     index[0] = (index[0] + 1) % candidates.size();
                     BlofyModels.Media next = candidates.get(index[0]);
                     active[0] = next;
-                    eyebrow.setText("الأعلى تقييماً  •  BLOFY");
+                    eyebrow.setText(heroLabel(next));
                     title.setText(next.name);
                     meta.setText(formatMeta(next));
                     description.setText("اختيار متجدد حسب التقييم وتاريخ الإصدار وأحدث ما وصل إلى مكتبتك.");
@@ -248,10 +252,78 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private List<BlofyModels.Media> featuredMedia() {
-        List<BlofyModels.Media> candidates = database.featured(7);
-        if (candidates.isEmpty()) candidates = database.latest("movies", 7, 0);
-        if (candidates.isEmpty()) candidates = database.latest("series", 7, 0);
+        Map<String, BlofyModels.Media> unique = new LinkedHashMap<>();
+        appendUnique(unique, database.featured(18));
+        appendUnique(unique, database.latest("movies", 12, 0));
+        appendUnique(unique, database.latest("series", 12, 0));
+        List<BlofyModels.Media> candidates = new ArrayList<>(unique.values());
+        Collections.sort(candidates, (left, right) -> {
+            boolean leftVerified = verifiedRating(left);
+            boolean rightVerified = verifiedRating(right);
+            if (leftVerified != rightVerified) return leftVerified ? -1 : 1;
+            if (leftVerified) {
+                int rating = Double.compare(ratingScore(right), ratingScore(left));
+                if (rating != 0) return rating;
+            }
+            boolean leftCurrent = currentYear(left);
+            boolean rightCurrent = currentYear(right);
+            if (leftCurrent != rightCurrent) return leftCurrent ? -1 : 1;
+            return freshnessKey(right).compareTo(freshnessKey(left));
+        });
+        if (candidates.size() > 7) return new ArrayList<>(candidates.subList(0, 7));
         return candidates;
+    }
+
+    private void appendUnique(Map<String, BlofyModels.Media> target, List<BlofyModels.Media> values) {
+        if (values == null) return;
+        for (BlofyModels.Media item : values) {
+            if (item == null || TextUtils.isEmpty(item.id) || TextUtils.isEmpty(item.name)) continue;
+            if (TextUtils.isEmpty(item.backdrop) && TextUtils.isEmpty(item.image)) continue;
+            target.put(item.type + ":" + item.id, item);
+        }
+    }
+
+    private boolean verifiedRating(BlofyModels.Media item) {
+        return item != null && BlofyModels.isDisplayableRating(item.ratingSource, item.rating);
+    }
+
+    private double ratingScore(BlofyModels.Media item) {
+        String value = item == null ? "" : item.rating;
+        if (value == null) return 0d;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(\\d+(?:[.,]\\d+)?)").matcher(value);
+        if (!matcher.find()) return 0d;
+        try {
+            double score = Double.parseDouble(matcher.group(1).replace(',', '.'));
+            String source = item.ratingSource == null
+                    ? "" : item.ratingSource.toLowerCase(Locale.US);
+            boolean hundredPoint = value.contains("%") || source.contains("rotten")
+                    || source.contains("tomato") || source.contains("metacritic")
+                    || source.contains("روتن");
+            return hundredPoint ? score / 10d : score;
+        } catch (NumberFormatException ignored) {
+            return 0d;
+        }
+    }
+
+    private boolean currentYear(BlofyModels.Media item) {
+        String year = String.valueOf(Calendar.getInstance().get(Calendar.YEAR));
+        return (item.releaseDate != null && item.releaseDate.startsWith(year))
+                || year.equals(item.year);
+    }
+
+    private String freshnessKey(BlofyModels.Media item) {
+        String value = !TextUtils.isEmpty(item.updatedAt) ? item.updatedAt
+                : !TextUtils.isEmpty(item.releaseDate) ? item.releaseDate : item.year;
+        String digits = value == null ? "" : value.replaceAll("[^0-9]", "");
+        if (digits.length() == 4) return digits + "0000";
+        return digits;
+    }
+
+    private String heroLabel(BlofyModels.Media item) {
+        if (verifiedRating(item)) return "الأعلى تقييماً  •  " + item.ratingSource;
+        if (currentYear(item)) return "وصل حديثاً  •  BLOFY";
+        return "مختار من مكتبتك  •  BLOFY";
     }
 
     private String heroDots(int count, int selected) {
@@ -518,7 +590,9 @@ public final class SevenMaxActivity extends Activity {
                 pending[0] = () -> {
                     if (owner.equals(screen)) listener.onSearch(query);
                 };
-                main.postDelayed(pending[0], 150L);
+                // A single character is enough to search. The tiny delay only
+                // coalesces remote-key repeats and keeps low-memory TVs smooth.
+                main.postDelayed(pending[0], 65L);
             }
         });
         search.setOnEditorActionListener((v, action, event) -> {
@@ -839,8 +913,7 @@ public final class SevenMaxActivity extends Activity {
         List<String> values = new ArrayList<>();
         if (!TextUtils.isEmpty(item.releaseDate)) values.add(item.releaseDate);
         else if (!TextUtils.isEmpty(item.year)) values.add(item.year);
-        if (!TextUtils.isEmpty(item.rating)) values.add((TextUtils.isEmpty(item.ratingSource)
-                ? "" : item.ratingSource + " ") + "★ " + item.rating);
+        if (verifiedRating(item)) values.add(item.ratingSource + " ★ " + item.rating);
         values.add("series".equals(item.type) ? "مسلسل" : "movies".equals(item.type) ? "فيلم" : "بث مباشر");
         return TextUtils.join("  •  ", values);
     }
@@ -986,10 +1059,13 @@ public final class SevenMaxActivity extends Activity {
                             || !selectedQuery.equals(query)) return;
                     loading = false;
                     if (next.size() < LIVE_PAGE) exhausted = true;
-                    if (next.isEmpty()) return;
-                    rows.addAll(next);
-                    if (offset == 0) notifyDataSetChanged();
-                    else notifyItemRangeInserted(offset, next.size());
+                    if (!next.isEmpty()) {
+                        rows.addAll(next);
+                        if (offset == 0) notifyDataSetChanged();
+                        else notifyItemRangeInserted(offset, next.size());
+                    } else if (offset == 0) {
+                        notifyDataSetChanged();
+                    }
                     if (offset == 0 && firstPageLoaded != null) {
                         Runnable callback = firstPageLoaded;
                         firstPageLoaded = null;
@@ -1010,6 +1086,7 @@ public final class SevenMaxActivity extends Activity {
             card.setPadding(dp(8), dp(5), dp(10), dp(5));
             card.setBackground(BlofyUi.focusDrawable(SevenMaxActivity.this,
                     Color.argb(112, 26, 22, 39), BlofyUi.PANEL_SOFT, BlofyUi.PURPLE_LIGHT));
+            BlofyUi.attachScaleFocus(card, 1.008f);
 
             TextView number = BlofyUi.text(parent.getContext(), "", 10, BlofyUi.MUTED);
             number.setGravity(Gravity.CENTER);
@@ -1046,7 +1123,6 @@ public final class SevenMaxActivity extends Activity {
             images.load(holder.logo, media.image);
             holder.card.setScaleX(1f);
             holder.card.setScaleY(1f);
-            BlofyUi.attachScaleFocus(holder.card, 1.015f);
             holder.card.setOnClickListener(v -> {
                 if (previewedId != null && media.id.equals(previewedId[0])) play(media);
                 else if (listener != null) listener.selected(media);
@@ -1254,10 +1330,13 @@ public final class SevenMaxActivity extends Activity {
                             || !selectedQuery.equals(query)) return;
                     loading = false;
                     if (next.size() < POSTER_PAGE) exhausted = true;
-                    if (next.isEmpty()) return;
-                    rows.addAll(next);
-                    if (offset == 0) notifyDataSetChanged();
-                    else notifyItemRangeInserted(offset, next.size());
+                    if (!next.isEmpty()) {
+                        rows.addAll(next);
+                        if (offset == 0) notifyDataSetChanged();
+                        else notifyItemRangeInserted(offset, next.size());
+                    } else if (offset == 0) {
+                        notifyDataSetChanged();
+                    }
                     if (offset == 0 && firstPageLoaded != null) {
                         Runnable callback = firstPageLoaded;
                         firstPageLoaded = null;

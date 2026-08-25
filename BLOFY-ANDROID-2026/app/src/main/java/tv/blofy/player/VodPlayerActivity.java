@@ -53,7 +53,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-/** Dedicated VOD engine: Media3 first, Cronet retry, then LibVLC video fallback. */
+/** Dedicated VOD engine: one Media3 attempt, then a bounded LibVLC fallback. */
 @UnstableApi
 public final class VodPlayerActivity extends Activity implements Player.Listener {
     public static final String EXTRA_ID = "id";
@@ -63,7 +63,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService network = Executors.newSingleThreadExecutor();
-    private final ExecutorService cronetExecutor = Executors.newCachedThreadPool();
 
     private PlayerView playerView;
     private SurfaceView vlcSurface;
@@ -91,7 +90,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private String playbackReferer = "";
     private String sourceVariant = "canonical";
     private long resumePosition;
-    private boolean useCronet;
     private boolean usingVlc;
     private boolean firstFrame;
     private boolean resolving;
@@ -122,7 +120,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     };
 
     private final Runnable hideControls = () -> {
-        if (controls != null && errorPanel.getVisibility() != View.VISIBLE && !optionFocused()) {
+        if (controls != null && errorPanel.getVisibility() != View.VISIBLE && !controls.hasFocus()) {
             controls.setVisibility(View.GONE);
         }
     };
@@ -164,6 +162,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         root.addView(vlcSurface, new FrameLayout.LayoutParams(-1, -1));
 
         playerView = new PlayerView(this);
+        playerView.setId(View.generateViewId());
         playerView.setUseController(false);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
         playerView.setKeepScreenOn(true);
@@ -264,6 +263,30 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         subtitleButton.setNextFocusLeftId(audioButton.getId());
         subtitleButton.setNextFocusRightId(stereoButton.getId());
         stereoButton.setNextFocusLeftId(subtitleButton.getId());
+        audioButton.setNextFocusLeftId(audioButton.getId());
+        stereoButton.setNextFocusRightId(stereoButton.getId());
+        audioButton.setNextFocusUpId(audioButton.getId());
+        subtitleButton.setNextFocusUpId(subtitleButton.getId());
+        stereoButton.setNextFocusUpId(stereoButton.getId());
+        audioButton.setNextFocusDownId(playerView.getId());
+        subtitleButton.setNextFocusDownId(playerView.getId());
+        stereoButton.setNextFocusDownId(playerView.getId());
+        View.OnFocusChangeListener fixedControlFocus = (view, focused) -> {
+            view.animate().cancel();
+            view.setScaleX(1f);
+            view.setScaleY(1f);
+            if (focused) {
+                controls.setVisibility(View.VISIBLE);
+                main.removeCallbacks(hideControls);
+            } else {
+                main.post(() -> {
+                    if (controls != null && !controls.hasFocus()) showControls();
+                });
+            }
+        };
+        audioButton.setOnFocusChangeListener(fixedControlFocus);
+        subtitleButton.setOnFocusChangeListener(fixedControlFocus);
+        stereoButton.setOnFocusChangeListener(fixedControlFocus);
         controls.addView(trackRow, new LinearLayout.LayoutParams(-1, dp(46)));
 
         LinearLayout footer = new LinearLayout(this);
@@ -313,7 +336,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         retryButton.setBackground(retryButtonBackground());
         retryButton.setOnClickListener(v -> {
             attempt = 0;
-            useCronet = false;
             usingVlc = false;
             sourceVariant = "canonical";
             alternateSourceAttempted = false;
@@ -383,9 +405,9 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         vlcSurface.setVisibility(View.GONE);
 
         DataSource.Factory source = PlaybackTransportFactory.create(
-                this, useCronet, cronetExecutor,
-                ultraHd() ? 6_000 : 4_000,
-                ultraHd() ? 45_000 : 30_000,
+                this, false, network,
+                ultraHd() ? 5_000 : 3_500,
+                ultraHd() ? 18_000 : 14_000,
                 attempt, playbackReferer);
         DefaultExtractorsFactory extractors = new DefaultExtractorsFactory();
         DefaultMediaSourceFactory mediaSources = new DefaultMediaSourceFactory(source, extractors);
@@ -393,10 +415,10 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
 
-        int min = ultraHd() ? 8_000 : 5_000;
-        int max = ultraHd() ? 60_000 : 35_000;
-        int start = ultraHd() ? 800 : 450;
-        int rebuffer = ultraHd() ? 2_500 : 1_200;
+        int min = ultraHd() ? 5_000 : 3_000;
+        int max = ultraHd() ? 36_000 : 24_000;
+        int start = ultraHd() ? 600 : 350;
+        int rebuffer = ultraHd() ? 1_800 : 900;
         DefaultLoadControl load = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(min, max, start, rebuffer)
                 .setPrioritizeTimeOverSizeThresholds(true)
@@ -440,7 +462,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         player.setMediaItem(item.build(), Math.max(0, resumePosition));
         player.prepare();
         player.play();
-        startWatchdog(ultraHd() ? 16_000 : 10_000);
+        startWatchdog(PlaybackPolicy.vodStartupTimeoutMs(ultraHd()));
     }
 
     private void openVlc(String reason) {
@@ -455,8 +477,8 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
         ArrayList<String> options = new ArrayList<>();
         options.add("--audio-time-stretch");
-        options.add("--network-caching=" + (ultraHd() ? "1000" : "700"));
-        options.add("--file-caching=" + (ultraHd() ? "1000" : "700"));
+        options.add("--network-caching=" + (ultraHd() ? "850" : "550"));
+        options.add("--file-caching=" + (ultraHd() ? "850" : "550"));
         options.add("--http-reconnect");
         options.add("--no-drop-late-frames");
         options.add("--no-skip-frames");
@@ -478,7 +500,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         media.setHWDecoderEnabled(true, false);
         media.addOption(":http-user-agent=" + PlaybackTransportFactory.userAgent(2));
         if (!playbackReferer.isEmpty()) media.addOption(":http-referrer=" + playbackReferer);
-        media.addOption(":network-caching=" + (ultraHd() ? "1000" : "700"));
+        media.addOption(":network-caching=" + (ultraHd() ? "850" : "550"));
         if (stereoMode) media.addOption(":stereo-mode=1");
         vlcPlayer.setMedia(media);
         media.release();
@@ -491,7 +513,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 }
             }, 900);
         }
-        startWatchdog(ultraHd() ? 20_000 : 13_000);
+        startWatchdog(PlaybackPolicy.vlcStartupTimeoutMs(ultraHd()));
         errorText.setText(reason == null ? "" : reason);
     }
 
@@ -520,7 +542,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 persistPosition(0);
                 break;
             case org.videolan.libvlc.MediaPlayer.Event.EncounteredError:
-                recover("VLC لم يتمكن من فك ترميز هذا المصدر");
+                recover("تعذر فتح المصدر بمشغل التوافق");
                 break;
             default:
                 break;
@@ -537,39 +559,37 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
     private void recover(String reason) {
         main.removeCallbacks(startupTimeout);
         savePosition();
-        String upperReason = reason == null ? "" : reason.toUpperCase(Locale.US);
-        boolean networkFailure = upperReason.contains("HTTP") || upperReason.contains("IO_")
-                || upperReason.contains("NETWORK") || upperReason.contains("CONNECTION");
-        if (!usingVlc && networkFailure && !alternateSourceAttempted && !id.isEmpty()) {
+        if (usingVlc) {
+            showFinalPlaybackError(reason);
+            return;
+        }
+
+        // An immediate HTTP/connection failure can be caused by the signed
+        // relay route. Resolve the provider's direct variant once, without also
+        // walking through an identical Cronet retry. A slow/unsupported decoder
+        // goes straight to LibVLC so total startup stays bounded.
+        if (PlaybackPolicy.isNetworkFailure(reason)
+                && !alternateSourceAttempted && !id.isEmpty()) {
             alternateSourceAttempted = true;
             sourceVariant = "direct";
-            attempt = 0;
-            useCronet = false;
+            attempt = 1;
             releaseAllEngines();
             resolvedUrl = "";
             resolving = false;
             resolve();
             return;
         }
-        if (usingVlc) {
-            showError(reason + "\nالصيغة: " + extension + "\nتمت تجربة Media3 وVLC");
-            return;
-        }
-        boolean decoderFailure = upperReason.contains("DECOD") || upperReason.contains("CODEC")
-                || upperReason.contains("FORMAT_UNSUPPORTED") || ultraHd();
-        if (decoderFailure) {
-            attempt = 2;
-            openVlc(reason);
-            return;
-        }
-        if (attempt == 0) {
-            attempt = 1;
-            useCronet = true;
-            openMedia3();
-            return;
-        }
+
         attempt = 2;
         openVlc(reason);
+    }
+
+    private void showFinalPlaybackError(String reason) {
+        String detail = reason == null || reason.trim().isEmpty()
+                ? "المصدر لا يرسل فيديو قابلاً للتشغيل"
+                : reason.trim();
+        showError("تعذر تشغيل هذا المصدر بعد المحاولة بمشغل التوافق."
+                + "\n" + detail + "\nالصيغة: " + extension);
     }
 
     private void showError(String message) {
@@ -746,25 +766,29 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         if (usingVlc || player == null || audioButton == null) return;
         List<TrackChoice> audio = trackChoices(C.TRACK_TYPE_AUDIO);
         int selectedAudio = selectedChoice(audio);
+        setTrackButtonAvailable(audioButton, !audio.isEmpty());
         audioButton.setText(selectedAudio >= 0
                 ? "🔊  الصوت: " + trackLabel(audio.get(selectedAudio).format, "تلقائي")
-                : "🔊  الصوت: تلقائي");
+                : audio.isEmpty() ? "🔊  الصوت: غير متاح" : "🔊  الصوت: تلقائي");
         List<TrackChoice> text = trackChoices(C.TRACK_TYPE_TEXT);
         int selectedText = selectedChoice(text);
+        setTrackButtonAvailable(subtitleButton, !text.isEmpty());
         subtitleButton.setText(selectedText >= 0
                 ? "CC  الترجمة: " + trackLabel(text.get(selectedText).format, "مضمّنة")
-                : "CC  الترجمة: إيقاف");
+                : text.isEmpty() ? "CC  الترجمة: غير متاحة" : "CC  الترجمة: إيقاف");
     }
 
     private void toggleStereo() {
         stereoMode = !stereoMode;
         stereoButton.setText(stereoMode ? "♫  المخرج: ستريو 2.0" : "♫  المخرج: تلقائي");
+        getSharedPreferences(SettingsActivity.PREFS, MODE_PRIVATE).edit()
+                .putString(SettingsActivity.KEY_AUDIO_OUTPUT, stereoMode ? "stereo" : "auto")
+                .apply();
         resumePosition = positionMs();
         if (usingVlc) {
             openVlc(stereoMode ? "تم تفعيل إخراج ستريو 2.0" : "تمت إعادة إخراج الصوت إلى تلقائي");
         } else if (player != null) {
             player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
-                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                     .setMaxAudioChannelCount(stereoMode ? 2 : Integer.MAX_VALUE)
                     .build());
             updateMedia3TrackButtons();
@@ -817,12 +841,36 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         org.videolan.libvlc.MediaPlayer.TrackDescription[] text = vlcPlayer.getSpuTracks();
         vlcAudioIndex = indexOfTrack(audio, vlcPlayer.getAudioTrack());
         vlcSubtitleIndex = indexOfTrack(text, vlcPlayer.getSpuTrack());
+        boolean audioAvailable = countSelectableTracks(audio) > 0;
+        boolean subtitleAvailable = countSelectableTracks(text) > 0;
+        setTrackButtonAvailable(audioButton, audioAvailable);
+        setTrackButtonAvailable(subtitleButton, subtitleAvailable);
         audioButton.setText(vlcAudioIndex >= 0
                 ? "🔊  الصوت: " + audio[vlcAudioIndex].name
-                : "🔊  الصوت" + (audio == null ? "" : " • " + audio.length + " مسار"));
+                : audioAvailable ? "🔊  الصوت" : "🔊  الصوت: غير متاح");
         subtitleButton.setText(vlcSubtitleIndex >= 0 && text[vlcSubtitleIndex].id >= 0
-                ? "CC  الترجمة: " + text[vlcSubtitleIndex].name : "CC  الترجمة: إيقاف");
+                ? "CC  الترجمة: " + text[vlcSubtitleIndex].name
+                : subtitleAvailable ? "CC  الترجمة: إيقاف"
+                : "CC  الترجمة: غير متاحة");
         stereoButton.setText(stereoMode ? "♫  المخرج: ستريو 2.0" : "♫  المخرج: تلقائي");
+    }
+
+    private static int countSelectableTracks(
+            org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks) {
+        if (tracks == null) return 0;
+        int count = 0;
+        for (org.videolan.libvlc.MediaPlayer.TrackDescription track : tracks) {
+            if (track != null && track.id >= 0) count++;
+        }
+        return count;
+    }
+
+    private void setTrackButtonAvailable(TextView button, boolean available) {
+        if (button == null) return;
+        button.setEnabled(available);
+        button.setFocusable(available);
+        button.setAlpha(available ? 1f : 0.58f);
+        if (!available && button.hasFocus()) playerView.requestFocus();
     }
 
     private static int indexOfTrack(org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks,
@@ -874,9 +922,14 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                         showControls();
                         return true;
                     case KeyEvent.KEYCODE_DPAD_LEFT:
+                        moveOptionFocus(false);
+                        return true;
                     case KeyEvent.KEYCODE_DPAD_RIGHT:
+                        moveOptionFocus(true);
+                        return true;
                     case KeyEvent.KEYCODE_DPAD_UP:
-                        return super.dispatchKeyEvent(event);
+                        showControls();
+                        return true;
                     default:
                         break;
                 }
@@ -891,7 +944,7 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
                 case KeyEvent.KEYCODE_DPAD_UP:
                 case KeyEvent.KEYCODE_MENU:
                     showControls();
-                    if (audioButton != null) audioButton.requestFocus();
+                    focusTrackControls();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_DOWN:
                     showControls();
@@ -920,6 +973,31 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
             }
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    private void focusTrackControls() {
+        if (audioButton != null && audioButton.isFocusable()) audioButton.requestFocus();
+        else if (subtitleButton != null && subtitleButton.isFocusable()) subtitleButton.requestFocus();
+        else if (stereoButton != null) stereoButton.requestFocus();
+    }
+
+    private void moveOptionFocus(boolean right) {
+        TextView[] options = new TextView[]{audioButton, subtitleButton, stereoButton};
+        View focused = getCurrentFocus();
+        int current = 0;
+        for (int index = 0; index < options.length; index++) {
+            if (options[index] == focused) { current = index; break; }
+        }
+        int direction = right ? 1 : -1;
+        for (int step = 1; step < options.length; step++) {
+            int candidate = current + direction * step;
+            if (candidate < 0 || candidate >= options.length) break;
+            if (options[candidate] != null && options[candidate].isFocusable()) {
+                options[candidate].requestFocus();
+                return;
+            }
+        }
+        if (options[current] != null) options[current].requestFocus();
     }
 
     private void persistPosition(long position) {
@@ -1069,7 +1147,6 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
         main.removeCallbacksAndMessages(null);
         releaseAllEngines();
         network.shutdownNow();
-        cronetExecutor.shutdownNow();
         super.onDestroy();
     }
 

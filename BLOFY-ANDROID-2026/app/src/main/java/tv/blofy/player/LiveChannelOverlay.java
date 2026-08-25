@@ -24,7 +24,7 @@ final class LiveChannelOverlay {
         void onChannelSelected(BlofyModels.Media media);
     }
 
-    private static final int PAGE = 220;
+    private static final int PAGE = 120;
 
     private final Activity activity;
     private final CatalogDatabase database;
@@ -36,6 +36,7 @@ final class LiveChannelOverlay {
     private final Adapter adapter;
     private final String categoryId;
     private String currentId = "";
+    private int animationGeneration;
 
     LiveChannelOverlay(Activity activity, String categoryId, Listener listener) {
         this.activity = activity;
@@ -126,6 +127,7 @@ final class LiveChannelOverlay {
     void show(String currentId) {
         this.currentId = currentId == null ? "" : currentId;
         adapter.reload();
+        animationGeneration++;
         panel.animate().cancel();
         container.setVisibility(View.VISIBLE);
         panel.setAlpha(0.88f);
@@ -135,22 +137,20 @@ final class LiveChannelOverlay {
             int selected = adapter.indexOf(this.currentId);
             if (selected >= 0) {
                 layoutManager.scrollToPositionWithOffset(selected, dp(90));
-                list.postOnAnimation(() -> {
-                    RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(selected);
-                    if (holder != null) holder.itemView.requestFocus();
-                    else list.requestFocus();
-                });
+                list.postOnAnimation(() -> focusPosition(selected));
             } else {
-                list.requestFocus();
+                focusPosition(0);
             }
         });
     }
 
     void hide() {
         if (!isVisible()) return;
+        int token = ++animationGeneration;
         panel.animate().cancel();
         panel.animate().alpha(0.88f).translationX(-dp(28)).setDuration(120L)
                 .withEndAction(() -> {
+                    if (token != animationGeneration) return;
                     container.setVisibility(View.GONE);
                     panel.setAlpha(1f);
                     panel.setTranslationX(0f);
@@ -166,10 +166,39 @@ final class LiveChannelOverlay {
         if (adapter.rows.isEmpty()) return;
         int current = adapter.indexOf(currentId);
         if (current < 0) current = 0;
+        if (direction > 0 && current >= adapter.rows.size() - 1 && !adapter.exhausted) {
+            adapter.loadMore();
+        }
         int next = Math.max(0, Math.min(adapter.rows.size() - 1, current + direction));
         BlofyModels.Media media = adapter.rows.get(next);
+        int previous = adapter.indexOf(this.currentId);
         this.currentId = media.id;
+        if (previous >= 0) adapter.notifyItemChanged(previous);
+        adapter.notifyItemChanged(next);
+        if (isVisible()) {
+            layoutManager.scrollToPositionWithOffset(next, dp(90));
+            list.postOnAnimation(() -> focusPosition(next));
+        }
         if (listener != null) listener.onChannelSelected(media);
+    }
+
+    private void focusPosition(int position) {
+        if (adapter.getItemCount() == 0) {
+            list.requestFocus();
+            return;
+        }
+        int safe = Math.max(0, Math.min(adapter.getItemCount() - 1, position));
+        RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(safe);
+        if (holder != null) {
+            holder.itemView.requestFocus();
+            return;
+        }
+        layoutManager.scrollToPositionWithOffset(safe, dp(90));
+        list.post(() -> {
+            RecyclerView.ViewHolder retry = list.findViewHolderForAdapterPosition(safe);
+            if (retry != null) retry.itemView.requestFocus();
+            else list.requestFocus();
+        });
     }
 
     private int dp(int value) { return BlofyUi.dp(activity, value); }
@@ -177,23 +206,30 @@ final class LiveChannelOverlay {
     private final class Adapter extends RecyclerView.Adapter<Adapter.Holder> {
         final List<BlofyModels.Media> rows = new ArrayList<>();
         boolean exhausted;
+        boolean loading;
+        boolean loadPosted;
 
         void reload() {
             rows.clear();
             exhausted = false;
+            loading = false;
+            loadPosted = false;
             loadMore();
         }
 
         void loadMore() {
-            if (exhausted) return;
+            if (exhausted || loading) return;
+            loading = true;
             int offset = rows.size();
             List<BlofyModels.Media> next = database.media("live", categoryId, "", false, false, PAGE, offset);
             if (next.size() < PAGE) exhausted = true;
             if (next.isEmpty()) {
+                loading = false;
                 if (offset == 0) notifyDataSetChanged();
                 return;
             }
             rows.addAll(next);
+            loading = false;
             if (offset == 0) notifyDataSetChanged();
             else notifyItemRangeInserted(offset, next.size());
         }
@@ -225,7 +261,13 @@ final class LiveChannelOverlay {
         }
 
         @Override public void onBindViewHolder(Holder holder, int position) {
-            if (position >= rows.size() - 25) loadMore();
+            if (position >= rows.size() - 20 && !exhausted && !loadPosted) {
+                loadPosted = true;
+                list.post(() -> {
+                    loadPosted = false;
+                    loadMore();
+                });
+            }
             BlofyModels.Media media = rows.get(position);
             boolean current = media.id.equals(currentId);
             holder.button.setText((current ? "●   " : "") + (position + 1) + "   " + media.name);

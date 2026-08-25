@@ -43,6 +43,7 @@ final class PlaybackTransportFactory {
                     .addOnCompleteListener(task -> {
                         if (!task.isSuccessful()) {
                             Log.w(TAG, "cronet-provider-install-failed", task.getException());
+                            cronetInstallStarted = false;
                             return;
                         }
                         try {
@@ -53,11 +54,17 @@ final class PlaybackTransportFactory {
                         } catch (Throwable error) {
                             Log.w(TAG, "cronet-engine-init-failed", error);
                             cronetEngine = null;
+                            cronetInstallStarted = false;
                         }
                     });
         } catch (Throwable error) {
             Log.w(TAG, "cronet-provider-install-start-failed", error);
+            cronetInstallStarted = false;
         }
+    }
+
+    static boolean isCronetReady() {
+        return cronetEngine != null;
     }
 
     static DataSource.Factory create(Context context, boolean preferCronet, Executor executor) {

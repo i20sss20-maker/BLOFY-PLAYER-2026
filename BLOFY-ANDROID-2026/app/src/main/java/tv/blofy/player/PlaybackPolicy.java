@@ -4,17 +4,21 @@ import java.util.Locale;
 
 /**
  * BLOFY playback recovery policy.
- * Start with the platform HTTP stack (fastest on the tested TV/server), retry
- * with Cronet, then for Live only try the alternate TS/HLS container.
+ *
+ * Recovery is deliberately bounded.  Older builds walked through every HTTP
+ * transport, container and decoder in series, so one dead source could keep a
+ * television on the spinner for more than twenty seconds.  The player now
+ * gives Media3 one realistic window and then moves to the compatibility engine
+ * (or a direct provider URL for an immediate HTTP failure).
  */
 final class PlaybackPolicy {
-    // A 3.5 second deadline was too aggressive for UHD/HEVC sources. It caused
-    // the player to abandon a healthy source, then spend ~20 seconds walking
-    // through every transport/container fallback. Give the primary source one
-    // realistic window and keep the single compatibility retry short.
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 8_000;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 3_500;
-    static final int MAX_RECOVERY_STEPS = 4;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 5_500;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 4_500;
+    static final int VOD_STARTUP_TIMEOUT_MS = 6_000;
+    static final int UHD_VOD_STARTUP_TIMEOUT_MS = 7_500;
+    static final int VLC_STARTUP_TIMEOUT_MS = 7_000;
+    static final int UHD_VLC_STARTUP_TIMEOUT_MS = 9_000;
+    static final int PREVIEW_STARTUP_TIMEOUT_MS = 5_000;
 
     private PlaybackPolicy() {}
 
@@ -65,32 +69,34 @@ final class PlaybackPolicy {
         return recoveryStep > 0 ? RETRY_STARTUP_TIMEOUT_MS : INITIAL_STARTUP_TIMEOUT_MS;
     }
 
-    /** step 0/2 use platform HTTP; step 1/3 use Cronet. */
-    static boolean useCronet(int recoveryStep) {
-        return recoveryStep == 1 || recoveryStep == 3;
+    static int vodStartupTimeoutMs(boolean ultraHd) {
+        return ultraHd ? UHD_VOD_STARTUP_TIMEOUT_MS : VOD_STARTUP_TIMEOUT_MS;
     }
 
-    /** One same-format fallback only: platform HTTP -> Cronet. */
-    static boolean shouldRetrySameFormat(int recoveryStep) {
-        return recoveryStep == 1;
+    static int vlcStartupTimeoutMs(boolean ultraHd) {
+        return ultraHd ? UHD_VLC_STARTUP_TIMEOUT_MS : VLC_STARTUP_TIMEOUT_MS;
     }
 
-    /** After both transports on the original Live format, switch TS <-> HLS. */
-    static boolean shouldTryAlternateLiveFormat(int recoveryStep) {
-        return recoveryStep == 2;
+    static boolean isStartupTimeout(String reason) {
+        String value = value(reason);
+        return value.contains("مهلة بدء") || value.contains("لم تظهر صورة");
     }
 
-    /** Retry alternate Live format once through Cronet. */
-    static boolean shouldRetryAlternateFormat(int recoveryStep) {
-        return recoveryStep == 3;
+    static boolean isNetworkFailure(String reason) {
+        String value = value(reason).toUpperCase(Locale.US);
+        return value.contains("HTTP") || value.contains("IO_") || value.contains("NETWORK")
+                || value.contains("CONNECTION") || value.contains("TIMEOUT")
+                || value.contains("BAD_HTTP_STATUS");
     }
 
-    static boolean exhausted(int recoveryStep) {
-        return recoveryStep > MAX_RECOVERY_STEPS;
+    static boolean isDecoderFailure(String reason) {
+        String value = value(reason).toUpperCase(Locale.US);
+        return value.contains("DECOD") || value.contains("CODEC")
+                || value.contains("FORMAT_UNSUPPORTED") || value.contains("PARSING");
     }
 
-    static String transportName(int recoveryStep) {
-        return useCronet(recoveryStep) ? "cronet" : "default-http";
+    private static String value(String reason) {
+        return reason == null ? "" : reason.trim();
     }
 
     static String directPlaybackUrl(String signedNativeUrl) {

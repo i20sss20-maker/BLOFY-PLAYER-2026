@@ -1,48 +1,82 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-    <meta name="theme-color" content="#08070d" />
-    <title>ربط BLOFY PLAYER</title>
-    <link rel="icon" href="/assets/blofy-logo-192.png" />
+    <meta name="theme-color" content="#07070d" />
+    <title>إدارة BLOFY PLAYER</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="activation-screen">
-      <section class="activation-card">
-        <img class="activation-logo" src="/assets/blofy-logo-512.png" alt="BLOFY PLAYER" />
-        <span class="eyebrow">ربط الجهاز</span>
-        <h1>اربط جهازك وأرسل بيانات الباقة</h1>
-        <p class="muted">امسح الباركود من التطبيق، ثم أدخل بيانات باقتك. لا يوجد رمز تفعيل أو PIN؛ الربط يتم بأمان عبر رقم الجهاز ورمز الربط الموجود داخل الباركود.</p>
-        <form id="activationForm" class="activation-form">
-          <div class="field"><label for="deviceId">رقم الجهاز</label><input id="deviceId" name="deviceId" dir="ltr" autocomplete="off" placeholder="BLOFY-XXXX-XXXX-XXXX-XXXX" required /></div>
+    <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/activate" aria-label="BLOFY PLAYER">
+          <span class="brand-mark"><span>▶</span></span>
+          <span><b>BLOFY</b><small>PLAYER</small></span>
+        </a>
+        <div id="sessionActions" class="session-actions" hidden>
+          <span id="headerDevice" class="device-chip" dir="ltr"></span>
+          <button id="logoutButton" class="ghost-button" type="button">تسجيل الخروج</button>
+        </div>
+      </header>
 
-          <section id="profileSection" class="activation-profile">
-            <label class="profile-toggle"><input id="saveProfile" type="checkbox" checked /> <span>إرسال بيانات الباقة إلى التطبيق</span></label>
-            <div id="profileFields">
-              <div class="source-tabs activation-tabs" role="tablist">
-                <button id="xtreamTab" class="source-tab active" type="button">Xtream Codes</button>
-                <button id="m3uTab" class="source-tab" type="button">M3U / M3U8</button>
-              </div>
-              <div class="activation-grid">
-                <div class="field full"><label for="profileName">اسم الباقة</label><input id="profileName" name="name" autocomplete="off" placeholder="باقتي الرئيسية" /></div>
-                <div id="xtreamFields" class="activation-grid nested full">
-                  <div class="field full"><label for="serverUrl">رابط الخادم</label><input id="serverUrl" name="serverUrl" dir="ltr" inputmode="url" autocomplete="url" placeholder="http://server.example:8080" /></div>
-                  <div class="field"><label for="username">اسم المستخدم</label><input id="username" name="username" dir="ltr" autocomplete="username" /></div>
-                  <div class="field"><label for="password">كلمة المرور</label><input id="password" name="password" dir="ltr" type="password" autocomplete="current-password" /></div>
-                </div>
-                <div id="m3uFields" class="field full" hidden><label for="playlistUrl">رابط M3U / M3U8</label><input id="playlistUrl" name="url" dir="ltr" inputmode="url" placeholder="http://server.example/list.m3u" /></div>
-              </div>
-            </div>
-          </section>
-
-          <button class="primary-button" type="submit">حفظ وربط الجهاز</button>
-          <div id="activationMessage" class="activation-message" role="status"></div>
+      <section id="loginView" class="login-layout">
+        <div class="intro-copy">
+          <span class="eyebrow">إدارة الجهاز بأمان</span>
+          <h1>كل قوائمك<br /><em>في مكان واحد.</em></h1>
+          <p>سجّل برقم الجهاز المختصر ورمز الربط الظاهر في BLOFY PLAYER، ثم أضف قوائمك وعدّلها في أي وقت.</p>
+          <div class="feature-row"><span>✓ حفظ مشفّر</span><span>✓ مزامنة تلقائية</span><span>✓ أكثر من قائمة</span></div>
+        </div>
+        <form id="loginForm" class="glass-card login-card" novalidate>
+          <div class="card-icon">⌁</div>
+          <h2>تسجيل دخول الجهاز</h2>
+          <p class="muted">تجد الرقم والرمز في شاشة قوائم التشغيل داخل التطبيق.</p>
+          <label class="field"><span>رقم الجهاز</span><input id="deviceId" name="deviceId" dir="ltr" maxlength="8" autocomplete="off" placeholder="BLOFY-A7" required /></label>
+          <label class="field"><span>رمز الربط</span><input id="pairingCode" name="pairingCode" dir="ltr" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required /></label>
+          <button class="primary-button" type="submit"><span>دخول وإدارة القوائم</span><b>←</b></button>
+          <p id="loginMessage" class="form-message" role="status"></p>
+          <small class="privacy">لن نعرض بيانات الخادم أو كلمة المرور على شاشة التلفزيون.</small>
         </form>
-        <small class="muted">التفعيل والتجديد مرتبطان بحالة الجهاز، ولا يحتاجان رمزًا يدويًا.</small>
+      </section>
+
+      <section id="dashboardView" class="dashboard" hidden>
+        <div class="dashboard-head">
+          <div><span class="eyebrow">لوحة الجهاز</span><h1>قوائم التشغيل</h1><p class="muted">أضف وعدّل قوائمك، ثم اختر «اتصال» من التطبيق.</p></div>
+          <button id="addPlaylistButton" class="primary-button compact" type="button">＋ إضافة قائمة تشغيل</button>
+        </div>
+        <div class="device-overview glass-card">
+          <div><span class="status-dot"></span><small>الجهاز متصل</small><strong id="overviewDevice" dir="ltr">BLOFY--</strong></div>
+          <div><small>حالة التفعيل</small><strong id="licenseStatus">—</strong></div>
+          <div><small>عدد القوائم</small><strong id="playlistCount">0</strong></div>
+          <button id="refreshButton" class="icon-button" type="button" title="تحديث">↻</button>
+        </div>
+        <div id="emptyState" class="empty-state glass-card" hidden>
+          <span class="empty-icon">＋</span><h2>ابدأ بإضافة قائمتك الأولى</h2><p class="muted">يمكنك إضافة Xtream Codes أو رابط M3U / M3U8، وستظهر في التطبيق تلقائيًا.</p>
+          <button class="primary-button compact add-trigger" type="button">إضافة قائمة تشغيل</button>
+        </div>
+        <div id="playlistGrid" class="playlist-grid"></div>
       </section>
     </main>
+
+    <dialog id="playlistDialog" class="playlist-dialog">
+      <form id="playlistForm" class="dialog-card" novalidate>
+        <div class="dialog-head"><div><span class="eyebrow">BLOFY CLOUD</span><h2 id="dialogTitle">إضافة قائمة تشغيل</h2></div><button id="closeDialog" class="icon-button" type="button">×</button></div>
+        <input id="playlistId" type="hidden" />
+        <div class="source-tabs" role="tablist"><button id="xtreamTab" class="source-tab active" type="button">Xtream Codes</button><button id="m3uTab" class="source-tab" type="button">M3U / M3U8</button></div>
+        <label class="field"><span>اسم القائمة</span><input id="profileName" maxlength="50" autocomplete="off" placeholder="الباقة الرئيسية" required /></label>
+        <div id="xtreamFields" class="field-stack">
+          <label class="field"><span>رابط الخادم</span><input id="serverUrl" dir="ltr" inputmode="url" autocomplete="url" placeholder="http://server.example:8080" /></label>
+          <div class="two-columns"><label class="field"><span>اسم المستخدم</span><input id="username" dir="ltr" autocomplete="username" /></label><label class="field"><span>كلمة المرور</span><input id="password" dir="ltr" type="password" autocomplete="new-password" /></label></div>
+          <small id="passwordHint" class="muted" hidden>اترك كلمة المرور فارغة للاحتفاظ بالكلمة المحفوظة.</small>
+        </div>
+        <div id="m3uFields" class="field-stack" hidden><label class="field"><span>رابط القائمة</span><input id="playlistUrl" dir="ltr" inputmode="url" placeholder="https://server.example/list.m3u" /></label></div>
+        <label class="check-row"><input id="makeDefault" type="checkbox" /><span>اجعلها القائمة الافتراضية</span></label>
+        <p id="playlistMessage" class="form-message" role="status"></p>
+        <div class="dialog-actions"><button id="cancelDialog" class="ghost-button" type="button">إلغاء</button><button id="savePlaylist" class="primary-button compact" type="submit">اختبار وحفظ</button></div>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/activate.js"></script>
   </body>
 </html>

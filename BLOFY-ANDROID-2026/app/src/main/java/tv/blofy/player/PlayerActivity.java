@@ -11,6 +11,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
@@ -43,10 +44,14 @@ import androidx.media3.ui.PlayerView;
 import androidx.media3.ui.AspectRatioFrameLayout;
 
 import org.json.JSONObject;
+import org.videolan.libvlc.LibVLC;
+import org.videolan.libvlc.interfaces.IVLCVout;
 
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /** BLOFY native playback core. */
 @UnstableApi
@@ -63,12 +68,15 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     public static final String EXTRA_REFERER = "referer";
 
     private PlayerView playerView;
+    private SurfaceView vlcSurface;
     private ProgressBar progress;
     private LinearLayout errorPanel;
     private TextView errorText;
     private TextView titleView;
     private Button retryButton;
     private ExoPlayer player;
+    private LibVLC libVLC;
+    private org.videolan.libvlc.MediaPlayer vlcPlayer;
     private LiveChannelOverlay liveOverlay;
 
     private String id;
@@ -81,25 +89,29 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private String sourceVariant = "canonical";
     private long resumePosition;
     private int recoveryStep;
-    private int startupTimeoutRetries;
-    private boolean resolving;
     private boolean firstFrameRendered;
+    private boolean usingVlc;
+    private boolean vlcAttempted;
     private boolean warmLiveSwitchPending;
     private long playbackStartedAtMs;
+    private int vlcGeneration;
+    private int resolveGeneration;
+    private Future<?> resolveTask;
 
-    private final ExecutorService network = Executors.newSingleThreadExecutor();
-    private final ExecutorService cronetExecutor = Executors.newCachedThreadPool();
+    private final ExecutorService network = Executors.newFixedThreadPool(3);
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
     private final Runnable hideTitle = () -> {
         if (titleView != null) titleView.setVisibility(View.GONE);
     };
 
     private final Runnable playbackTimeout = () -> {
-        if (player == null || firstFrameRendered) return;
+        if ((!usingVlc && player == null) || (usingVlc && vlcPlayer == null)
+                || firstFrameRendered) return;
         Log.w(TAG, "startup-timeout kind=" + kind + " ext=" + extension
-                + " step=" + recoveryStep + " state=" + player.getPlaybackState()
+                + " step=" + recoveryStep + " state="
+                + (player == null ? "vlc" : player.getPlaybackState())
                 + " transport=" + activeTransportName());
-        recoverFromFailure(player.getPlaybackState() == Player.STATE_READY
+        recoverFromFailure(!usingVlc && player != null && player.getPlaybackState() == Player.STATE_READY
                 ? "لم تظهر صورة الفيديو"
                 : "انتهت مهلة بدء التشغيل");
     };
@@ -154,8 +166,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private boolean isLive() { return isLiveKind(kind); }
 
     private boolean isUltraHd() {
-        String value = title == null ? "" : title.toUpperCase(Locale.US);
-        return value.contains("4K") || value.contains("UHD") || value.contains("2160");
+        String value = ((title == null ? "" : title) + " " + extension).toUpperCase(Locale.US);
+        return value.contains("4K") || value.contains("UHD") || value.contains("2160")
+                || value.contains("HEVC") || value.contains("H265") || value.contains("H.265");
     }
 
     private String playerSetting(String key, String fallback) {
@@ -170,12 +183,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         return candidate;
     }
 
-    private boolean allowAlternateLiveFormat() {
-        return "auto".equals(playerSetting(SettingsActivity.KEY_STREAM, "auto"));
+    private String activeTransportName() {
+        return usingVlc ? "libvlc" : "default-http";
     }
-
-    private boolean useCronetNow() { return PlaybackPolicy.useCronet(recoveryStep); }
-    private String activeTransportName() { return useCronetNow() ? "cronet" : "default-http"; }
 
     private int preferredRecoveryStep() {
         // Transport success must not leak from one playlist/provider to another.
@@ -194,6 +204,13 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
+
+        vlcSurface = new SurfaceView(this);
+        vlcSurface.setVisibility(View.GONE);
+        vlcSurface.setKeepScreenOn(true);
+        vlcSurface.setFocusable(true);
+        root.addView(vlcSurface, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
 
         playerView = new PlayerView(this);
         boolean useMedia3Controller = !isLive();
@@ -289,32 +306,43 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void schedulePlaybackTimeout() {
         playbackHandler.removeCallbacks(playbackTimeout);
-        int timeout = PlaybackPolicy.startupTimeoutMs(recoveryStep);
+        int timeout = usingVlc
+                ? PlaybackPolicy.vlcStartupTimeoutMs(isUltraHd())
+                : PlaybackPolicy.startupTimeoutMs(recoveryStep);
         playbackHandler.postDelayed(playbackTimeout, timeout);
     }
 
     private void resolvePlaybackLink() {
-        if (resolving) return;
-        resolving = true;
+        int token = ++resolveGeneration;
+        Future<?> previous = resolveTask;
+        if (previous != null) previous.cancel(true);
         progress.setVisibility(View.VISIBLE);
         errorPanel.setVisibility(View.GONE);
-        network.execute(() -> {
+        String requestedId = id;
+        String requestedKind = kind;
+        String requestedExtension = extension;
+        String requestedVariant = sourceVariant;
+        String requestedReferer = playbackReferer;
+        resolveTask = network.submit(() -> {
             try {
-                String apiType = "series".equals(kind) ? "episode" : kind;
+                String apiType = "series".equals(requestedKind) ? "episode" : requestedKind;
                 JSONObject data = new BlofyApi(this).get("/api/native-link/" + BlofyApi.encode(apiType) + "/"
-                        + BlofyApi.encode(id) + "?ext=" + BlofyApi.encode(extension)
-                        + "&variant=" + BlofyApi.encode(sourceVariant));
+                        + BlofyApi.encode(requestedId) + "?ext=" + BlofyApi.encode(requestedExtension)
+                        + "&variant=" + BlofyApi.encode(requestedVariant));
                 String resolved = data.optString("url", "");
                 if (!resolved.startsWith("/api/native-play") && !resolved.startsWith("http")) {
                     throw new Exception("الخادم لم يُصدر رابط تشغيل مباشر صحيحًا.");
                 }
-                url = resolved.startsWith("http") ? resolved
-                        : BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + resolved;
-                extension = configuredExtension(PlaybackPolicy.normalizeExtension(
-                        data.optString("extension", extension), extension));
-                playbackReferer = data.optString("referer", playbackReferer);
+                String resolvedExtension = configuredExtension(PlaybackPolicy.normalizeExtension(
+                        data.optString("extension", requestedExtension), requestedExtension));
+                String resolvedReferer = data.optString("referer", requestedReferer);
+                String finalResolved = resolved;
                 runOnUiThread(() -> {
-                    resolving = false;
+                    if (token != resolveGeneration || isFinishing() || isDestroyed()) return;
+                    url = finalResolved.startsWith("http") ? finalResolved
+                            : BuildConfig.BLOFY_BASE_URL.replaceAll("/+$", "") + finalResolved;
+                    extension = resolvedExtension;
+                    playbackReferer = resolvedReferer;
                     prepareResolvedUrl();
                     if (warmLiveSwitchPending && player != null && isLive()) {
                         warmLiveSwitchPending = false;
@@ -326,7 +354,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
-                    resolving = false;
+                    if (token != resolveGeneration || isFinishing() || isDestroyed()) return;
                     warmLiveSwitchPending = false;
                     showResolveError(error.getMessage());
                 });
@@ -350,7 +378,9 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     }
 
     private DataSource.Factory createDataSourceFactory() {
-        return PlaybackTransportFactory.create(this, useCronetNow(), cronetExecutor,
+        // Avoid an identical queued retry while the Cronet provider is still
+        // installing. The compatibility fallback is a different decoder/stack.
+        return PlaybackTransportFactory.create(this, false, network,
                 3_500, 10_000, recoveryStep, playbackReferer);
     }
 
@@ -362,7 +392,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         } else if ("stable".equals(mode) || (isLive() && isUltraHd())) {
             minBuffer = isLive() ? 5_000 : 12_000;
             maxBuffer = isLive() ? 35_000 : 75_000;
-            playbackBuffer = isLive() ? 850 : 1_200;
+            playbackBuffer = isLive() ? 700 : 1_200;
             rebuffer = isLive() ? 2_500 : 3_000;
         } else if (isLive()) {
             minBuffer = 2_500; maxBuffer = 18_000; playbackBuffer = 600; rebuffer = 1_800;
@@ -395,8 +425,12 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void initializePlayer() {
         if (player != null || !validUrl(url)) return;
+        releaseVlcPlayer();
+        usingVlc = false;
         firstFrameRendered = false;
         playbackHandler.removeCallbacks(markPlaybackStable);
+        vlcSurface.setVisibility(View.GONE);
+        playerView.setVisibility(View.VISIBLE);
         DataSource.Factory dataSourceFactory = createDataSourceFactory();
         int tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
                 | DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES;
@@ -416,6 +450,10 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
         player.setHandleAudioBecomingNoisy(true);
         player.setWakeMode(C.WAKE_MODE_NETWORK);
+        if ("stereo".equals(playerSetting(SettingsActivity.KEY_AUDIO_OUTPUT, "auto"))) {
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setMaxAudioChannelCount(2).build());
+        }
         playerView.setPlayer(player);
         playbackStartedAtMs = SystemClock.elapsedRealtime();
         Log.i(TAG, "open kind=" + kind + " ext=" + extension + " step=" + recoveryStep
@@ -429,6 +467,99 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         errorPanel.setVisibility(View.GONE);
         playerView.requestFocus();
         schedulePlaybackTimeout();
+    }
+
+    private void openVlc(String media3Reason) {
+        if (!validUrl(url)) {
+            showPlaybackFailure("تعذر تجهيز رابط البث");
+            return;
+        }
+        releaseMedia3Player();
+        releaseVlcPlayer();
+        usingVlc = true;
+        vlcAttempted = true;
+        firstFrameRendered = false;
+        playbackStartedAtMs = SystemClock.elapsedRealtime();
+        playerView.setVisibility(View.GONE);
+        vlcSurface.setVisibility(View.VISIBLE);
+        progress.setVisibility(View.VISIBLE);
+        errorPanel.setVisibility(View.GONE);
+
+        try {
+            ArrayList<String> options = new ArrayList<>();
+            options.add("--audio-time-stretch");
+            options.add("--http-reconnect");
+            options.add("--network-caching=" + (isUltraHd() ? "750" : "450"));
+            options.add("--file-caching=" + (isUltraHd() ? "750" : "450"));
+            if ("stereo".equals(playerSetting(SettingsActivity.KEY_AUDIO_OUTPUT, "auto"))) {
+                options.add("--stereo-mode=1");
+            }
+            libVLC = new LibVLC(this, options);
+            vlcPlayer = new org.videolan.libvlc.MediaPlayer(libVLC);
+            org.videolan.libvlc.MediaPlayer opened = vlcPlayer;
+            int token = ++vlcGeneration;
+            opened.setEventListener(event -> playbackHandler.post(() -> {
+                if (token != vlcGeneration || opened != vlcPlayer || isFinishing()) return;
+                onVlcEvent(event);
+            }));
+            IVLCVout output = opened.getVLCVout();
+            output.setVideoView(vlcSurface);
+            output.attachViews();
+
+            org.videolan.libvlc.Media media = new org.videolan.libvlc.Media(libVLC, Uri.parse(url));
+            media.setHWDecoderEnabled(true, false);
+            media.addOption(":http-user-agent=" + PlaybackTransportFactory.userAgent(2));
+            if (!playbackReferer.isEmpty()) media.addOption(":http-referrer=" + playbackReferer);
+            media.addOption(":network-caching=" + (isUltraHd() ? "750" : "450"));
+            if ("stereo".equals(playerSetting(SettingsActivity.KEY_AUDIO_OUTPUT, "auto"))) {
+                media.addOption(":stereo-mode=1");
+            }
+            opened.setMedia(media);
+            media.release();
+            if (isLive()) opened.setAspectRatio("16:9");
+            opened.play();
+            vlcSurface.requestFocus();
+            schedulePlaybackTimeout();
+            Log.i(TAG, "compat-open ext=" + extension + " uhd=" + isUltraHd()
+                    + " media3Reason=" + media3Reason);
+        } catch (Throwable error) {
+            Log.w(TAG, "compat-engine-init-failed", error);
+            showPlaybackFailure("مشغل التوافق غير متاح على هذا الجهاز");
+        }
+    }
+
+    private void onVlcEvent(org.videolan.libvlc.MediaPlayer.Event event) {
+        if (event == null || !usingVlc) return;
+        switch (event.type) {
+            case org.videolan.libvlc.MediaPlayer.Event.Vout:
+            case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
+            case org.videolan.libvlc.MediaPlayer.Event.PositionChanged:
+                markVlcFirstFrame();
+                break;
+            case org.videolan.libvlc.MediaPlayer.Event.Buffering:
+                if (!firstFrameRendered) progress.setVisibility(View.VISIBLE);
+                break;
+            case org.videolan.libvlc.MediaPlayer.Event.EndReached:
+                recoverFromFailure("انتهى اتصال البث المباشر");
+                break;
+            case org.videolan.libvlc.MediaPlayer.Event.EncounteredError:
+                recoverFromFailure("تعذر فتح المصدر بمشغل التوافق");
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void markVlcFirstFrame() {
+        if (firstFrameRendered || !usingVlc) return;
+        firstFrameRendered = true;
+        playbackHandler.removeCallbacks(playbackTimeout);
+        progress.setVisibility(View.GONE);
+        playbackHandler.removeCallbacks(hideTitle);
+        playbackHandler.postDelayed(hideTitle, 2_500L);
+        long firstFrameMs = playbackStartedAtMs == 0
+                ? -1 : SystemClock.elapsedRealtime() - playbackStartedAtMs;
+        Log.i(TAG, "compat-first-frame ext=" + extension + " ms=" + firstFrameMs);
     }
 
     private void replaceLiveSourceOnWarmPlayer() {
@@ -466,7 +597,11 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         url = null;
         resumePosition = 0;
         recoveryStep = preferredRecoveryStep();
-        startupTimeoutRetries = 0;
+        vlcAttempted = false;
+        if (usingVlc) {
+            releaseVlcPlayer();
+            usingVlc = false;
+        }
         warmLiveSwitchPending = player != null;
         titleView.setText(title);
         titleView.setVisibility(View.VISIBLE);
@@ -480,60 +615,45 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         playbackHandler.removeCallbacks(playbackTimeout);
         playbackHandler.removeCallbacks(markPlaybackStable);
 
-        // A startup timeout is not proof that the container is wrong. Previously
-        // it triggered all five fallbacks in sequence, which is the 20+ second
-        // delay seen on otherwise healthy playlists. Retry the same source once
-        // with the alternate HTTP transport, then stop cleanly.
-        if (isStartupTimeout(reason)) {
-            Log.w(TAG, "startup-timeout-recovery retry=" + startupTimeoutRetries
-                    + " ext=" + extension + " transport=" + activeTransportName());
-            releasePlayer();
-            if (startupTimeoutRetries == 0) {
-                startupTimeoutRetries = 1;
-                recoveryStep = useCronetNow() ? 0 : 1;
-                reopenResolvedSource(false);
-                return;
-            }
+        if (usingVlc) {
             showPlaybackFailure(reason);
             return;
         }
 
-        recoveryStep += 1;
-        Log.w(TAG, "recover reason=" + reason + " step=" + recoveryStep + " ext=" + extension
-                + " nextTransport=" + PlaybackPolicy.transportName(recoveryStep));
-        releasePlayer();
-        if (PlaybackPolicy.shouldRetrySameFormat(recoveryStep)) { reopenResolvedSource(false); return; }
-        if (isLive() && allowAlternateLiveFormat()
-                && PlaybackPolicy.shouldTryAlternateLiveFormat(recoveryStep) && !id.isEmpty()) {
-            extension = PlaybackPolicy.alternateLiveExtension(extension);
+        Log.w(TAG, "bounded-recovery reason=" + reason + " ext=" + extension
+                + " variant=" + sourceVariant + " uhd=" + isUltraHd());
+
+        // A fast HTTP/connection error can be specific to the signed relay.
+        // Resolve the direct source once; do not add TS/HLS and Cronet retries
+        // behind it. Slow startup and decoder failures go straight to LibVLC.
+        if (PlaybackPolicy.isNetworkFailure(reason)
+                && "canonical".equals(sourceVariant) && !id.isEmpty()) {
+            releasePlayer();
+            sourceVariant = "direct";
+            recoveryStep = 1;
             url = null;
-            Log.i(TAG, "live-format-fallback ext=" + extension + " transport=" + activeTransportName());
             resolvePlaybackLink();
             return;
         }
-        if (isLive() && allowAlternateLiveFormat() && PlaybackPolicy.shouldRetryAlternateFormat(recoveryStep)) {
-            reopenResolvedSource(false); return;
-        }
-        if (isLive() && allowAlternateLiveFormat() && recoveryStep == 4
-                && !"no-extension".equals(sourceVariant) && !id.isEmpty()) {
-            sourceVariant = "no-extension";
-            url = null;
-            Log.i(TAG, "live-url-fallback variant=no-extension transport=" + activeTransportName());
-            resolvePlaybackLink();
+
+        if (!vlcAttempted) {
+            recoveryStep = 2;
+            openVlc(reason);
             return;
         }
         showPlaybackFailure(reason);
     }
 
-    private static boolean isStartupTimeout(String reason) {
-        return "انتهت مهلة بدء التشغيل".equals(reason) || "لم تظهر صورة الفيديو".equals(reason);
-    }
-
     private void showPlaybackFailure(String reason) {
+        releaseMedia3Player();
+        releaseVlcPlayer();
+        usingVlc = false;
         progress.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        errorText.setText("تعذر تشغيل المصدر. آخر سبب: " + reason + "\nالصيغة: " + extension
-                + "\nالنقل: " + activeTransportName());
+        String detail = reason == null || reason.trim().isEmpty()
+                ? "المصدر لا يرسل فيديو قابلاً للتشغيل" : reason.trim();
+        errorText.setText("تعذر تشغيل القناة بعد المحاولة بالمشغل الأساسي والمتوافق."
+                + "\n" + detail + "\nالصيغة: " + extension);
         retryButton.setText("إعادة المحاولة من البداية");
         retryButton.requestFocus();
     }
@@ -545,7 +665,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     private void manualRetry() {
         recoveryStep = preferredRecoveryStep();
-        startupTimeoutRetries = 0;
+        vlcAttempted = false;
         sourceVariant = "canonical";
         playbackReferer = "";
         warmLiveSwitchPending = false;
@@ -577,7 +697,6 @@ public final class PlayerActivity extends Activity implements Player.Listener {
     @Override public void onRenderedFirstFrame() {
         if (playbackStartedAtMs == 0) return;
         firstFrameRendered = true;
-        startupTimeoutRetries = 0;
         playbackHandler.removeCallbacks(playbackTimeout);
         progress.setVisibility(View.GONE);
         long firstFrameMs = SystemClock.elapsedRealtime() - playbackStartedAtMs;
@@ -633,24 +752,55 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         resumePosition = position;
     }
 
-    private void releasePlayer() {
-        playbackHandler.removeCallbacks(playbackTimeout);
-        playbackHandler.removeCallbacks(markPlaybackStable);
-        playbackHandler.removeCallbacks(hideTitle);
-        warmLiveSwitchPending = false;
+    private void releaseMedia3Player() {
         if (player == null) return;
         savePosition();
         playerView.setPlayer(null);
         player.removeListener(this);
         player.release();
         player = null;
+    }
+
+    private void releaseVlcPlayer() {
+        vlcGeneration++;
+        org.videolan.libvlc.MediaPlayer current = vlcPlayer;
+        vlcPlayer = null;
+        if (current != null) {
+            try { current.setEventListener(null); } catch (Exception ignored) {}
+            try { current.stop(); } catch (Exception ignored) {}
+            try { current.getVLCVout().detachViews(); } catch (Exception ignored) {}
+            try { current.release(); } catch (Exception ignored) {}
+        }
+        if (libVLC != null) {
+            try { libVLC.release(); } catch (Exception ignored) {}
+            libVLC = null;
+        }
+    }
+
+    private void releasePlayer() {
+        playbackHandler.removeCallbacks(playbackTimeout);
+        playbackHandler.removeCallbacks(markPlaybackStable);
+        playbackHandler.removeCallbacks(hideTitle);
+        warmLiveSwitchPending = false;
+        releaseMedia3Player();
+        releaseVlcPlayer();
+        usingVlc = false;
         firstFrameRendered = false;
         playbackStartedAtMs = 0;
     }
 
+    private void requestPlaybackFocus() {
+        if (usingVlc && vlcSurface.getVisibility() == View.VISIBLE) vlcSurface.requestFocus();
+        else playerView.requestFocus();
+    }
+
     @Override protected void onStart() {
         super.onStart();
-        if (validUrl(url)) initializePlayer();
+        if (validUrl(url) && errorPanel.getVisibility() != View.VISIBLE) {
+            vlcAttempted = false;
+            recoveryStep = preferredRecoveryStep();
+            initializePlayer();
+        }
     }
 
     @Override protected void onStop() {
@@ -672,11 +822,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         // While the drawer is visible, its RecyclerView owns DPAD/OK. Only Back is
         // handled here so focus can never leak to PlayerView behind the scrim.
         if (liveOverlay != null && liveOverlay.isVisible()) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN
-                    && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-                liveOverlay.hide();
-                playerView.requestFocus();
-                return true;
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+                    liveOverlay.hide();
+                    requestPlaybackFocus();
+                    return true;
+                }
+                if (event.getKeyCode() == KeyEvent.KEYCODE_CHANNEL_UP) {
+                    liveOverlay.selectRelative(id, -1);
+                    return true;
+                }
+                if (event.getKeyCode() == KeyEvent.KEYCODE_CHANNEL_DOWN) {
+                    liveOverlay.selectRelative(id, 1);
+                    return true;
+                }
             }
             return super.dispatchKeyEvent(event);
         }
@@ -698,12 +857,20 @@ public final class PlayerActivity extends Activity implements Player.Listener {
                     if (isLive() && liveOverlay != null) { liveOverlay.selectRelative(id, 1); return true; }
                     break;
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                    if (player != null) { if (player.isPlaying()) player.pause(); else player.play(); }
+                    if (usingVlc && vlcPlayer != null) {
+                        if (vlcPlayer.isPlaying()) vlcPlayer.pause(); else vlcPlayer.play();
+                    } else if (player != null) {
+                        if (player.isPlaying()) player.pause(); else player.play();
+                    }
                     return true;
                 case KeyEvent.KEYCODE_MEDIA_PLAY:
-                    if (player != null) player.play(); return true;
+                    if (usingVlc && vlcPlayer != null) vlcPlayer.play();
+                    else if (player != null) player.play();
+                    return true;
                 case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                    if (player != null) player.pause(); return true;
+                    if (usingVlc && vlcPlayer != null) vlcPlayer.pause();
+                    else if (player != null) player.pause();
+                    return true;
                 default: break;
             }
         }
@@ -712,16 +879,18 @@ public final class PlayerActivity extends Activity implements Player.Listener {
 
     @Override public void onBackPressed() {
         if (liveOverlay != null && liveOverlay.isVisible()) {
-            liveOverlay.hide(); playerView.requestFocus(); return;
+            liveOverlay.hide(); requestPlaybackFocus(); return;
         }
         finish();
     }
 
     @Override protected void onDestroy() {
+        resolveGeneration++;
+        if (resolveTask != null) resolveTask.cancel(true);
         playbackHandler.removeCallbacksAndMessages(null);
+        releasePlayer();
         if (liveOverlay != null) liveOverlay.close();
         network.shutdownNow();
-        cronetExecutor.shutdownNow();
         super.onDestroy();
     }
 

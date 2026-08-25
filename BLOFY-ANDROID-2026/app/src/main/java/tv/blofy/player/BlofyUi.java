@@ -105,7 +105,8 @@ final class BlofyUi {
                 : focusDrawable(context, Color.argb(210, 23, 21, 36), PANEL_SOFT, PURPLE_LIGHT));
         view.setFocusable(true);
         view.setStateListAnimator(null);
-        attachScaleFocus(view, 1.025f);
+        // Focus is expressed by border/color. Keep geometry visually stable on TV grids.
+        attachScaleFocus(view, 1.008f);
         return view;
     }
 
@@ -116,7 +117,7 @@ final class BlofyUi {
         chip.setClickable(true);
         chip.setBackground(focusDrawable(context, Color.TRANSPARENT, PANEL_SOFT, PURPLE_LIGHT));
         chip.setPadding(dp(context, 18), 0, dp(context, 18), 0);
-        attachScaleFocus(chip, 1.018f);
+        attachScaleFocus(chip, 1.006f);
         return chip;
     }
 
@@ -131,7 +132,7 @@ final class BlofyUi {
         item.setBackground(selected ? selectedDrawable(context)
                 : focusDrawable(context, Color.TRANSPARENT, PANEL_SOFT, PURPLE_LIGHT));
         if (!selected) item.setTextColor(Color.rgb(213, 210, 221));
-        attachScaleFocus(item, 1.018f);
+        attachScaleFocus(item, 1.006f);
         return item;
     }
 
@@ -264,12 +265,12 @@ final class BlofyUi {
         view.setOnFocusChangeListener((v, focused) -> {
             String motion = v.getContext().getSharedPreferences(SettingsActivity.PREFS,
                     Context.MODE_PRIVATE).getString(SettingsActivity.KEY_MOTION, "smooth");
-            float effectiveScale = "reduced".equals(motion) ? Math.min(scale, 1.01f) : scale;
+            float effectiveScale = "reduced".equals(motion) ? 1f : Math.min(scale, 1.008f);
             float target = focused ? effectiveScale : 1f;
             v.animate().cancel();
             v.animate().scaleX(target).scaleY(target)
-                    .setDuration("reduced".equals(motion) ? 70 : 115).start();
-            v.setElevation(focused ? dp(v.getContext(), 12) : 0);
+                    .setDuration("reduced".equals(motion) ? 55 : 90).start();
+            v.setElevation(focused ? dp(v.getContext(), 8) : 0);
         });
     }
 

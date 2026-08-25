@@ -88,6 +88,12 @@ public final class SettingsActivity extends Activity {
         page.addView(note, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
         LinearLayout panel = section(page, "التشغيل والأداء", "سرعة البداية والتوافق مع صيغ البث المختلفة");
+        Button performance = cycleButton("الأداء", DeviceCapabilityProfile.KEY_PERFORMANCE_MODE,
+                new String[]{"auto", "fast", "quality"},
+                new String[]{"تلقائي حسب الجهاز", "سريع للأجهزة الضعيفة", "جودة أعلى"},
+                ImageLoader::resetRuntime);
+        addSettingRow(panel, "وضع الأداء",
+                "يضبط دقة الصور والذاكرة وعدد مهام التحميل حسب قوة الجهاز", performance);
         Button stream = cycleButton("صيغة البث", KEY_STREAM, new String[]{"auto", "ts", "hls"}, new String[]{"Auto", "MPEG-TS", "HLS"});
         addSettingRow(panel, "صيغة البث", "اختيار الصيغة الأنسب للقنوات المباشرة", stream);
         Button decoder = cycleButton("فك الترميز", KEY_DECODER, new String[]{"auto", "hardware", "software"}, new String[]{"Auto", "Hardware", "Software fallback"});
@@ -140,10 +146,10 @@ public final class SettingsActivity extends Activity {
         switchPlaylist.setOnClickListener(v -> openPlaylistHub());
         addSettingRow(system, "قوائم التشغيل",
                 "العودة إلى القائمة المحفوظة أو إضافة سيرفر جديد", switchPlaylist);
-        Button logoutPlaylist = BlofyUi.button(this, "تسجيل الخروج", false);
+        Button logoutPlaylist = BlofyUi.button(this, "فصل القائمة الحالية", false);
         logoutPlaylist.setOnClickListener(v -> logoutCurrentPlaylist());
-        addSettingRow(system, "الخروج من القائمة الحالية",
-                "حذف جلسة السيرفر الحالية والعودة إلى إضافة قائمة تشغيل", logoutPlaylist);
+        addSettingRow(system, "فصل القائمة الحالية",
+                "إنهاء الاتصال الحالي مع إبقاء جميع القوائم محفوظة", logoutPlaylist);
         Button clearProgress = BlofyUi.button(this, "مسح سجل المشاهدة", false);
         clearProgress.setOnClickListener(v -> {
             PlaybackProgress.clearAll(this);
@@ -185,11 +191,9 @@ public final class SettingsActivity extends Activity {
         ToastBridge.show(this, "جاري تسجيل الخروج من قائمة التشغيل");
         new Thread(() -> {
             BlofyApi api = new BlofyApi(this);
-            try { api.delete("/api/device/profile"); }
-            catch (Exception ignored) {
-                try { api.delete("/api/session"); } catch (Exception ignoredAgain) {}
-            }
+            try { api.delete("/api/session"); } catch (Exception ignored) {}
             api.clearSession();
+            new PlaylistStore(this).clearActive();
             CatalogDatabase database = new CatalogDatabase(this);
             database.beginFreshImport();
             database.close();
@@ -246,6 +250,11 @@ public final class SettingsActivity extends Activity {
     }
 
     private Button cycleButton(String label, String key, String[] values, String[] labels) {
+        return cycleButton(label, key, values, labels, null);
+    }
+
+    private Button cycleButton(String label, String key, String[] values, String[] labels,
+                               Runnable afterChange) {
         Button button = BlofyUi.button(this, "", false);
         Runnable refresh = () -> {
             String current = prefs.getString(key, values[0]);
@@ -257,6 +266,7 @@ public final class SettingsActivity extends Activity {
             String current = prefs.getString(key, values[0]);
             int next = (indexOf(values, current) + 1) % values.length;
             prefs.edit().putString(key, values[next]).apply();
+            if (afterChange != null) afterChange.run();
             refresh.run();
         });
         return button;

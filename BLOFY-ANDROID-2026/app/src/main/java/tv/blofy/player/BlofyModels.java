@@ -4,8 +4,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 final class BlofyModels {
@@ -202,12 +204,19 @@ final class BlofyModels {
         final List<Episode> episodes = new ArrayList<>();
 
         Season(JSONObject row) {
-            number = string(row, "season");
+            number = first(row, "season", "seasonNumber", "season_number", "number");
             JSONArray values = row == null ? null : row.optJSONArray("episodes");
             if (values != null) for (int index = 0; index < values.length(); index++) {
                 JSONObject episode = values.optJSONObject(index);
                 if (episode != null) episodes.add(new Episode(episode));
             }
+            Collections.sort(episodes, (left, right) -> {
+                int leftNumber = left.number > 0 ? left.number : Integer.MAX_VALUE;
+                int rightNumber = right.number > 0 ? right.number : Integer.MAX_VALUE;
+                int byNumber = Integer.compare(leftNumber, rightNumber);
+                if (byNumber != 0) return byNumber;
+                return left.title.compareToIgnoreCase(right.title);
+            });
         }
     }
 
@@ -229,6 +238,7 @@ final class BlofyModels {
         final String director;
         final List<Season> seasons = new ArrayList<>();
         final List<Actor> cast = new ArrayList<>();
+        final List<Actor> crew = new ArrayList<>();
         final List<Rating> ratings = new ArrayList<>();
 
         Detail(JSONObject data, String fallbackType) {
@@ -253,7 +263,14 @@ final class BlofyModels {
                 JSONObject season = values.optJSONObject(index);
                 if (season != null) seasons.add(new Season(season));
             }
+            Collections.sort(seasons, (left, right) -> {
+                int leftNumber = naturalNumber(left.number);
+                int rightNumber = naturalNumber(right.number);
+                int byNumber = Integer.compare(leftNumber, rightNumber);
+                return byNumber != 0 ? byNumber : left.number.compareToIgnoreCase(right.number);
+            });
             parseCast(data, cast);
+            parseCrew(data, director, crew);
             parseRatings(data, rating, ratingSource, ratings);
         }
     }
@@ -279,7 +296,7 @@ final class BlofyModels {
                 } else {
                     name = value == null ? "" : String.valueOf(value).trim();
                 }
-                String key = name.toLowerCase(java.util.Locale.US);
+                String key = name.toLowerCase(Locale.US);
                 if (!name.isEmpty() && seen.add(key)) result.add(new Actor(name, character, image));
             }
         }
@@ -297,6 +314,52 @@ final class BlofyModels {
         for (String name : flat.split("[,،|]")) {
             String clean = name.trim();
             if (!clean.isEmpty() && result.size() < 24) result.add(new Actor(clean, "", ""));
+        }
+    }
+
+    private static void parseCrew(JSONObject data, String director, List<Actor> result) {
+        if (data == null) return;
+        JSONArray rows = data.optJSONArray("crew");
+        JSONObject credits = data.optJSONObject("credits");
+        if (rows == null && credits != null) rows = credits.optJSONArray("crew");
+        Set<String> seen = new LinkedHashSet<>();
+        if (rows != null) {
+            for (int index = 0; index < rows.length() && result.size() < 24; index++) {
+                Object value = rows.opt(index);
+                String name;
+                String role = "";
+                String image = "";
+                if (value instanceof JSONObject) {
+                    JSONObject person = (JSONObject) value;
+                    name = first(person, "name", "original_name", "person", "title");
+                    role = first(person, "job", "role", "department", "known_for_department");
+                    image = first(person, "image", "profile", "profilePath", "profile_path", "photo");
+                } else {
+                    name = value == null ? "" : String.valueOf(value).trim();
+                }
+                String key = name.toLowerCase(Locale.US);
+                if (!name.isEmpty() && seen.add(key)) result.add(new Actor(name, role, image));
+            }
+        }
+
+        Object rawCrew = data.opt("crew");
+        if (result.isEmpty() && rawCrew instanceof String) {
+            for (String raw : ((String) rawCrew).split("[,،|]")) {
+                String name = raw.trim();
+                String key = name.toLowerCase(Locale.US);
+                if (!name.isEmpty() && seen.add(key) && result.size() < 24) {
+                    result.add(new Actor(name, "", ""));
+                }
+            }
+        }
+
+        if (director == null || director.trim().isEmpty()) return;
+        for (String raw : director.split("[,،|]")) {
+            String name = raw.trim();
+            String key = name.toLowerCase(Locale.US);
+            if (!name.isEmpty() && seen.add(key) && result.size() < 24) {
+                result.add(new Actor(name, "إخراج", ""));
+            }
         }
     }
 
@@ -328,14 +391,61 @@ final class BlofyModels {
         addRating(result, seen, "IMDb", first(data, "imdbRating", "imdb_rating"));
         addRating(result, seen, "TMDB", first(data, "tmdbRating", "tmdb_rating", "vote_average"));
         addRating(result, seen, "Rotten Tomatoes", first(data, "rottenTomatoesRating", "rotten_tomatoes_rating"));
-        addRating(result, seen, fallbackSource.isEmpty() ? "المصدر" : fallbackSource, fallbackValue);
+        addRating(result, seen, fallbackSource, fallbackValue);
     }
 
     private static void addRating(List<Rating> result, Set<String> seen, String source, String value) {
         String cleanValue = value == null ? "" : value.trim();
-        if (cleanValue.isEmpty() || "0".equals(cleanValue) || "0.0".equals(cleanValue)) return;
-        String cleanSource = source == null || source.trim().isEmpty() ? "المصدر" : source.trim();
-        String key = cleanSource.toLowerCase(java.util.Locale.US);
+        String cleanSource = source == null ? "" : source.trim();
+        if (!isDisplayableRating(cleanSource, cleanValue)) return;
+        String key = cleanSource.toLowerCase(Locale.US);
         if (seen.add(key)) result.add(new Rating(cleanSource, cleanValue));
+    }
+
+    /** Ratings are shown only when the upstream payload identifies a source and a sane score. */
+    static boolean isDisplayableRating(String source, String value) {
+        String cleanSource = source == null ? "" : source.trim();
+        String cleanValue = value == null ? "" : value.trim();
+        if (cleanSource.isEmpty() || cleanValue.isEmpty()) return false;
+        String normalizedSource = cleanSource.toLowerCase(Locale.US);
+        if ("source".equals(normalizedSource) || "unknown".equals(normalizedSource)
+                || "المصدر".equals(cleanSource) || "غير معروف".equals(cleanSource)) return false;
+
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(\\d+(?:[.,]\\d+)?)").matcher(cleanValue);
+        if (!matcher.find()) return false;
+        String numeric = matcher.group(1).replace(',', '.');
+        try {
+            double score = Double.parseDouble(numeric);
+            boolean hundredPoint = cleanValue.contains("%")
+                    || normalizedSource.contains("rotten")
+                    || normalizedSource.contains("tomato")
+                    || normalizedSource.contains("metacritic")
+                    || normalizedSource.contains("روتن");
+            double maximum = hundredPoint ? 100d : 10d;
+            return score > 0d && score <= maximum;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private static int naturalNumber(String value) {
+        if (value == null) return Integer.MAX_VALUE;
+        int start = -1;
+        for (int index = 0; index < value.length(); index++) {
+            if (Character.isDigit(value.charAt(index))) {
+                start = index;
+                break;
+            }
+        }
+        if (start < 0) return Integer.MAX_VALUE;
+        int end = start;
+        while (end < value.length() && Character.isDigit(value.charAt(end))) end++;
+        try {
+            int parsed = Integer.parseInt(value.substring(start, end));
+            return parsed > 0 ? parsed : Integer.MAX_VALUE - 1;
+        } catch (NumberFormatException ignored) {
+            return Integer.MAX_VALUE;
+        }
     }
 }

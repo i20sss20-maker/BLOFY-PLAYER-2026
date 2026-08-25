@@ -22,17 +22,14 @@ function extensionFor(url, type) {
     const match = parsed.pathname.match(/\.([a-zA-Z0-9]{2,6})$/);
     if (match?.[1]) return match[1].toLowerCase();
     if (type === "live" && /(?:m3u8|hls)/i.test(`${parsed.pathname} ${parsed.search}`)) return "m3u8";
-    return type === "live" ? "ts" : "mp4";
-  } catch {
-    return type === "live" ? "ts" : "mp4";
-  }
+  } catch {}
+  return type === "live" ? "ts" : "mp4";
 }
 
 function resolvePlaylistUrl(value, baseUrl) {
   const raw = String(value || "").trim();
   if (!raw) return "";
-  try { return baseUrl ? new URL(raw, baseUrl).toString() : new URL(raw).toString(); }
-  catch { return raw; }
+  try { return baseUrl ? new URL(raw, baseUrl).toString() : new URL(raw).toString(); } catch { return raw; }
 }
 
 export function parseM3u(text, baseUrl = "") {
@@ -42,26 +39,13 @@ export function parseM3u(text, baseUrl = "") {
   for (const line of lines) {
     if (line.startsWith("#EXTINF")) {
       const attrs = attributes(line);
-      meta = {
-        name: line.slice(line.lastIndexOf(",") + 1).trim() || "بدون اسم",
-        category: attrs["group-title"] || "غير مصنف",
-        image: attrs["tvg-logo"] || "",
-        epgId: attrs["tvg-id"] || "",
-      };
-      continue;
-    }
-    if (!line.startsWith("#") && meta) {
+      meta = { name: line.slice(line.lastIndexOf(",") + 1).trim() || "بدون اسم", category: attrs["group-title"] || "غير مصنف",
+        image: attrs["tvg-logo"] || "", epgId: attrs["tvg-id"] || "" };
+    } else if (!line.startsWith("#") && meta) {
       const sourceUrl = resolvePlaylistUrl(line, baseUrl);
       const id = crypto.createHash("sha1").update(sourceUrl).digest("hex").slice(0, 16);
       const type = kindFor(meta.category, sourceUrl);
-      items.push({
-        id,
-        ...meta,
-        image: resolvePlaylistUrl(meta.image, baseUrl),
-        sourceUrl,
-        type,
-        extension: extensionFor(sourceUrl, type),
-      });
+      items.push({ id, ...meta, image: resolvePlaylistUrl(meta.image, baseUrl), sourceUrl, type, extension: extensionFor(sourceUrl, type) });
       meta = null;
     }
   }

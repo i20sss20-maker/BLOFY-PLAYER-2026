@@ -46,7 +46,7 @@ jobs:
           set -euo pipefail
           BRANCH_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           echo "Building branch: ${BRANCH_NAME}"
-          if [[ "${BRANCH_NAME}" = "ui/sevenmax-blofy-overhaul" || "${BRANCH_NAME}" = "ui/v319-ux-stability" ]]; then
+          if [[ "${BRANCH_NAME}" = "ui/sevenmax-blofy-overhaul" || "${BRANCH_NAME}" = "ui/v319-ux-stability" || "${BRANCH_NAME}" = "ui/v322-blofy-ux2" ]]; then
             echo "Overhaul branch: build committed source directly; legacy rewrite passes are disabled."
             test -f BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
             grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
@@ -226,7 +226,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-RELEASE-UNSIGNED-APK",
-            "version": "2026.08.25.5-complete-media-fixes"
+            "version": "2026.08.25.9-playlist-hub"
           }
           EOF
           git add .ci/full-player-status.json
