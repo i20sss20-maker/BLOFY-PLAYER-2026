@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/v327-release /tmp/v327-handoff
-          gh release download v327-unsigned-8f27b77e83c5 \
+          gh release download v327-unsigned-5ed6c837b4f4 \
             --pattern 'BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk' \
             --dir /tmp/v327-release
           APK=/tmp/v327-release/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
