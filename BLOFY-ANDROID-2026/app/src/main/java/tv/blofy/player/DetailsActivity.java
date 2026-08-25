@@ -144,10 +144,26 @@ public final class DetailsActivity extends Activity {
         scrim.setBackground(BlofyUi.heroScrim());
         hero.addView(scrim, match());
 
+        int screenHeightDp = Math.round(getResources().getDisplayMetrics().heightPixels
+                / getResources().getDisplayMetrics().density);
+        int posterHeight = screenHeightDp < 620 ? 238 : 316;
+        int posterWidth = Math.round(posterHeight * 0.69f);
+        ImageView poster = new ImageView(this);
+        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        poster.setClipToOutline(true);
+        poster.setBackground(BlofyUi.panel(this, BlofyUi.PANEL_ALT, 15,
+                BlofyUi.PURPLE_LIGHT));
+        String posterImage = detail.image.isEmpty() ? item.image : detail.image;
+        images.load(poster, posterImage);
+        FrameLayout.LayoutParams posterParams = new FrameLayout.LayoutParams(
+                dp(posterWidth), dp(posterHeight), Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        posterParams.leftMargin = dp(24);
+        hero.addView(poster, posterParams);
+
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         info.setGravity(Gravity.CENTER_VERTICAL);
-        info.setPadding(dp(38), dp(24), dp(18), dp(24));
+        info.setPadding(dp(22), dp(24), dp(18), dp(24));
         info.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView eyebrow = BlofyUi.title(this,
@@ -256,8 +272,11 @@ public final class DetailsActivity extends Activity {
         linkActionRow(actions);
         info.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(66)));
 
-        FrameLayout.LayoutParams infoParams = new FrameLayout.LayoutParams(dp(680),
-                ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        FrameLayout.LayoutParams infoParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        infoParams.leftMargin = dp(posterWidth + 40);
+        infoParams.rightMargin = dp(24);
         hero.addView(info, infoParams);
         LinearLayout.LayoutParams heroParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
         heroParams.topMargin = dp(8);
