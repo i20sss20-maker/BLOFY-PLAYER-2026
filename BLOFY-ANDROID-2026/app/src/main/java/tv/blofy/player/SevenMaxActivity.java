@@ -15,6 +15,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -69,36 +70,179 @@ public final class SevenMaxActivity extends Activity {
 
     private void showHome() {
         releasePreview();
+        stopHeroRotation();
+        screenGeneration++;
         screen = "home";
-        ScreenShell shell = shell("home", "الرئيسية");
+        root.removeAllViews();
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setClipToPadding(false);
-        scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(34), dp(20), dp(34), dp(20));
+        page.setBackground(BlofyUi.screenGradient());
 
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(24), dp(8), dp(28), dp(34));
-        scroll.addView(content, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        header.addView(BlofyUi.brand(this, "P L A Y E R"),
+                new LinearLayout.LayoutParams(dp(260), dp(64)));
+        View headerSpace = new View(this);
+        header.addView(headerSpace, new LinearLayout.LayoutParams(0, 1, 1f));
+        LinearLayout account = new LinearLayout(this);
+        account.setOrientation(LinearLayout.VERTICAL);
+        account.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        TextView ready = BlofyUi.text(this, "●  قائمة التشغيل متصلة", 12, BlofyUi.SUCCESS);
+        ready.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        TextView packageName = BlofyUi.text(this,
+                database.metadata("server_name", "BLOFY") + "  •  "
+                        + formatCount(database.count("live"), "قناة"), 11, BlofyUi.MUTED);
+        packageName.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        packageName.setTextDirection(View.TEXT_DIRECTION_RTL);
+        account.addView(ready, new LinearLayout.LayoutParams(dp(360), dp(28)));
+        account.addView(packageName, new LinearLayout.LayoutParams(dp(360), dp(26)));
+        header.addView(account, new LinearLayout.LayoutParams(dp(380), dp(62)));
+        page.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));
 
-        View initialFocus = addHero(content);
+        LinearLayout launchers = new LinearLayout(this);
+        launchers.setOrientation(LinearLayout.HORIZONTAL);
+        launchers.setGravity(Gravity.CENTER);
+        launchers.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
 
-        HomeRailAdapter continueAdapter = new HomeRailAdapter("", true, true);
-        addHomeRail(content, "متابعة المشاهدة", "أكمل من حيث توقفت", continueAdapter,
-                this::showHistory);
+        int availableWidth = Math.max(820, Math.round(
+                getResources().getDisplayMetrics().widthPixels
+                        / getResources().getDisplayMetrics().density) - 68);
+        int liveWidth = Math.min(330, Math.max(250, availableWidth * 29 / 100));
+        int systemWidth = Math.min(264, Math.max(200, availableWidth * 23 / 100));
+        int mediaWidth = Math.min(452, Math.max(338,
+                availableWidth - liveWidth - systemWidth - 32));
 
-        HomeRailAdapter moviesAdapter = new HomeRailAdapter("movies", false, false);
-        addHomeRail(content, "أحدث الأفلام", "اختيارات جديدة على BLOFY", moviesAdapter,
+        TextView live = homeTile("◉", "بث مباشر", true, this::showLive);
+        LinearLayout.LayoutParams liveParams = new LinearLayout.LayoutParams(dp(liveWidth), dp(292));
+        liveParams.setMargins(0, 0, dp(16), 0);
+        launchers.addView(live, liveParams);
+
+        GridLayout media = new GridLayout(this);
+        media.setColumnCount(2);
+        media.setRowCount(2);
+        media.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
+        media.setUseDefaultMargins(false);
+        int mediaTileWidth = Math.max(160, (mediaWidth - 16) / 2);
+        TextView movies = homeTile("●", "الأفلام", false,
                 () -> showCatalog("movies", false));
-
-        HomeRailAdapter seriesAdapter = new HomeRailAdapter("series", false, false);
-        addHomeRail(content, "أحدث المسلسلات والحلقات", "مرتبة حسب آخر إضافة وتاريخ العرض", seriesAdapter,
+        TextView series = homeTile("▣", "المسلسلات", false,
                 () -> showCatalog("series", false));
+        TextView sports = homeTile("⚽", "الرياضة", false, this::showSports);
+        TextView playlists = homeTile("▤", "تغيير قائمة التشغيل", false,
+                this::openPlaylistHub);
+        addHomeGridTile(media, movies, mediaTileWidth);
+        addHomeGridTile(media, series, mediaTileWidth);
+        addHomeGridTile(media, sports, mediaTileWidth);
+        addHomeGridTile(media, playlists, mediaTileWidth);
+        launchers.addView(media, new LinearLayout.LayoutParams(dp(mediaWidth), dp(292)));
 
-        shell.content.addView(scroll, match());
-        if (initialFocus != null) initialFocus.requestFocus();
+        LinearLayout system = new LinearLayout(this);
+        system.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams systemParams = new LinearLayout.LayoutParams(dp(systemWidth), dp(292));
+        systemParams.setMargins(dp(16), 0, 0, 0);
+        launchers.addView(system, systemParams);
+        TextView settings = homeTile("⚙", "الإعدادات", false, this::openLegacySettings);
+        TextView refresh = homeTile("↻", "تحديث القائمة", false, this::openLegacyRefresh);
+        TextView exit = homeTile("↪", "خروج", false, this::finishAffinity);
+        addSystemTile(system, settings);
+        addSystemTile(system, refresh);
+        addSystemTile(system, exit);
+        linkHomeFocus(live, movies, series, sports, playlists, settings, refresh, exit);
+
+        page.addView(launchers, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout footer = new LinearLayout(this);
+        footer.setOrientation(LinearLayout.HORIZONTAL);
+        footer.setGravity(Gravity.CENTER_VERTICAL);
+        footer.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        TextView version = BlofyUi.text(this, "BLOFY PLAYER  •  v328", 11, BlofyUi.PURPLE_LIGHT);
+        version.setTextDirection(View.TEXT_DIRECTION_LTR);
+        footer.addView(version, new LinearLayout.LayoutParams(dp(250), dp(42)));
+        View footerSpace = new View(this);
+        footer.addView(footerSpace, new LinearLayout.LayoutParams(0, 1, 1f));
+        TextView device = BlofyUi.text(this,
+                "معرّف الجهاز  " + DeviceIdentity.displayId(this)
+                        + "    •    رمز التفعيل  " + DeviceIdentity.activationCode(this),
+                11, BlofyUi.MUTED);
+        device.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        device.setTextDirection(View.TEXT_DIRECTION_RTL);
+        footer.addView(device, new LinearLayout.LayoutParams(dp(560), dp(42)));
+        page.addView(footer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+
+        root.addView(page, match());
+        live.requestFocus();
+    }
+
+    private TextView homeTile(String icon, String label, boolean primary, Runnable action) {
+        TextView tile = BlofyUi.title(this, icon + "\n" + label, primary ? 25 : 18);
+        tile.setGravity(Gravity.CENTER);
+        tile.setTextDirection(View.TEXT_DIRECTION_RTL);
+        tile.setFocusable(true);
+        tile.setFocusableInTouchMode(true);
+        tile.setClickable(true);
+        tile.setPadding(dp(14), dp(12), dp(14), dp(12));
+        int normal = primary ? Color.rgb(64, 29, 112) : Color.rgb(28, 25, 43);
+        int focused = primary ? Color.rgb(119, 42, 210) : Color.rgb(88, 39, 151);
+        tile.setBackground(BlofyUi.focusDrawable(this, normal, focused, BlofyUi.PURPLE_LIGHT));
+        tile.setOnClickListener(v -> action.run());
+        tile.setOnFocusChangeListener((view, focusedNow) -> view.animate()
+                .scaleX(focusedNow ? 1.025f : 1f)
+                .scaleY(focusedNow ? 1.025f : 1f)
+                .setDuration(110L).start());
+        return tile;
+    }
+
+    private void addHomeGridTile(GridLayout grid, TextView tile, int tileWidth) {
+        GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+        params.width = dp(tileWidth);
+        params.height = dp(138);
+        params.setMargins(dp(4), dp(4), dp(4), dp(4));
+        grid.addView(tile, params);
+    }
+
+    private void addSystemTile(LinearLayout column, TextView tile) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        params.setMargins(0, dp(4), 0, dp(4));
+        column.addView(tile, params);
+    }
+
+    private void showSports() {
+        showLive("__sports__");
+    }
+
+    private void linkHomeFocus(TextView live, TextView movies, TextView series,
+                               TextView sports, TextView playlists, TextView settings,
+                               TextView refresh, TextView exit) {
+        View[] views = {live, movies, series, sports, playlists, settings, refresh, exit};
+        for (View view : views) view.setId(View.generateViewId());
+        live.setNextFocusRightId(movies.getId());
+        movies.setNextFocusLeftId(live.getId());
+        movies.setNextFocusRightId(series.getId());
+        movies.setNextFocusDownId(sports.getId());
+        series.setNextFocusLeftId(movies.getId());
+        series.setNextFocusRightId(settings.getId());
+        series.setNextFocusDownId(playlists.getId());
+        sports.setNextFocusLeftId(live.getId());
+        sports.setNextFocusRightId(playlists.getId());
+        sports.setNextFocusUpId(movies.getId());
+        playlists.setNextFocusLeftId(sports.getId());
+        playlists.setNextFocusRightId(refresh.getId());
+        playlists.setNextFocusUpId(series.getId());
+        settings.setNextFocusLeftId(series.getId());
+        settings.setNextFocusDownId(refresh.getId());
+        refresh.setNextFocusLeftId(playlists.getId());
+        refresh.setNextFocusUpId(settings.getId());
+        refresh.setNextFocusDownId(exit.getId());
+        exit.setNextFocusLeftId(playlists.getId());
+        exit.setNextFocusUpId(refresh.getId());
     }
 
     private View addHero(LinearLayout parent) {
@@ -606,8 +750,13 @@ public final class SevenMaxActivity extends Activity {
     }
 
     private void showLive() {
+        showLive("");
+    }
+
+    private void showLive(String initialSearch) {
         releasePreview();
         screen = "live";
+        boolean sportsMode = "__sports__".equals(initialSearch);
         ScreenShell shell = shell("live", "البث المباشر", false);
 
         LinearLayout page = new LinearLayout(this);
@@ -622,6 +771,8 @@ public final class SevenMaxActivity extends Activity {
         count.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         tools.addView(count, new LinearLayout.LayoutParams(dp(220), dp(50)));
         EditText search = BlofyUi.input(this, "ابحث باسم أو رقم القناة", false);
+        if (!sportsMode && initialSearch != null && !initialSearch.isEmpty()) search.setText(initialSearch);
+        if (sportsMode) search.setHint("ابحث داخل القنوات الرياضية");
         tools.addView(search, new LinearLayout.LayoutParams(0, dp(48), 1));
         page.addView(tools, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)));
 
@@ -636,8 +787,15 @@ public final class SevenMaxActivity extends Activity {
         cats.setClipToPadding(false);
         cats.setPadding(dp(5), dp(3), dp(5), dp(8));
         List<BlofyModels.Category> categoryRows = new ArrayList<>();
-        categoryRows.add(new BlofyModels.Category("", "الكل  •  " + database.count("live"), "live"));
-        categoryRows.addAll(database.categories("live"));
+        List<BlofyModels.Category> allCategories = database.categories("live");
+        if (sportsMode) {
+            for (BlofyModels.Category category : allCategories) {
+                if (isSportsCategory(category.name)) categoryRows.add(category);
+            }
+        } else {
+            categoryRows.add(new BlofyModels.Category("", "الكل  •  " + database.count("live"), "live"));
+            categoryRows.addAll(allCategories);
+        }
         CategoryListAdapter catAdapter = new CategoryListAdapter(categoryRows);
         cats.setAdapter(catAdapter);
         categoryPanel.addView(cats, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -694,7 +852,7 @@ public final class SevenMaxActivity extends Activity {
         channelName.setSingleLine(true);
         channelName.setEllipsize(TextUtils.TruncateAt.END);
         previewPanel.addView(channelName, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
-        TextView hint = BlofyUi.text(this, "↑↓ تنقل  •  OK تشغيل ملء الشاشة", 11, BlofyUi.MUTED);
+        TextView hint = BlofyUi.text(this, "↑↓ معاينة  •  OK تشغيل ملء الشاشة", 11, BlofyUi.MUTED);
         hint.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         hint.setTextDirection(View.TEXT_DIRECTION_RTL);
         previewPanel.addView(hint, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
@@ -732,10 +890,21 @@ public final class SevenMaxActivity extends Activity {
             if (autoplay && !liveAdapter.rows.isEmpty() && liveAdapter.listener != null) {
                 liveAdapter.listener.selected(liveAdapter.rows.get(0));
             }
+            if (sportsMode && categoryRows.isEmpty()) focusFirstItem(channels);
         };
         liveAdapter.previewedId = previewedId;
-        liveAdapter.reload("", "");
-        focusItem(cats, 0);
+        String firstCategory = sportsMode && !categoryRows.isEmpty() ? categoryRows.get(0).id : "";
+        String fallbackQuery = sportsMode && categoryRows.isEmpty() ? "SPORT" : search.getText().toString();
+        liveAdapter.reload(firstCategory, fallbackQuery);
+        if (!categoryRows.isEmpty()) focusItem(cats, 0);
+    }
+
+    private boolean isSportsCategory(String name) {
+        if (name == null) return false;
+        String clean = name.toLowerCase(Locale.ROOT);
+        return clean.contains("sport") || clean.contains("رياض")
+                || clean.contains("كرة") || clean.contains("bein")
+                || clean.contains("ppv") || clean.contains("champion");
     }
 
     private LinearLayout columnPanel(String titleValue) {
@@ -976,6 +1145,14 @@ public final class SevenMaxActivity extends Activity {
         startActivity(new Intent(this, SettingsActivity.class));
     }
 
+    private void openPlaylistHub() {
+        releasePreview();
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+        finish();
+    }
+
     private void openLegacyRefresh() {
         releasePreview();
         Intent intent = new Intent(this, MainActivity.class);
@@ -1146,6 +1323,7 @@ public final class SevenMaxActivity extends Activity {
         String[] previewedId;
         RecyclerView leftTarget;
         View topTarget;
+        Runnable pendingPreview;
 
         void reload(String category, String query) {
             if (!isCurrentScreen(ownerGeneration)) return;
@@ -1204,7 +1382,6 @@ public final class SevenMaxActivity extends Activity {
             card.setPadding(dp(8), dp(5), dp(10), dp(5));
             card.setBackground(BlofyUi.focusDrawable(SevenMaxActivity.this,
                     Color.argb(112, 26, 22, 39), BlofyUi.PANEL_SOFT, BlofyUi.PURPLE_LIGHT));
-            BlofyUi.attachScaleFocus(card, 1.008f);
 
             TextView number = BlofyUi.text(parent.getContext(), "", 10, BlofyUi.MUTED);
             number.setGravity(Gravity.CENTER);
@@ -1241,9 +1418,25 @@ public final class SevenMaxActivity extends Activity {
             images.load(holder.logo, media.image);
             holder.card.setScaleX(1f);
             holder.card.setScaleY(1f);
+            holder.card.setOnFocusChangeListener((view, focused) -> {
+                view.animate().cancel();
+                view.animate().scaleX(focused ? 1.008f : 1f)
+                        .scaleY(focused ? 1.008f : 1f).setDuration(90L).start();
+                view.setElevation(focused ? dp(8) : 0);
+                if (pendingPreview != null) main.removeCallbacks(pendingPreview);
+                if (focused && listener != null) {
+                    pendingPreview = () -> {
+                        if (view.hasFocus() && isCurrentScreen(ownerGeneration)) {
+                            listener.selected(media);
+                        }
+                    };
+                    main.postDelayed(pendingPreview, 220L);
+                }
+            });
             holder.card.setOnClickListener(v -> {
-                if (previewedId != null && media.id.equals(previewedId[0])) play(media);
-                else if (listener != null) listener.selected(media);
+                if (pendingPreview != null) main.removeCallbacks(pendingPreview);
+                pendingPreview = null;
+                play(media);
             });
             holder.card.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() != android.view.KeyEvent.ACTION_DOWN) return false;
