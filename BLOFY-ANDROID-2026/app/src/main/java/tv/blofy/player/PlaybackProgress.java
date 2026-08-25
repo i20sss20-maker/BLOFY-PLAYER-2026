@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 /** One source of truth for VOD resume positions and the last watched series episode. */
 final class PlaybackProgress {
     private static final String PREFS = "blofy_positions";
-    static final long RESUME_THRESHOLD_MS = 60_000L;
+    static final long RESUME_THRESHOLD_MS = 10_000L;
 
     private PlaybackProgress() {}
 
