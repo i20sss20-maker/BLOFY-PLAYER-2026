@@ -477,7 +477,7 @@ public final class SevenMaxActivity extends Activity {
     private void showLive() {
         releasePreview();
         screen = "live";
-        ScreenShell shell = shell("live", "البث المباشر");
+        ScreenShell shell = shell("live", "البث المباشر", false);
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
