@@ -2,6 +2,7 @@ name: Build BLOFY FULL Player APK
 
 on:
   workflow_dispatch:
+  workflow_call:
   pull_request:
     branches:
       - main
@@ -46,8 +47,8 @@ jobs:
           set -euo pipefail
           BRANCH_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           echo "Building branch: ${BRANCH_NAME}"
-          if [[ "${BRANCH_NAME}" = "ui/sevenmax-blofy-overhaul" || "${BRANCH_NAME}" = "ui/v319-ux-stability" || "${BRANCH_NAME}" = "ui/v322-blofy-ux2" ]]; then
-            echo "Overhaul branch: build committed source directly; legacy rewrite passes are disabled."
+          if grep -q '2026.08.25.10-v323' BLOFY-ANDROID-2026/app/build.gradle.kts; then
+            echo "v323 committed source detected: legacy rewrite passes are disabled."
             test -f BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
             grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
             grep -q 'POSTER_PAGE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
