@@ -221,7 +221,9 @@ public final class MainActivity extends Activity {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(BlofyUi.isTv(this) ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         page.setGravity(Gravity.CENTER);
-        page.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        // The reference launcher keeps device/activation information on the
+        // right and playlist cards on the left in TV landscape.
+        page.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         page.setPadding(dp(34), dp(26), dp(34), dp(26));
 
         LinearLayout device = devicePanel(false);
