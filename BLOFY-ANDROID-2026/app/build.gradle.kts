@@ -16,8 +16,11 @@ android {
         applicationId = "tv.blofy.player"
         minSdk = 23
         targetSdk = 36
-        versionCode = 314
-        versionName = "2026.08.25.1-cinematic-ui"
+        versionCode = 315
+        versionName = "2026.08.25.2-cinematic-arm-tv"
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
         buildConfigField("String", "BLOFY_BASE_URL", quoted(portalUrl.get().trimEnd('/')))
     }
 
