@@ -1432,7 +1432,11 @@ public final class SevenMaxActivity extends Activity {
                     main.postDelayed(pendingPreview, 220L);
                 }
             });
-            holder.card.setOnClickListener(v -> play(media));
+            holder.card.setOnClickListener(v -> {
+                if (pendingPreview != null) main.removeCallbacks(pendingPreview);
+                pendingPreview = null;
+                play(media);
+            });
             holder.card.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() != android.view.KeyEvent.ACTION_DOWN) return false;
                 if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT && leftTarget != null) {
