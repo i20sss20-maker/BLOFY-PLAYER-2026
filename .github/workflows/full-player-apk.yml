@@ -149,10 +149,10 @@ jobs:
           ./gradlew --no-daemon clean testDebugUnitTest \
             -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
 
-      - name: Build full BLOFY APK
+      - name: Build unsigned BLOFY release APK
         working-directory: BLOFY-ANDROID-2026
         run: |
-          ./gradlew --no-daemon assembleDebug \
+          ./gradlew --no-daemon assembleRelease \
             -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
 
       - name: Run Android lint
@@ -160,9 +160,9 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew --no-daemon lintDebug
+          ./gradlew --no-daemon lintRelease
           rc=$?
-          REPORT="app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt"
+          REPORT="app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt"
           echo "===== FULL ANDROID LINT REPORT ====="
           if [ -f "$REPORT" ]; then
             cat "$REPORT"
@@ -172,25 +172,25 @@ jobs:
           echo "===== END FULL ANDROID LINT REPORT ====="
           exit $rc
 
-      - name: Verify final APK
+      - name: Verify unsigned release APK
         shell: bash
         run: |
           set -euo pipefail
-          APK="BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk"
+          APK="BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk"
           test -f "$APK"
           unzip -t "$APK"
           unzip -l "$APK" | tee /tmp/apk-list.txt
           grep -q 'libffmpegJNI.so' /tmp/apk-list.txt
-          cp "$APK" BLOFY-PLAYER-2026-FINAL-TV-FFMPEG.apk
-          sha256sum BLOFY-PLAYER-2026-FINAL-TV-FFMPEG.apk > BLOFY-PLAYER-2026-FINAL-TV-FFMPEG.apk.sha256
+          cp "$APK" BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
+          sha256sum BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk > BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
 
-      - name: Upload final full APK
+      - name: Upload unsigned release APK
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-PLAYER-FINAL-TV-FFMPEG-APK
+          name: BLOFY-PLAYER-RELEASE-UNSIGNED-APK
           path: |
-            BLOFY-PLAYER-2026-FINAL-TV-FFMPEG.apk
-            BLOFY-PLAYER-2026-FINAL-TV-FFMPEG.apk.sha256
+            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
+            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -225,8 +225,8 @@ jobs:
             "run_id": ${CI_RUN_ID},
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
-            "artifact": "BLOFY-PLAYER-FINAL-TV-FFMPEG-APK",
-            "version": "2026.08.24.4-sevenmax-blofy-overhaul"
+            "artifact": "BLOFY-PLAYER-RELEASE-UNSIGNED-APK",
+            "version": "2026.08.25.5-complete-media-fixes"
           }
           EOF
           git add .ci/full-player-status.json
