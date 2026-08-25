@@ -106,6 +106,22 @@ public final class MainActivity extends Activity {
     }
 
     private void registerDevice() throws Exception {
+        try {
+            registerDeviceOnce();
+        } catch (Exception legacyFailure) {
+            if (!BlofyApi.isDeviceRecoveryConflict(legacyFailure)) throw legacyFailure;
+            // The old server record belongs to a different key and the displayed
+            // v323 code was never accepted there. Do not weaken recovery checks or
+            // overwrite it: create a completely separate, persisted identity.
+            api.clearAllCookies();
+            DeviceIdentity.startFreshPrivateIdentity(this);
+            api = new BlofyApi(this);
+            images = new ImageLoader(api);
+            registerDeviceOnce();
+        }
+    }
+
+    private void registerDeviceOnce() throws Exception {
         JSONObject body = new JSONObject();
         body.put("deviceId", api.deviceId());
         body.put("deviceKey", DeviceIdentity.secret(this));
@@ -682,6 +698,11 @@ public final class MainActivity extends Activity {
 
     private void savePlaylist(PlaylistStore.Playlist editing, PlaylistStore.Playlist draft,
                               JSONObject body, Button save, TextView status) {
+        if (!DeviceIdentity.hasRegisteredPublicIdentity(this)) {
+            status.setText("أكمل تسجيل جهاز BLOFY أولًا ثم أعد فتح إضافة القائمة.");
+            status.setTextColor(BlofyUi.ERROR);
+            return;
+        }
         if (license == null || !license.usable()) {
             status.setText("فعّل الجهاز أولًا من موقع BLOFY.");
             status.setTextColor(BlofyUi.ERROR);
@@ -1136,7 +1157,9 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if ("playlist_editor".equals(screen) || "login".equals(screen)
+        if ("registration-error".equals(screen)) {
+            finish();
+        } else if ("playlist_editor".equals(screen) || "login".equals(screen)
                 || "import".equals(screen) || "settings".equals(screen)) {
             showPlaylistHub("");
         } else if ("playlists".equals(screen) || "splash".equals(screen)) {

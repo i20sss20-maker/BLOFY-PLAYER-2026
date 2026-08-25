@@ -73,8 +73,8 @@ test("full portal API supports encrypted CRUD, connect, fresh tests, bootstrap, 
   const running = await startServer(directory, { PLAYBACK_SESSION_MAX_AGE_SECONDS: "1" });
   try {
     const health = await (await fetch(`${running.origin}/api/health`)).json();
-    assert.equal(health.version, "2026.08.25.16-v324");
-    assert.equal(health.portal, "v324-device-pairing");
+    assert.equal(health.version, "2026.08.26.1-v325");
+    assert.equal(health.portal, "v325-device-recovery");
     const portalHtml = await (await fetch(`${running.origin}/activate`)).text();
     assert.match(portalHtml, /\/brand\.css/);
     assert.match(portalHtml, /\/assets\/blofy-logo-192\.png/);
@@ -218,6 +218,52 @@ test("device registration limiter is per private device rather than one househol
       });
       assert.equal(response.status, 201);
     }
+  } finally { await stopServer(running); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("v324 registration conflict returns a safe fresh-identity contract without taking over v323", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "blofy-v324-conflict-api-"));
+  const running = await startServer(directory);
+  const oldKey = "6".repeat(64);
+  const replacementKey = "7".repeat(64);
+  const freshPrivateId = "BLOFY-FRESH-0000-0000-0001";
+  try {
+    const oldRegistration = await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
+      deviceId: PRIVATE_ID, deviceKey: oldKey, displayId: "BLOFY-V323-OLD1", pairingCode: "123123",
+    }));
+    assert.equal(oldRegistration.status, 201);
+    assert.equal((await fetch(`${running.origin}/api/license?device_id=${encodeURIComponent(PRIVATE_ID)}`)).status, 200);
+
+    const conflict = await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
+      deviceId: PRIVATE_ID, deviceKey: replacementKey, displayId: "BLOFY-V324-NEW1", pairingCode: "456456",
+    }));
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), {
+      ok: false,
+      error: "تعذر استعادة الجهاز. تحقق من رقم الجهاز ورمز الربط.",
+      errorCode: "DEVICE_IDENTITY_CONFLICT",
+      recoveryAction: "REGISTER_FRESH_IDENTITY",
+    });
+
+    const oldLogin = await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", {
+      deviceId: "BLOFY-V323-OLD1", pairingCode: "123123",
+    }));
+    assert.equal(oldLogin.status, 200, "the conflicting request must not replace the old portal identity");
+    const oldBootstrap = await fetch(`${running.origin}/api/device/bootstrap?device_id=${encodeURIComponent(PRIVATE_ID)}&connect=0`, {
+      headers: { "x-blofy-device-id": PRIVATE_ID, "x-blofy-device-key": oldKey },
+    });
+    assert.equal(oldBootstrap.status, 200, "the old device key must remain valid after the conflict");
+
+    const freshRegistration = await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
+      deviceId: freshPrivateId, deviceKey: replacementKey, displayId: "BLOFY-V324-NEW1", pairingCode: "456456",
+    }));
+    assert.equal(freshRegistration.status, 201);
+    const fresh = await freshRegistration.json();
+    assert.equal(fresh.displayId, "BLOFY-V324-NEW1");
+    assert.notEqual(fresh.deviceId, PRIVATE_ID);
+    assert.equal((await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", {
+      deviceId: "BLOFY-V323-OLD1", pairingCode: "123123",
+    }))).status, 200, "fresh registration must leave the v323 alias usable");
   } finally { await stopServer(running); await rm(directory, { recursive: true, force: true }); }
 });
 

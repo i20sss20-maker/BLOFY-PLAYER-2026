@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DeviceProfileStore } from "../lib/device-profile-store.mjs";
+import { DeviceIdentityConflictError, DeviceProfileStore } from "../lib/device-profile-store.mjs";
 import { seal, unseal } from "../lib/security.mjs";
 
 const PRIVATE_ID = "BLOFY-ABCD-EFGH-JKLM-NPQR";
@@ -51,6 +51,57 @@ test("reinstall recovery rotates the device key only with the existing six digit
   assert.equal(recovered.recovered, true);
   await assert.rejects(() => store.withDeviceKey(PRIVATE_ID, firstKey), /تغيّر مفتاحه/);
   assert.equal((await store.withDeviceKey(PRIVATE_ID, replacementKey)).deviceId, PRIVATE_ID);
+}));
+
+test("v323 records without a pairing verifier cannot be overwritten during v324 registration", async () => fixture(async (_store, filePath) => {
+  const oldKey = "1".repeat(64);
+  const replacementKey = "2".repeat(64);
+  const oldKeyHash = crypto.createHash("sha256").update(oldKey).digest("hex");
+  const token = seal({ kind: "m3u", name: "قائمة v323", url: "https://example.com/list.m3u" });
+  await writeFile(filePath, JSON.stringify({ version: 1, devices: {
+    [PRIVATE_ID]: { keyHash: oldKeyHash, displayId: "BLOFY-SV", profileToken: token,
+      portalVersion: 1, revision: 4, createdAt: 1, updatedAt: 2 },
+  }, aliases: { "BLOFY-SV": PRIVATE_ID } }));
+
+  const restored = new DeviceProfileStore(filePath, { now: () => 1_700_000_000_000 });
+  assert.equal((await restored.snapshot(PRIVATE_ID)).playlists[0].name, "قائمة v323");
+  const migratedBeforeConflict = await readFile(filePath, "utf8");
+  await assert.rejects(
+    () => restored.register(PRIVATE_ID, replacementKey,
+      { displayId: "BLOFY-N3W4-I5D6", pairingCode: "772413" }),
+    (error) => error instanceof DeviceIdentityConflictError &&
+      error.code === "DEVICE_IDENTITY_CONFLICT" && error.statusCode === 409,
+  );
+  assert.equal(await readFile(filePath, "utf8"), migratedBeforeConflict);
+  assert.equal((await restored.snapshot(PRIVATE_ID)).playlists[0].name, "قائمة v323");
+  assert.equal((await restored.withDeviceKey(PRIVATE_ID, oldKey)).deviceId, PRIVATE_ID);
+  await assert.rejects(() => restored.withDeviceKey(PRIVATE_ID, replacementKey), /تغيّر مفتاحه/);
+
+  const restarted = new DeviceProfileStore(filePath, { now: () => 1_700_000_000_000 });
+  assert.equal((await restarted.snapshot(PRIVATE_ID)).playlists[0].name, "قائمة v323");
+  assert.equal((await restarted.withDeviceKey(PRIVATE_ID, oldKey)).deviceId, PRIVATE_ID);
+}));
+
+test("mismatched v324 identity is rejected without replacing the v323 record", async () => fixture(async (store, filePath) => {
+  const oldKey = "3".repeat(64);
+  const replacementKey = "4".repeat(64);
+  await store.register(PRIVATE_ID, oldKey, { displayId: "BLOFY-OLD3-D3V1", pairingCode: "135790" });
+  await store.createPlaylist(PRIVATE_ID, {
+    name: "لا تُنقل", kind: "m3u", serverName: "old.example",
+    profileToken: seal({ kind: "m3u", url: "https://old.example/list.m3u" }),
+  });
+  const before = await readFile(filePath, "utf8");
+
+  await assert.rejects(
+    () => store.register(PRIVATE_ID, replacementKey,
+      { displayId: "BLOFY-NEW4-D3V1", pairingCode: "246801" }),
+    (error) => error instanceof DeviceIdentityConflictError &&
+      error.code === "DEVICE_IDENTITY_CONFLICT" && error.statusCode === 409,
+  );
+  assert.equal(await readFile(filePath, "utf8"), before);
+  assert.equal((await store.withDeviceKey(PRIVATE_ID, oldKey)).deviceId, PRIVATE_ID);
+  await assert.rejects(() => store.withDeviceKey(PRIVATE_ID, replacementKey), /تغيّر مفتاحه/);
+  assert.equal((await store.snapshot(PRIVATE_ID)).playlists[0].name, "لا تُنقل");
 }));
 
 test("QR nonce is high-entropy, expiring, and one-time", async () => fixture(async (store) => {

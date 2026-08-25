@@ -29,7 +29,25 @@ final class BlofyApi {
 
     static final class ApiException extends Exception {
         final int status;
-        ApiException(int status, String message) { super(message); this.status = status; }
+        final String code;
+        ApiException(int status, String message) { this(status, "", message); }
+        ApiException(int status, String code, String message) {
+            super(message);
+            this.status = status;
+            this.code = code == null ? "" : code;
+        }
+    }
+
+    static boolean isDeviceRecoveryConflict(Throwable failure) {
+        if (failure instanceof ApiException) {
+            ApiException apiFailure = (ApiException) failure;
+            if (apiFailure.status == 409
+                    && "DEVICE_IDENTITY_CONFLICT".equals(apiFailure.code)) return true;
+        }
+        String message = failure == null || failure.getMessage() == null ? "" : failure.getMessage();
+        // Compatibility with the already deployed v324 server, which returned
+        // this same conflict as a generic 500 before the structured 409 contract.
+        return message.contains("تعذر استعادة الجهاز");
     }
 
     /** Cancels the active native-link/redirect connection, not just its Future. */
@@ -156,7 +174,7 @@ final class BlofyApi {
         catch (Exception error) { throw new ApiException(status, "الخادم أعاد بيانات غير صالحة."); }
         if (status < 200 || status >= 300) {
             String message = result.optString("error", "تعذر إكمال الطلب (" + status + ").");
-            throw new ApiException(status, message);
+            throw new ApiException(status, result.optString("errorCode", ""), message);
         }
         return result;
     }
@@ -278,6 +296,13 @@ final class BlofyApi {
         synchronized (this) {
             cookies.remove("blofy_session");
             preferences.edit().putString(KEY_COOKIES, cookieHeader()).apply();
+        }
+    }
+
+    void clearAllCookies() {
+        synchronized (this) {
+            cookies.clear();
+            preferences.edit().remove(KEY_COOKIES).commit();
         }
     }
 

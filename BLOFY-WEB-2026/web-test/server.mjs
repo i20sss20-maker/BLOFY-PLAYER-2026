@@ -4,7 +4,7 @@ import { accessSync, constants as fsConstants, createReadStream, existsSync, mkd
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LicenseStore } from "./lib/license-store.mjs";
-import { DeviceProfileStore, persistDeviceSessionFromHeaders } from "./lib/device-profile-store.mjs";
+import { DeviceIdentityConflictError, DeviceProfileStore, persistDeviceSessionFromHeaders } from "./lib/device-profile-store.mjs";
 import { extensionFromUrl, XtreamClient } from "./lib/xtream.mjs";
 import { pageItems, parseM3u } from "./lib/playlist.mjs";
 import { publicCatalogItem, publicSeriesItem } from "./lib/catalog-response.mjs";
@@ -29,7 +29,7 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
-const APP_VERSION = "2026.08.25.16-v324";
+const APP_VERSION = "2026.08.26.1-v325";
 const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
@@ -417,7 +417,7 @@ async function handleApi(req, res, url) {
       nativePlayback: NATIVE_PLAYBACK_MODE,
       mediaProxy: false,
       transcoding: false,
-      portal: "v324-device-pairing",
+      portal: "v325-device-recovery",
       pairing: "one-time-token-or-six-digits",
       storage: production ? "persistent-required" : "local-development",
       time: new Date().toISOString(),
@@ -472,10 +472,23 @@ async function handleApi(req, res, url) {
     if (limitedSubject(registrationSubject, 30, 15 * 60_000, "device-register")) {
       return json(res, 429, { error: "محاولات تسجيل كثيرة. حاول بعد 15 دقيقة." }, securityHeaders());
     }
-    const registered = await deviceProfiles.register(body.deviceId || body.device_id, body.deviceKey || body.device_key, {
-      displayId: body.displayId || body.display_id,
-      pairingCode: body.pairingCode || body.pairing_code,
-    });
+    let registered;
+    try {
+      registered = await deviceProfiles.register(body.deviceId || body.device_id, body.deviceKey || body.device_key, {
+        displayId: body.displayId || body.display_id,
+        pairingCode: body.pairingCode || body.pairing_code,
+      });
+    } catch (error) {
+      if (error instanceof DeviceIdentityConflictError) {
+        return json(res, error.statusCode, {
+          ok: false,
+          error: error.message,
+          errorCode: error.code,
+          recoveryAction: error.recoveryAction,
+        }, securityHeaders());
+      }
+      throw error;
+    }
     const nonce = crypto.randomBytes(24).toString("base64url");
     const pairExpiresAt = Date.now() + pairTokenMaxAge * 1000;
     await deviceProfiles.issuePairNonce(registered.deviceId, registered.keyHash, nonce, pairExpiresAt);

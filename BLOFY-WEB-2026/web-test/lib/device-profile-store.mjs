@@ -7,6 +7,16 @@ const SHORT_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DISPLAY_ID_PATTERN = /^BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
 const LEGACY_DISPLAY_ID_PATTERN = /^BLOFY-[A-Z0-9]{2}$/;
 
+export class DeviceIdentityConflictError extends Error {
+  constructor() {
+    super("تعذر استعادة الجهاز. تحقق من رقم الجهاز ورمز الربط.");
+    this.name = "DeviceIdentityConflictError";
+    this.code = "DEVICE_IDENTITY_CONFLICT";
+    this.statusCode = 409;
+    this.recoveryAction = "REGISTER_FRESH_IDENTITY";
+  }
+}
+
 function cleanDeviceId(value) {
   const id = String(value || "").trim().toUpperCase();
   if (!/^BLOFY-[A-Z0-9-]{8,32}$/.test(id)) throw new Error("رقم الجهاز الخاص غير صالح.");
@@ -161,8 +171,10 @@ export class DeviceProfileStore {
       let recovered = false;
       if (record && !safeEqual(record.keyHash, hash)) {
         const suppliedPairingHash = record.pairingSalt ? pairingHash(code, record.pairingSalt) : "";
-        if (!record.pairingCodeHash || !safeEqual(record.pairingCodeHash, suppliedPairingHash)) {
-          throw new Error("تعذر استعادة الجهاز. تحقق من رقم الجهاز ورمز الربط.");
+        const currentCodeMatches = Boolean(record.pairingCodeHash) &&
+          safeEqual(record.pairingCodeHash, suppliedPairingHash);
+        if (!currentCodeMatches) {
+          throw new DeviceIdentityConflictError();
         }
         // Reinstall recovery requires all three independent values: the private
         // device id, the stable six digits shown by that TV, and the new key.
