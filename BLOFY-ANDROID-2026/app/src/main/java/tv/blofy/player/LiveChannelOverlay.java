@@ -34,11 +34,13 @@ final class LiveChannelOverlay {
     private final RecyclerView list;
     private final LinearLayoutManager layoutManager;
     private final Adapter adapter;
+    private final String categoryId;
     private String currentId = "";
 
-    LiveChannelOverlay(Activity activity, Listener listener) {
+    LiveChannelOverlay(Activity activity, String categoryId, Listener listener) {
         this.activity = activity;
         this.listener = listener;
+        this.categoryId = categoryId == null ? "" : categoryId;
         database = new CatalogDatabase(activity);
 
         container = new FrameLayout(activity);
@@ -159,6 +161,17 @@ final class LiveChannelOverlay {
         database.close();
     }
 
+    void selectRelative(String currentId, int direction) {
+        adapter.ensureLoaded();
+        if (adapter.rows.isEmpty()) return;
+        int current = adapter.indexOf(currentId);
+        if (current < 0) current = 0;
+        int next = Math.max(0, Math.min(adapter.rows.size() - 1, current + direction));
+        BlofyModels.Media media = adapter.rows.get(next);
+        this.currentId = media.id;
+        if (listener != null) listener.onChannelSelected(media);
+    }
+
     private int dp(int value) { return BlofyUi.dp(activity, value); }
 
     private final class Adapter extends RecyclerView.Adapter<Adapter.Holder> {
@@ -174,7 +187,7 @@ final class LiveChannelOverlay {
         void loadMore() {
             if (exhausted) return;
             int offset = rows.size();
-            List<BlofyModels.Media> next = database.media("live", "", "", false, false, PAGE, offset);
+            List<BlofyModels.Media> next = database.media("live", categoryId, "", false, false, PAGE, offset);
             if (next.size() < PAGE) exhausted = true;
             if (next.isEmpty()) {
                 if (offset == 0) notifyDataSetChanged();
@@ -188,6 +201,10 @@ final class LiveChannelOverlay {
         int indexOf(String id) {
             for (int i = 0; i < rows.size(); i++) if (rows.get(i).id.equals(id)) return i;
             return -1;
+        }
+
+        void ensureLoaded() {
+            if (rows.isEmpty()) loadMore();
         }
 
         @Override public Holder onCreateViewHolder(ViewGroup parent, int viewType) {
