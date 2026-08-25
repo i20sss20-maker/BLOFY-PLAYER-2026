@@ -1,0 +1,31 @@
+name: Export Android Signing Tools
+
+on:
+  push:
+    branches:
+      - ui/v319-ux-stability
+    paths:
+      - .github/workflows/export-android-signing-tools.yml
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Locate signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_tools="$(find "${ANDROID_SDK_ROOT}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p /tmp/blofy-signing-tools/lib
+          cp "${build_tools}/apksigner" /tmp/blofy-signing-tools/
+          cp "${build_tools}/zipalign" /tmp/blofy-signing-tools/
+          cp "${build_tools}/lib/apksigner.jar" /tmp/blofy-signing-tools/lib/
+          chmod +x /tmp/blofy-signing-tools/apksigner /tmp/blofy-signing-tools/zipalign
+
+      - name: Upload signing tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-signing-tools
+          path: /tmp/blofy-signing-tools
+          if-no-files-found: error
+          retention-days: 1
