@@ -184,7 +184,29 @@ jobs:
           cp "$APK" BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
           sha256sum BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk > BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
 
+      - name: Publish v323 unsigned APK release asset
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          TAG="v323-unsigned-${SOURCE_SHA:0:12}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --target "$SOURCE_SHA" \
+              --title "BLOFY PLAYER v323 unsigned build" \
+              --notes "CI-verified unsigned handoff for local release signing." \
+              --prerelease
+          fi
+          gh release upload "$TAG" \
+            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk \
+            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256 \
+            --clobber
+
       - name: Upload unsigned release APK
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: BLOFY-PLAYER-RELEASE-UNSIGNED-APK
@@ -196,6 +218,7 @@ jobs:
 
       - name: Upload FFmpeg AAR for diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: BLOFY-MEDIA3-FFMPEG-AAR
@@ -226,7 +249,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-RELEASE-UNSIGNED-APK",
-            "version": "2026.08.25.9-playlist-hub"
+            "version": "2026.08.25.10-v323"
           }
           EOF
           git add .ci/full-player-status.json
