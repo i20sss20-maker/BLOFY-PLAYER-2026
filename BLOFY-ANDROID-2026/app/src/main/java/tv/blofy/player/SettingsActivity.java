@@ -56,6 +56,7 @@ public final class SettingsActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         Button back = BlofyUi.button(this, "↩  رجوع", false);
+        back.setId(View.generateViewId());
         back.setOnClickListener(v -> finish());
         header.addView(back, new LinearLayout.LayoutParams(dp(150), dp(52)));
         View space = new View(this);
@@ -77,6 +78,7 @@ public final class SettingsActivity extends Activity {
         GridLayout grid = new GridLayout(this);
         int columns = BlofyUi.isTv(this) ? 4 : 2;
         grid.setColumnCount(columns);
+        grid.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
         grid.setUseDefaultMargins(false);
 
@@ -142,6 +144,7 @@ public final class SettingsActivity extends Activity {
         addGridSetting(grid, gridAction("ℹ  معلومات الجهاز",
                 DeviceIdentity.displayId(this) + "  •  " + DeviceIdentity.activationCode(this),
                 () -> ToastBridge.show(this, "BLOFY PLAYER v328")));
+        linkGridFocus(grid, columns, back);
 
         page.addView(grid, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -185,12 +188,33 @@ public final class SettingsActivity extends Activity {
     }
 
     private void addGridSetting(GridLayout grid, Button button) {
+        button.setId(View.generateViewId());
         GridLayout.LayoutParams params = new GridLayout.LayoutParams();
         params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
         params.width = 0;
         params.height = dp(88);
         params.setMargins(dp(5), dp(5), dp(5), dp(5));
         grid.addView(button, params);
+    }
+
+    private void linkGridFocus(GridLayout grid, int columns, Button back) {
+        int count = grid.getChildCount();
+        if (count == 0) return;
+        back.setNextFocusDownId(grid.getChildAt(0).getId());
+        for (int index = 0; index < count; index++) {
+            View item = grid.getChildAt(index);
+            int column = index % columns;
+            int up = index - columns;
+            int down = index + columns;
+            int left = index + 1;
+            int right = index - 1;
+            item.setNextFocusUpId(up >= 0 ? grid.getChildAt(up).getId() : back.getId());
+            item.setNextFocusDownId(down < count ? grid.getChildAt(down).getId() : item.getId());
+            item.setNextFocusLeftId(column + 1 < columns && left < count
+                    ? grid.getChildAt(left).getId() : item.getId());
+            item.setNextFocusRightId(column > 0
+                    ? grid.getChildAt(right).getId() : item.getId());
+        }
     }
 
     private void build() {
