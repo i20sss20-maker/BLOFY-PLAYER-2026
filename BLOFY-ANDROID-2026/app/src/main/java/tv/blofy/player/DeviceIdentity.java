@@ -17,10 +17,14 @@ final class DeviceIdentity {
     private static final String KEY_DISPLAY_ID = "display_id";
     private static final String KEY_PAIRING_CODE = "pairing_code";
     private static final String KEY_PUBLIC_REGISTERED = "public_identity_registered";
+    private static final String KEY_PRIVATE_ID = "private_device_id";
 
     private DeviceIdentity() {}
 
     static String id(Context context) {
+        String persisted = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_PRIVATE_ID, "");
+        if (isPrivateId(persisted)) return persisted;
         try {
             String androidId = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -35,6 +39,41 @@ final class DeviceIdentity {
         }
     }
 
+    /**
+     * Starts a separate device record after the server proves the legacy record
+     * cannot be recovered. This never replaces or claims that server record.
+     */
+    static String startFreshPrivateIdentity(Context context) {
+        byte[] idRandom = new byte[8];
+        byte[] keyRandom = new byte[32];
+        SecureRandom random = new SecureRandom();
+        random.nextBytes(idRandom);
+        random.nextBytes(keyRandom);
+        String privateId = formatPrivateId(idRandom);
+        String privateKey = hex(keyRandom);
+        boolean saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_PRIVATE_ID, privateId)
+                .putString(KEY_SECRET, privateKey)
+                .remove(KEY_DISPLAY_ID)
+                .remove(KEY_PAIRING_CODE)
+                .remove(KEY_PAIR_TOKEN)
+                .remove(KEY_PUBLIC_REGISTERED)
+                .commit();
+        if (!saved) throw new IllegalStateException("تعذر حفظ هوية الجهاز الجديدة.");
+        return privateId;
+    }
+
+    static boolean isPrivateId(String value) {
+        return value != null && value.matches("BLOFY-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}");
+    }
+
+    static String formatPrivateId(byte[] bytes) {
+        if (bytes == null || bytes.length < 8) throw new IllegalArgumentException("private id requires eight bytes");
+        String value = hex(bytes);
+        return "BLOFY-" + value.substring(0, 4) + "-" + value.substring(4, 8)
+                + "-" + value.substring(8, 12) + "-" + value.substring(12, 16);
+    }
+
     /** Short, TV-friendly identifier. The long id remains the private API identity. */
     static String displayId(Context context) {
         if (!hasRegisteredPublicIdentity(context)) return "";
@@ -45,9 +84,9 @@ final class DeviceIdentity {
     /** Candidate sent during registration; it is never shown until the server confirms it. */
     static String proposedDisplayId(Context context) {
         String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_DISPLAY_ID, "");
-        if (saved != null && saved.matches("BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}")) return saved;
         String code = stableCode(context, "display", 8);
-        return "BLOFY-" + code.substring(0, 4) + "-" + code.substring(4, 8);
+        return registrationDisplayId(saved,
+                "BLOFY-" + code.substring(0, 4) + "-" + code.substring(4, 8));
     }
 
     /** Six-digit pairing code. The server-issued value wins after registration. */
@@ -60,8 +99,25 @@ final class DeviceIdentity {
     /** Candidate sent during registration; it is never shown until the server confirms it. */
     static String proposedActivationCode(Context context) {
         String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PAIRING_CODE, "");
-        if (saved != null && saved.matches("[0-9]{6}")) return saved;
-        return stableDigits(context, "activation", 6);
+        return registrationPairingCode(saved, stableDigits(context, "activation", 6));
+    }
+
+    /**
+     * Keeps the v323 public id for the authenticated migration request. The server
+     * can then resolve the existing alias and return its canonical v324 id. The
+     * legacy value is not marked registered or shown by v324.
+     */
+    static String registrationDisplayId(String saved, String generated) {
+        String value = saved == null ? "" : saved.trim().toUpperCase(Locale.US);
+        if (value.matches("BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}")
+                || value.matches("BLOFY-[A-Z0-9]{2}")) return value;
+        return generated;
+    }
+
+    /** Preserve the exact six digits that protected the v323 server record. */
+    static String registrationPairingCode(String saved, String generated) {
+        String value = saved == null ? "" : saved.trim();
+        return value.matches("[0-9]{6}") ? value : generated;
     }
 
     /** Atomically accepts only a complete server registration response. */
@@ -126,9 +182,7 @@ final class DeviceIdentity {
         if (saved != null && saved.matches("[A-F0-9]{64}")) return saved;
         byte[] random = new byte[32];
         new SecureRandom().nextBytes(random);
-        StringBuilder value = new StringBuilder(64);
-        for (byte part : random) value.append(String.format(Locale.US, "%02X", part));
-        String created = value.toString();
+        String created = hex(random);
         preferences.edit().putString(KEY_SECRET, created).apply();
         return created;
     }
@@ -139,5 +193,11 @@ final class DeviceIdentity {
 
     static String pairToken(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PAIR_TOKEN, "");
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder value = new StringBuilder(bytes.length * 2);
+        for (byte part : bytes) value.append(String.format(Locale.US, "%02X", part));
+        return value.toString();
     }
 }
