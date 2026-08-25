@@ -30,6 +30,34 @@ final class DeviceIdentity {
         }
     }
 
+    /** Short, TV-friendly identifier. The long id remains the private API identity. */
+    static String displayId(Context context) {
+        String compact = stableCode(context, "display", 2);
+        return "BLOFY-" + compact;
+    }
+
+    /** Six-character pairing code derived from the device and stable across restarts. */
+    static String activationCode(Context context) {
+        return stableCode(context, "activation", 6);
+    }
+
+    private static String stableCode(Context context, String purpose, int length) {
+        final char[] alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
+        try {
+            String androidId = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(("tv.blofy.player:" + purpose + ":" + androidId)
+                    .getBytes(StandardCharsets.UTF_8));
+            StringBuilder value = new StringBuilder(length);
+            for (int index = 0; index < length; index++) {
+                value.append(alphabet[(hash[index] & 0xff) % alphabet.length]);
+            }
+            return value.toString();
+        } catch (Exception ignored) {
+            return length == 2 ? "TV" : "BLOFY6";
+        }
+    }
+
     static String secret(Context context) {
         android.content.SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String saved = preferences.getString(KEY_SECRET, "");
