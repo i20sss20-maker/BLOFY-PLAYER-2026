@@ -81,7 +81,6 @@ public final class MainActivity extends Activity {
                 license = new BlofyModels.License(api.get("/api/license?device_id=" + BlofyApi.encode(api.deviceId())));
                 JSONObject bootstrap = license.usable() ? tryRemoteSetup() : null;
                 if (bootstrap != null) {
-                    DeviceIdentity.updatePublicIdentity(this, bootstrap);
                     playlistStore.applyRemote(bootstrap);
                 }
                 if (license.usable() && (bootstrap == null || !bootstrap.has("playlists"))) refreshRemotePlaylists();
@@ -95,22 +94,28 @@ public final class MainActivity extends Activity {
                     }
                 });
             } catch (Exception error) {
-                main.post(() -> showPlaylistHub(message(error)));
+                main.post(() -> {
+                    if (DeviceIdentity.hasRegisteredPublicIdentity(this)) {
+                        showPlaylistHub("تعذر تحديث تسجيل الجهاز: " + message(error));
+                    } else {
+                        showRegistrationError(message(error));
+                    }
+                });
             }
         });
     }
 
-    private void registerDevice() {
-        try {
-            JSONObject body = new JSONObject();
-            body.put("deviceId", api.deviceId());
-            body.put("deviceKey", DeviceIdentity.secret(this));
-            body.put("displayId", DeviceIdentity.displayId(this));
-            body.put("pairingCode", DeviceIdentity.activationCode(this));
-            JSONObject result = api.post("/api/device/register", body);
-            DeviceIdentity.pairToken(this, result.optString("pairToken", ""));
-            DeviceIdentity.updatePublicIdentity(this, result);
-        } catch (Exception ignored) {}
+    private void registerDevice() throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("deviceId", api.deviceId());
+        body.put("deviceKey", DeviceIdentity.secret(this));
+        body.put("displayId", DeviceIdentity.proposedDisplayId(this));
+        body.put("pairingCode", DeviceIdentity.proposedActivationCode(this));
+        JSONObject result = api.post("/api/device/register", body);
+        if (!DeviceIdentity.updatePublicIdentity(this, result)) {
+            throw new Exception("الخادم لم يؤكد رقم الجهاز ورمز الربط بالتنسيق المطلوب.");
+        }
+        DeviceIdentity.pairToken(this, result.optString("pairToken", ""));
     }
 
     private JSONObject tryRemoteSetup() {
@@ -147,6 +152,46 @@ public final class MainActivity extends Activity {
         progressParams.topMargin = dp(18);
         content.addView(progress, progressParams);
         root.addView(content, match());
+    }
+
+    private void showRegistrationError(String detail) {
+        screen = "registration-error";
+        root.removeAllViews();
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER);
+        panel.setPadding(dp(34), dp(30), dp(34), dp(30));
+        panel.setBackground(BlofyUi.gradientPanel(this, Color.argb(246, 29, 18, 48),
+                Color.argb(246, 8, 8, 17), 24, BlofyUi.PURPLE_LIGHT));
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.blofy_logo);
+        logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        panel.addView(logo, new LinearLayout.LayoutParams(dp(150), dp(150)));
+        TextView title = BlofyUi.title(this, "تعذر تسجيل الجهاز", 25);
+        title.setGravity(Gravity.CENTER);
+        panel.addView(title);
+        TextView note = BlofyUi.text(this,
+                "لن يتم عرض رقم الجهاز أو رمز الربط قبل أن يؤكد الخادم تسجيلهما.\n" + detail,
+                14, BlofyUi.ERROR);
+        note.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(dp(620), ViewGroup.LayoutParams.WRAP_CONTENT);
+        noteParams.topMargin = dp(12);
+        panel.addView(note, noteParams);
+        Button retry = BlofyUi.button(this, "↻  إعادة محاولة التسجيل", true);
+        retry.setOnClickListener(view -> {
+            retry.setEnabled(false);
+            showSplash("جاري تسجيل جهاز BLOFY", "الاتصال الآمن بخادم الربط");
+            boot();
+        });
+        LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(dp(310), dp(58));
+        retryParams.topMargin = dp(22);
+        panel.addView(retry, retryParams);
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
+                BlofyUi.isTv(this) ? dp(760) : ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        panelParams.setMargins(dp(24), dp(24), dp(24), dp(24));
+        root.addView(panel, panelParams);
+        retry.requestFocus();
     }
 
     /** Premium launcher: saved sources are visible, but never connected automatically. */
@@ -692,13 +737,16 @@ public final class MainActivity extends Activity {
         TextView heading = BlofyUi.title(this, "جهاز BLOFY", 17);
         heading.setGravity(Gravity.CENTER);
         panel.addView(heading);
-        TextView id = BlofyUi.title(this, DeviceIdentity.displayId(this), 20);
+        boolean registered = DeviceIdentity.hasRegisteredPublicIdentity(this);
+        TextView id = BlofyUi.title(this, registered ? DeviceIdentity.displayId(this) : "غير مسجل", 20);
         id.setTextDirection(View.TEXT_DIRECTION_LTR);
         id.setGravity(Gravity.CENTER);
         id.setTextIsSelectable(true);
         panel.addView(id);
-        TextView pairing = BlofyUi.text(this, "رمز الدخول   " + DeviceIdentity.activationCode(this), 14,
-                BlofyUi.PURPLE_LIGHT);
+        TextView pairing = BlofyUi.text(this, registered
+                        ? "رمز الدخول   " + DeviceIdentity.activationCode(this)
+                        : "أعد محاولة الاتصال لإصدار بيانات الربط",
+                14, registered ? BlofyUi.PURPLE_LIGHT : BlofyUi.ERROR);
         pairing.setTextDirection(View.TEXT_DIRECTION_LTR);
         pairing.setGravity(Gravity.CENTER);
         pairing.setTextIsSelectable(true);
@@ -708,17 +756,19 @@ public final class MainActivity extends Activity {
         plan.setGravity(Gravity.CENTER);
         panel.addView(plan);
 
-        ImageView qr = new ImageView(this);
-        qr.setBackgroundColor(Color.WHITE);
-        qr.setPadding(dp(7), dp(7), dp(7), dp(7));
-        qr.setImageBitmap(qr(api.activationUrl(license), 240));
-        int qrSize = showActivationActions ? 158 : 142;
-        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(qrSize), dp(qrSize));
-        qrParams.topMargin = dp(12);
-        panel.addView(qr, qrParams);
-        TextView qrText = BlofyUi.text(this, "امسح الباركود لفتح لوحة الجهاز وإدارة القوائم", 11, BlofyUi.MUTED);
-        qrText.setGravity(Gravity.CENTER);
-        panel.addView(qrText);
+        if (registered) {
+            ImageView qr = new ImageView(this);
+            qr.setBackgroundColor(Color.WHITE);
+            qr.setPadding(dp(7), dp(7), dp(7), dp(7));
+            qr.setImageBitmap(qr(api.activationUrl(license), 240));
+            int qrSize = showActivationActions ? 158 : 142;
+            LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(dp(qrSize), dp(qrSize));
+            qrParams.topMargin = dp(12);
+            panel.addView(qr, qrParams);
+            TextView qrText = BlofyUi.text(this, "امسح الباركود لفتح لوحة الجهاز وإدارة القوائم", 11, BlofyUi.MUTED);
+            qrText.setGravity(Gravity.CENTER);
+            panel.addView(qrText);
+        }
 
         if (!showActivationActions) return panel;
         Button activate = BlofyUi.button(this, "↻  تحديث من الموقع", true);
@@ -733,7 +783,6 @@ public final class MainActivity extends Activity {
                     license = new BlofyModels.License(api.get("/api/license?device_id=" + BlofyApi.encode(api.deviceId())));
                     JSONObject bootstrap = tryRemoteSetup();
                     if (bootstrap != null) {
-                        DeviceIdentity.updatePublicIdentity(this, bootstrap);
                         playlistStore.applyRemote(bootstrap);
                     }
                     refreshRemotePlaylists();

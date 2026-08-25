@@ -73,23 +73,23 @@ test("full portal API supports encrypted CRUD, connect, fresh tests, bootstrap, 
   const running = await startServer(directory, { PLAYBACK_SESSION_MAX_AGE_SECONDS: "1" });
   try {
     const health = await (await fetch(`${running.origin}/api/health`)).json();
-    assert.equal(health.version, "2026.08.25.15-v323");
-    assert.equal(health.portal, "v323-multi-playlist");
+    assert.equal(health.version, "2026.08.25.16-v324");
+    assert.equal(health.portal, "v324-device-pairing");
     const portalHtml = await (await fetch(`${running.origin}/activate`)).text();
     assert.match(portalHtml, /\/brand\.css/);
     assert.match(portalHtml, /\/assets\/blofy-logo-192\.png/);
     assert.equal((await fetch(`${running.origin}/brand.css`)).status, 200);
 
     const register = await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
-      deviceId: PRIVATE_ID, deviceKey: DEVICE_KEY, displayId: "BLOFY-D4", pairingCode: "654321",
+      deviceId: PRIVATE_ID, deviceKey: DEVICE_KEY, displayId: "BLOFY-D4A2-B3C4", pairingCode: "654321",
     }));
     assert.equal(register.status, 201);
     const registered = await register.json();
-    assert.equal(registered.displayId, "BLOFY-D4");
+    assert.equal(registered.displayId, "BLOFY-D4A2-B3C4");
     assert.match(registered.pairToken, /.+/);
     assert.equal((await fetch(`${running.origin}/api/license?device_id=${encodeURIComponent(PRIVATE_ID)}`)).status, 200);
 
-    const login = await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", { deviceId: "BLOFY-D4", pairingCode: "654321" }));
+    const login = await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", { deviceId: "BLOFY-D4A2-B3C4", pairingCode: "654321" }));
     assert.equal(login.status, 200);
     const portalCookie = login.headers.get("set-cookie").split(";")[0];
     assert.match(login.headers.get("set-cookie"), /HttpOnly/);
@@ -175,12 +175,25 @@ test("full portal API supports encrypted CRUD, connect, fresh tests, bootstrap, 
     provider.state.m3uHealthy = true;
     const secondId = "BLOFY-2222-3333-4444-5555";
     const secondRegister = await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
-      deviceId: secondId, deviceKey: "E".repeat(64), displayId: "BLOFY-E5", pairingCode: "111222",
+      deviceId: secondId, deviceKey: "E".repeat(64), displayId: "BLOFY-E5A2-B3C4", pairingCode: "111222",
     }));
     const secondPair = (await secondRegister.json()).pairToken;
     const configureBody = { deviceId: secondId, pairToken: secondPair, kind: "m3u", name: "قديمة", url: `${provider.origin}/list.m3u` };
     assert.equal((await fetch(`${running.origin}/api/device/configure`, jsonRequest("POST", configureBody))).status, 200);
     assert.equal((await fetch(`${running.origin}/api/device/configure`, jsonRequest("POST", configureBody))).status, 403);
+
+    const legacyPrivateId = "BLOFY-6666-7777-8888-9999";
+    const legacyRegister = await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
+      deviceId: legacyPrivateId, deviceKey: "F".repeat(64), displayId: "BLOFY-SV", pairingCode: "772413",
+    }));
+    assert.equal(legacyRegister.status, 201);
+    const legacyRegistered = await legacyRegister.json();
+    assert.match(legacyRegistered.displayId, /^BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+    const legacyLogin = await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", {
+      deviceId: "blofy-sv", pairingCode: "772413",
+    }));
+    assert.equal(legacyLogin.status, 200);
+    assert.equal((await legacyLogin.json()).displayId, legacyRegistered.displayId);
   } finally {
     await stopServer(running);
     await new Promise((resolve) => provider.server.close(resolve));
@@ -188,16 +201,53 @@ test("full portal API supports encrypted CRUD, connect, fresh tests, bootstrap, 
   }
 });
 
+test("device registration limiter is per private device rather than one household IP", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "blofy-register-rate-api-"));
+  const running = await startServer(directory);
+  try {
+    for (let index = 0; index < 11; index += 1) {
+      const suffix = String(index).padStart(4, "0");
+      const response = await fetch(`${running.origin}/api/device/register`, {
+        ...jsonRequest("POST", {
+          deviceId: `BLOFY-1000-2000-3000-${suffix}`,
+          deviceKey: index.toString(16).toUpperCase().padStart(64, "A").slice(-64),
+          displayId: `BLOFY-RATE-${suffix}`,
+          pairingCode: String(100000 + index),
+        }),
+        headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.10" },
+      });
+      assert.equal(response.status, 201);
+    }
+  } finally { await stopServer(running); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("registered device login survives a server restart on the configured profile database", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "blofy-profile-restart-api-"));
+  let running = await startServer(directory);
+  try {
+    const registered = await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
+      deviceId: PRIVATE_ID, deviceKey: DEVICE_KEY, displayId: "BLOFY-SAVE-9D2E", pairingCode: "772413",
+    }));
+    assert.equal(registered.status, 201);
+    await stopServer(running);
+    running = await startServer(directory);
+    const login = await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", {
+      deviceId: "blofy-save-9d2e", pairingCode: "772413",
+    }));
+    assert.equal(login.status, 200);
+  } finally { await stopServer(running); await rm(directory, { recursive: true, force: true }); }
+});
+
 test("login rate limit uses the trusted right side of the proxy chain", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "blofy-rate-api-"));
   const running = await startServer(directory);
   try {
     for (let index = 1; index <= 8; index += 1) {
-      const response = await fetch(`${running.origin}/api/device/login`, { ...jsonRequest("POST", { deviceId: "BLOFY-Z9", pairingCode: "000000" }),
+      const response = await fetch(`${running.origin}/api/device/login`, { ...jsonRequest("POST", { deviceId: "BLOFY-Z9A2-B3C4", pairingCode: "000000" }),
         headers: { "content-type": "application/json", "x-forwarded-for": `${index}.1.1.1, 8.8.8.8` } });
       assert.equal(response.status, 401);
     }
-    const blocked = await fetch(`${running.origin}/api/device/login`, { ...jsonRequest("POST", { deviceId: "BLOFY-Z9", pairingCode: "000000" }),
+    const blocked = await fetch(`${running.origin}/api/device/login`, { ...jsonRequest("POST", { deviceId: "BLOFY-Z9A2-B3C4", pairingCode: "000000" }),
       headers: { "content-type": "application/json", "x-forwarded-for": "99.1.1.1, 8.8.8.8" } });
     assert.equal(blocked.status, 429);
   } finally { await stopServer(running); await rm(directory, { recursive: true, force: true }); }
@@ -208,9 +258,9 @@ test("portal cookie has server-enforced expiry", async () => {
   const running = await startServer(directory, { PORTAL_SESSION_MAX_AGE_SECONDS: "1" });
   try {
     await fetch(`${running.origin}/api/device/register`, jsonRequest("POST", {
-      deviceId: PRIVATE_ID, deviceKey: DEVICE_KEY, displayId: "BLOFY-T7", pairingCode: "777888",
+      deviceId: PRIVATE_ID, deviceKey: DEVICE_KEY, displayId: "BLOFY-T7A2-B3C4", pairingCode: "777888",
     }));
-    const login = await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", { deviceId: "BLOFY-T7", pairingCode: "777888" }));
+    const login = await fetch(`${running.origin}/api/device/login`, jsonRequest("POST", { deviceId: "BLOFY-T7A2-B3C4", pairingCode: "777888" }));
     const cookie = login.headers.get("set-cookie").split(";")[0];
     await new Promise((resolve) => setTimeout(resolve, 1100));
     assert.equal((await fetch(`${running.origin}/api/device/playlists`, { headers: { cookie } })).status, 401);

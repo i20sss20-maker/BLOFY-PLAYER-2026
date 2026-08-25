@@ -29,7 +29,7 @@ import {
   verifyResource,
 } from "./lib/security.mjs";
 
-const APP_VERSION = "2026.08.25.15-v323";
+const APP_VERSION = "2026.08.25.16-v324";
 const NATIVE_PLAYBACK_MODE = "direct-provider";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "public");
@@ -117,8 +117,8 @@ function adminAuthorized(req) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function limited(req, limit = 120, windowMs = 60_000, namespace = "api") {
-  const key = `${namespace}:${clientKey(req)}`;
+function limitedSubject(subject, limit = 120, windowMs = 60_000, namespace = "api") {
+  const key = `${namespace}:${subject}`;
   const now = Date.now();
   const bucket = rateBuckets.get(key);
   if (!bucket || bucket.resetAt < now) {
@@ -127,6 +127,10 @@ function limited(req, limit = 120, windowMs = 60_000, namespace = "api") {
   }
   bucket.count += 1;
   return bucket.count > limit;
+}
+
+function limited(req, limit = 120, windowMs = 60_000, namespace = "api") {
+  return limitedSubject(clientKey(req), limit, windowMs, namespace);
 }
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -413,7 +417,7 @@ async function handleApi(req, res, url) {
       nativePlayback: NATIVE_PLAYBACK_MODE,
       mediaProxy: false,
       transcoding: false,
-      portal: "v323-multi-playlist",
+      portal: "v324-device-pairing",
       pairing: "one-time-token-or-six-digits",
       storage: production ? "persistent-required" : "local-development",
       time: new Date().toISOString(),
@@ -459,10 +463,15 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/device/register") {
-    if (limited(req, 10, 15 * 60_000, "device-register")) {
+    const body = await readJson(req, 4096);
+    const registrationId = String(body.deviceId || body.device_id || "").trim().toUpperCase();
+    // A household or reseller network can legitimately register many TVs behind
+    // one public IP. Bound re-registration by the private device identity; the
+    // general API limiter above still caps abusive traffic from an IP.
+    const registrationSubject = crypto.createHash("sha256").update(registrationId).digest("hex");
+    if (limitedSubject(registrationSubject, 30, 15 * 60_000, "device-register")) {
       return json(res, 429, { error: "محاولات تسجيل كثيرة. حاول بعد 15 دقيقة." }, securityHeaders());
     }
-    const body = await readJson(req, 4096);
     const registered = await deviceProfiles.register(body.deviceId || body.device_id, body.deviceKey || body.device_key, {
       displayId: body.displayId || body.display_id,
       pairingCode: body.pairingCode || body.pairing_code,

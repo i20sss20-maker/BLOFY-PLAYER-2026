@@ -1,5 +1,9 @@
 "use strict";
 
+const DISPLAY_ID_PATTERN = /^BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+const LEGACY_DISPLAY_ID_PATTERN = /^BLOFY-[A-Z0-9]{2}$/;
+const PAIRING_CODE_PATTERN = /^\d{6}$/;
+
 const $ = (id) => document.getElementById(id);
 const loginView = $("loginView");
 const dashboardView = $("dashboardView");
@@ -14,6 +18,28 @@ const sessionActions = $("sessionActions");
 let state = { displayId: "", revision: 0, defaultPlaylistId: "", playlists: [], license: null };
 let formKind = "xtream";
 let toastTimer;
+
+function normalizeDisplayId(value) {
+  const typed = String(value || "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "");
+  const compact = typed.replace(/-/g, "");
+  if (!compact.startsWith("BLOFY")) return typed.slice(0, 15);
+  const suffix = compact.slice(5, 13);
+  if (!suffix) return "BLOFY";
+  if (suffix.length <= 4) return `BLOFY-${suffix}`;
+  return `BLOFY-${suffix.slice(0, 4)}-${suffix.slice(4, 8)}`;
+}
+
+function isValidDisplayId(value) {
+  return DISPLAY_ID_PATTERN.test(value) || LEGACY_DISPLAY_ID_PATTERN.test(value);
+}
+
+$("deviceId").addEventListener("input", (event) => {
+  event.target.value = normalizeDisplayId(event.target.value);
+});
+
+$("pairingCode").addEventListener("input", (event) => {
+  event.target.value = String(event.target.value || "").replace(/\D/g, "").slice(0, 6);
+});
 
 function toast(message) {
   const node = $("toast");
@@ -106,11 +132,11 @@ async function loadDashboard() {
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = loginForm.querySelector("button[type=submit]");
-  const deviceId = String($("deviceId").value || "").trim().toUpperCase();
+  const deviceId = normalizeDisplayId($("deviceId").value);
   const pairingCode = String($("pairingCode").value || "").replace(/\D/g, "");
   loginMessage.textContent = "";
-  if (!/^BLOFY-[A-Z0-9]{2}$/.test(deviceId) || !/^\d{6}$/.test(pairingCode)) {
-    loginMessage.textContent = "أدخل رقمًا مثل BLOFY-A7 ورمز الربط المكوّن من 6 أرقام.";
+  if (!isValidDisplayId(deviceId) || !PAIRING_CODE_PATTERN.test(pairingCode)) {
+    loginMessage.textContent = "أدخل رقمًا مثل BLOFY-66HL-GB09 ورمز الربط المكوّن من 6 أرقام.";
     return;
   }
   button.disabled = true;
@@ -247,8 +273,8 @@ async function playlistAction(item, action, button) {
 }
 
 const query = new URLSearchParams(location.search);
-const queryDevice = String(query.get("device_id") || "").toUpperCase();
-if (/^BLOFY-[A-Z0-9]{2}$/.test(queryDevice)) $("deviceId").value = queryDevice;
+const queryDevice = normalizeDisplayId(query.get("device_id"));
+if (isValidDisplayId(queryDevice)) $("deviceId").value = queryDevice;
 async function bootPortal() {
   const pairToken = query.get("pair_token") || "";
   if (pairToken) {

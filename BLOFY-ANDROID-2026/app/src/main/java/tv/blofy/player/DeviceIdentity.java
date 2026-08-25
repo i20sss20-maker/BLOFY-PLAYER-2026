@@ -16,6 +16,7 @@ final class DeviceIdentity {
     private static final String KEY_PAIR_TOKEN = "pair_token";
     private static final String KEY_DISPLAY_ID = "display_id";
     private static final String KEY_PAIRING_CODE = "pairing_code";
+    private static final String KEY_PUBLIC_REGISTERED = "public_identity_registered";
 
     private DeviceIdentity() {}
 
@@ -36,33 +37,60 @@ final class DeviceIdentity {
 
     /** Short, TV-friendly identifier. The long id remains the private API identity. */
     static String displayId(Context context) {
-        String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (!hasRegisteredPublicIdentity(context)) return "";
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_DISPLAY_ID, "");
-        if (saved != null && saved.matches("BLOFY-[A-Z0-9]{2}")) return saved;
-        return "BLOFY-" + stableCode(context, "display", 2);
+    }
+
+    /** Candidate sent during registration; it is never shown until the server confirms it. */
+    static String proposedDisplayId(Context context) {
+        String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_DISPLAY_ID, "");
+        if (saved != null && saved.matches("BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}")) return saved;
+        String code = stableCode(context, "display", 8);
+        return "BLOFY-" + code.substring(0, 4) + "-" + code.substring(4, 8);
     }
 
     /** Six-digit pairing code. The server-issued value wins after registration. */
     static String activationCode(Context context) {
-        String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (!hasRegisteredPublicIdentity(context)) return "";
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_PAIRING_CODE, "");
+    }
+
+    /** Candidate sent during registration; it is never shown until the server confirms it. */
+    static String proposedActivationCode(Context context) {
+        String saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PAIRING_CODE, "");
         if (saved != null && saved.matches("[0-9]{6}")) return saved;
         return stableDigits(context, "activation", 6);
     }
 
-    static void updatePublicIdentity(Context context, JSONObject response) {
-        if (response == null) return;
+    /** Atomically accepts only a complete server registration response. */
+    static boolean updatePublicIdentity(Context context, JSONObject response) {
+        if (response == null) return false;
         String displayId = response.optString("displayId", "").trim().toUpperCase(Locale.US);
         String pairingCode = response.optString("pairingCode", "").trim();
+        if (!displayId.matches("BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}")
+                || !pairingCode.matches("[0-9]{6}")) return false;
         android.content.SharedPreferences.Editor edit = context.getSharedPreferences(PREFS,
                 Context.MODE_PRIVATE).edit();
-        if (displayId.matches("BLOFY-[A-Z0-9]{2}")) edit.putString(KEY_DISPLAY_ID, displayId);
-        if (pairingCode.matches("[0-9]{6}")) edit.putString(KEY_PAIRING_CODE, pairingCode);
+        edit.putString(KEY_DISPLAY_ID, displayId);
+        edit.putString(KEY_PAIRING_CODE, pairingCode);
+        edit.putBoolean(KEY_PUBLIC_REGISTERED, true);
         edit.apply();
+        return true;
+    }
+
+    static boolean hasRegisteredPublicIdentity(Context context) {
+        android.content.SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (!preferences.getBoolean(KEY_PUBLIC_REGISTERED, false)) return false;
+        String displayId = preferences.getString(KEY_DISPLAY_ID, "");
+        String pairingCode = preferences.getString(KEY_PAIRING_CODE, "");
+        return displayId != null && displayId.matches("BLOFY-[A-Z0-9]{4}-[A-Z0-9]{4}")
+                && pairingCode != null && pairingCode.matches("[0-9]{6}");
     }
 
     private static String stableCode(Context context, String purpose, int length) {
-        final char[] alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
+        final char[] alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".toCharArray();
         try {
             String androidId = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -74,7 +102,7 @@ final class DeviceIdentity {
             }
             return value.toString();
         } catch (Exception ignored) {
-            return length == 2 ? "TV" : "BLOFY6";
+            return length == 8 ? "00000000" : "BLOFY000";
         }
     }
 

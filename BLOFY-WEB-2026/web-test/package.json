@@ -1,6 +1,6 @@
 {
   "name": "blofy-player-api",
-  "version": "2026.8.25-15",
+  "version": "2026.8.25-16",
   "private": true,
   "type": "module",
   "engines": {

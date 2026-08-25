@@ -26,14 +26,14 @@
         <div class="intro-copy">
           <span class="eyebrow">إدارة الجهاز بأمان</span>
           <h1>كل قوائمك<br /><em>في مكان واحد.</em></h1>
-          <p>سجّل برقم الجهاز المختصر ورمز الربط الظاهر في BLOFY PLAYER، ثم أضف قوائمك وعدّلها في أي وقت.</p>
+          <p>سجّل برقم الجهاز ورمز الربط الظاهرين في BLOFY PLAYER، ثم أضف قوائمك وعدّلها في أي وقت.</p>
           <div class="feature-row"><span>✓ حفظ مشفّر</span><span>✓ مزامنة تلقائية</span><span>✓ أكثر من قائمة</span></div>
         </div>
         <form id="loginForm" class="glass-card login-card" novalidate>
           <div class="card-icon portal-logo"><img src="/assets/blofy-logo-192.png" alt="" width="54" height="54" /></div>
           <h2>تسجيل دخول الجهاز</h2>
           <p class="muted">تجد الرقم والرمز في شاشة قوائم التشغيل داخل التطبيق.</p>
-          <label class="field"><span>رقم الجهاز</span><input id="deviceId" name="deviceId" dir="ltr" maxlength="8" autocomplete="off" placeholder="BLOFY-A7" required /></label>
+          <label class="field"><span>رقم الجهاز</span><input id="deviceId" name="deviceId" dir="ltr" maxlength="15" pattern="BLOFY-([A-Za-z0-9]{2}|[A-Za-z0-9]{4}-[A-Za-z0-9]{4})" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="BLOFY-66HL-GB09" aria-describedby="deviceIdHint" required /><small id="deviceIdHint" class="muted" dir="ltr">BLOFY-XXXX-XXXX</small></label>
           <label class="field"><span>رمز الربط</span><input id="pairingCode" name="pairingCode" dir="ltr" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required /></label>
           <button class="primary-button" type="submit"><span>دخول وإدارة القوائم</span><b>←</b></button>
           <p id="loginMessage" class="form-message" role="status"></p>
@@ -47,7 +47,7 @@
           <button id="addPlaylistButton" class="primary-button compact" type="button">＋ إضافة قائمة تشغيل</button>
         </div>
         <div class="device-overview glass-card">
-          <div><span class="status-dot"></span><small>الجهاز متصل</small><strong id="overviewDevice" dir="ltr">BLOFY--</strong></div>
+          <div><span class="status-dot"></span><small>الجهاز متصل</small><strong id="overviewDevice" dir="ltr">BLOFY-••••-••••</strong></div>
           <div><small>حالة التفعيل</small><strong id="licenseStatus">—</strong></div>
           <div><small>عدد القوائم</small><strong id="playlistCount">0</strong></div>
           <button id="refreshButton" class="icon-button" type="button" title="تحديث">↻</button>
