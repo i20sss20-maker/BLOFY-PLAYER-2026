@@ -71,7 +71,7 @@ seven = seven_file.read_text(encoding="utf-8")
 anchor = '''        page.addView(header, new LinearLayout.LayoutParams(\n                ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));\n\n        LinearLayout launchers = new LinearLayout(this);\n'''
 if anchor in seven and "v329-home-hero" not in seven:
     seven = seven.replace(anchor,
-        '''        page.addView(header, new LinearLayout.LayoutParams(\n                ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));\n\n        // v329-home-hero: Netflix/OSN-style cinematic feature area; all routes stay unchanged.\n        View hero = addHero(page);\n        LinearLayout.LayoutParams heroHomeParams = new LinearLayout.LayoutParams(\n                ViewGroup.LayoutParams.MATCH_PARENT, dp(232));\n        heroHomeParams.setMargins(0, dp(4), 0, dp(12));\n        page.addView(hero, heroHomeParams);\n\n        LinearLayout launchers = new LinearLayout(this);\n''')
+        '''        page.addView(header, new LinearLayout.LayoutParams(\n                ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));\n\n        // v329-home-hero: Netflix/OSN-style cinematic feature area; all routes stay unchanged.\n        addHero(page);\n\n        LinearLayout launchers = new LinearLayout(this);\n''')
 seven = seven.replace('"BLOFY PLAYER  •  v328"', '"BLOFY PLAYER  •  v329"')
 seven_file.write_text(seven, encoding="utf-8")
 
