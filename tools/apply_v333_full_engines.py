@@ -18,10 +18,8 @@ def replace_once(text, old, new, label):
         raise SystemExit(f"v333 patch mismatch: {label}")
     return text.replace(old, new, 1)
 
-# -----------------------------------------------------------------------------
 # 1) Provider memory: remember successful LIVE container per playlist.
-#    Movies and Series remain separate through the existing kind-scoped keys.
-# -----------------------------------------------------------------------------
+# Movies and Series remain separate through the existing kind-scoped keys.
 profile_path = JAVA / "PlaybackProfileManager.java"
 profile = read(profile_path)
 profile = replace_once(profile,
@@ -37,27 +35,18 @@ profile = replace_once(profile,
 '''            if (key.startsWith(KEY_MODE_PREFIX + playlistId + ":")\n                    || key.startsWith(KEY_FAIL_PREFIX + KEY_MODE_PREFIX + playlistId + ":")\n                    || key.equals(KEY_LIVE_EXT_PREFIX + playlistId)) {\n                editor.remove(key);\n            }\n''', "clear learned live extension")
 write(profile_path, profile)
 
-# -----------------------------------------------------------------------------
 # 2) LIVE engine: preserve explicit user TS/HLS setting, otherwise use learned
-#    provider extension before falling back through v331 transport chain.
-# -----------------------------------------------------------------------------
+# provider extension before falling back through the exact v331 transport chain.
 player_path = JAVA / "PlayerActivity.java"
 player = read(player_path)
 player = replace_once(player,
 '''    private String configuredExtension(String candidate) {\n        if (!isLiveKind(kind)) return candidate;\n        String mode = playerSetting(SettingsActivity.KEY_STREAM, "auto");\n        if ("ts".equals(mode)) return "ts";\n        if ("hls".equals(mode)) return "m3u8";\n        return candidate;\n    }\n''',
 '''    private String configuredExtension(String candidate) {\n        if (!isLiveKind(kind)) return candidate;\n        String mode = playerSetting(SettingsActivity.KEY_STREAM, "auto");\n        if ("ts".equals(mode)) return "ts";\n        if ("hls".equals(mode)) return "m3u8";\n        return PlaybackProfileManager.preferredLiveExtension(this, candidate);\n    }\n''', "learned live extension")
-
-# Make the failure message content-type aware without changing the UI layout.
-player = replace_once(player,
-'''        errorText.setText("تعذر تشغيل القناة بعد المحاولة بالمشغل الأساسي والمتوافق."\n                + "\\n" + detail + "\\nالصيغة: " + extension);\n''',
-'''        String typeLabel = isLive() ? "البث المباشر"\n                : "series".equals(kind) || "episode".equals(kind) ? "الحلقة" : "الفيلم";\n        errorText.setText("تعذر تشغيل " + typeLabel + " بعد مسارات التوافق المحددة."\n                + "\\n" + detail + "\\nالصيغة: " + extension);\n''', "separate engine error text")
 write(player_path, player)
 
-# -----------------------------------------------------------------------------
-# 3) Full preload: keep all three sections complete before home, but tolerate
-#    providers whose global catalog endpoint fails by falling back to categories.
-#    Slightly reduce pacing only; do not flood provider connections.
-# -----------------------------------------------------------------------------
+# 3) Full preload: keep all three sections complete before home. If a provider's
+# global catalog path is incompatible, fall back to its categories. One broken
+# category must not reject the entire provider. Pacing is only slightly faster.
 importer_path = JAVA / "PackageImporter.java"
 imp = read(importer_path)
 imp = imp.replace("private static final long LEGACY_MIN_REQUEST_GAP_MS = 450L;",
@@ -71,13 +60,11 @@ new_first = '''        JSONObject first;\n        try {\n            first = get
 imp = replace_once(imp, old_first, new_first, "global catalog fallback")
 
 old_cat = '''            String base = "/api/catalog?type=" + BlofyApi.encode(type)\n                    + "&category=" + BlofyApi.encode(category.id)\n                    + "&page_size=" + REQUESTED_PAGE_SIZE;\n            JSONObject first = getWithRetry(base + "&page=1", true);\n            int total = Math.max(0, first.optInt("total", 0));\n            int pageSize = Math.max(1, first.optInt("pageSize", 60));\n            int pages = Math.max(1, (int) Math.ceil(total / (double) pageSize));\n            save(BlofyModels.Media.list(first, type));\n            for (int page = 2; page <= pages; page++) {\n                JSONObject response = getWithRetry(base + "&page=" + page, true);\n                save(BlofyModels.Media.list(response, type));\n            }\n'''
-new_cat = '''            String base = "/api/catalog?type=" + BlofyApi.encode(type)\n                    + "&category=" + BlofyApi.encode(category.id)\n                    + "&page_size=" + REQUESTED_PAGE_SIZE;\n            try {\n                JSONObject first = getWithRetry(base + "&page=1", true);\n                int total = Math.max(0, first.optInt("total", 0));\n                int pageSize = Math.max(1, first.optInt("pageSize", 60));\n                int pages = Math.max(1, (int) Math.ceil(total / (double) pageSize));\n                save(BlofyModels.Media.list(first, type));\n                for (int page = 2; page <= pages; page++) {\n                    JSONObject response = getWithRetry(base + "&page=" + page, true);\n                    save(BlofyModels.Media.list(response, type));\n                }\n            } catch (Exception categoryFailure) {\n                // A broken category must not reject the whole provider. Continue\n                // so Live/Movies/Series remain independently usable.\n                emit(progress, "قراءة " + label,\n                        "تم تجاوز تصنيف غير متوافق " + (index + 1) + " من " + categories.size());\n            }\n'''
+new_cat = '''            String base = "/api/catalog?type=" + BlofyApi.encode(type)\n                    + "&category=" + BlofyApi.encode(category.id)\n                    + "&page_size=" + REQUESTED_PAGE_SIZE;\n            try {\n                JSONObject first = getWithRetry(base + "&page=1", true);\n                int total = Math.max(0, first.optInt("total", 0));\n                int pageSize = Math.max(1, first.optInt("pageSize", 60));\n                int pages = Math.max(1, (int) Math.ceil(total / (double) pageSize));\n                save(BlofyModels.Media.list(first, type));\n                for (int page = 2; page <= pages; page++) {\n                    JSONObject response = getWithRetry(base + "&page=" + page, true);\n                    save(BlofyModels.Media.list(response, type));\n                }\n            } catch (Exception categoryFailure) {\n                emit(progress, "قراءة " + label,\n                        "تم تجاوز تصنيف غير متوافق " + (index + 1) + " من " + categories.size());\n            }\n'''
 imp = replace_once(imp, old_cat, new_cat, "category tolerant preload")
 write(importer_path, imp)
 
-# -----------------------------------------------------------------------------
-# 4) Version marker only. UI classes are deliberately untouched.
-# -----------------------------------------------------------------------------
+# 4) Version marker only. No UI class is modified by this patch.
 gradle_path = ROOT / "BLOFY-ANDROID-2026/app/build.gradle.kts"
 gradle = read(gradle_path)
 gradle = gradle.replace("versionCode = 331", "versionCode = 333", 1)
@@ -88,4 +75,4 @@ else:
     gradle = re.sub(r'versionName\s*=\s*"[^"]+"', 'versionName = "v333-golden"', gradle, count=1)
 write(gradle_path, gradle)
 
-print("v333 full engines applied: live/movie/series profiles + resilient full preload; UI untouched")
+print("v333 full engines applied: provider-aware Live + separate Movies/Series profiles + resilient full preload; v331 UI untouched")
