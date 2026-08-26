@@ -1,0 +1,75 @@
+name: BLOFY v333 from golden v331
+
+on:
+  push:
+    branches: [v333-from-golden-v331]
+    paths:
+      - 'tools/apply_v333_safe_provider_compat.py'
+      - '.github/workflows/v333-golden-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
+    steps:
+      - name: Checkout golden branch
+        uses: actions/checkout@v4
+
+      - name: Apply v333 safe compatibility
+        run: python3 tools/apply_v333_safe_provider_compat.py
+
+      - name: Verify UI untouched and compatibility applied
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'alternateLiveAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'containerSniffAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'PlaybackPolicy.alternateLiveExtension' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          git diff --exit-code -- BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/HomeActivity.java BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java || exit 1
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Create wrapper
+        working-directory: BLOFY-ANDROID-2026
+        run: gradle wrapper --gradle-version 8.13
+
+      - name: Unit tests
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon testDebugUnitTest -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Build release
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Sign test APK officially
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk'
+          BUILD_TOOLS="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          keytool -genkeypair -keystore /tmp/v333-test.jks -storepass blofy333test -keypass blofy333test -alias blofy-v333-test -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=BLOFY PLAYER v333 Test, O=BLOFY, C=SA'
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" /tmp/v333-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign --ks /tmp/v333-test.jks --ks-pass pass:blofy333test --key-pass pass:blofy333test --ks-key-alias blofy-v333-test --out BLOFY-PLAYER-v333-GOLDEN-TEST-SIGNED.apk /tmp/v333-aligned.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs BLOFY-PLAYER-v333-GOLDEN-TEST-SIGNED.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOFY-PLAYER-v333-GOLDEN-TEST-SIGNED
+          path: BLOFY-PLAYER-v333-GOLDEN-TEST-SIGNED.apk
+          if-no-files-found: error
