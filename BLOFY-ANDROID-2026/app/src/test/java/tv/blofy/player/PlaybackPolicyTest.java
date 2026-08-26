@@ -33,13 +33,14 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void startupTimeoutsAllowSlowProviderSources() {
-        assertEquals(60_000, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(90_000, PlaybackPolicy.startupTimeoutMs(1));
-        assertEquals(60_000, PlaybackPolicy.vodStartupTimeoutMs(false));
-        assertEquals(90_000, PlaybackPolicy.vodStartupTimeoutMs(true));
-        assertEquals(90_000, PlaybackPolicy.vlcStartupTimeoutMs(false));
-        assertEquals(90_000, PlaybackPolicy.vlcStartupTimeoutMs(true));
+    public void startupTimeoutsFailFastIntoFallback() {
+        assertEquals(4_500, PlaybackPolicy.startupTimeoutMs(0));
+        assertEquals(3_500, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(4_500, PlaybackPolicy.vodStartupTimeoutMs(false));
+        assertEquals(5_500, PlaybackPolicy.vodStartupTimeoutMs(true));
+        assertEquals(5_500, PlaybackPolicy.vlcStartupTimeoutMs(false));
+        assertEquals(6_500, PlaybackPolicy.vlcStartupTimeoutMs(true));
+        assertTrue(PlaybackPolicy.previewStartupTimeoutMs() <= 4_000);
     }
 
     @Test
@@ -68,5 +69,4 @@ public final class PlaybackPolicyTest {
         assertEquals("رسالة الخادم",
                 PlaybackPolicy.resolveErrorMessage(new Exception("رسالة الخادم")));
     }
-
 }
