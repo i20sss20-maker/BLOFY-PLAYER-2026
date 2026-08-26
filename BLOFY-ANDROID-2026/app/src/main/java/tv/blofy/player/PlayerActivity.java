@@ -467,7 +467,7 @@ public final class PlayerActivity extends Activity implements Player.Listener {
         // Avoid an identical queued retry while the Cronet provider is still
         // installing. The compatibility fallback is a different decoder/stack.
         return PlaybackTransportFactory.create(this, false, network,
-                15_000, 30_000, recoveryStep, playbackReferer);
+                3_500, 10_000, recoveryStep, playbackReferer);
     }
 
     private DefaultLoadControl createLoadControl() {
