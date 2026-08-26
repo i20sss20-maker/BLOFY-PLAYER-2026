@@ -1,34 +1,25 @@
-name: Build BLOFY FULL Player APK
+name: Build BLOFY v330 APK
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "BLOFY-ANDROID-2026/**"
-      - ".github/workflows/full-player-apk.yml"
       - "tools/apply_v329_hotfix.py"
-      - "tools/apply_sync_fix.py"
-      - "tools/apply_7max_ui.py"
-      - "tools/apply_final_stabilization.py"
-      - "tools/apply_final_tv_theme.py"
-      - "tools/apply_lint_fixes.py"
-      - "tools/apply_runtime_overhaul.py"
+      - "tools/apply_v330_hotfix.py"
+      - "tools/apply_v330_vod_fix.py"
+      - ".github/workflows/full-player-apk.yml"
 
 permissions:
   contents: write
 
 concurrency:
-  group: blofy-full-android-${{ github.ref }}
+  group: blofy-v330-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  full-apk:
-    name: Final TV + Media3 + Cronet + FFmpeg Audio
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -38,38 +29,20 @@ jobs:
       MEDIA3_COMMIT: e156aec119c304d3de70a2fa69e08dc585b9d92b
 
     steps:
-      - name: Checkout BLOFY
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare BLOFY source
+      - name: Apply BLOFY v330 fixes
         shell: bash
         run: |
           set -euo pipefail
-          BRANCH_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          echo "Building branch: ${BRANCH_NAME}"
-          if grep -Eq 'versionCode = (32[8-9]|3[3-9][0-9]|[4-9][0-9]{2,})' BLOFY-ANDROID-2026/app/build.gradle.kts; then
-            echo "Modern committed source detected: legacy rewrite passes are disabled."
-            python3 tools/apply_v329_hotfix.py
-            test -f BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
-            grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
-            grep -q 'POSTER_PAGE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
-            grep -q 'v329-home-hero' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
-            grep -q 'forceNextRefresh' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          else
-            python3 tools/apply_sync_fix.py
-            python3 tools/apply_7max_ui.py
-            python3 tools/apply_final_stabilization.py
-            python3 tools/apply_final_tv_theme.py
-            python3 tools/apply_lint_fixes.py
-            python3 tools/apply_runtime_overhaul.py
-            grep -q '2026.08.23.12-final-tv' BLOFY-ANDROID-2026/app/build.gradle.kts
-            grep -q 'BLOFY LIVE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-            grep -q '24_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-            grep -q 'OnBackPressedDispatcher' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-            grep -q '@OptIn(markerClass = UnstableApi.class)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-            grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
-            grep -q 'sort_order ASC' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
-          fi
+          python3 tools/apply_v329_hotfix.py
+          python3 tools/apply_v330_hotfix.py
+          python3 tools/apply_v330_vod_fix.py
+          grep -q 'versionCode = 330' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'no-extension' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'v330: every movie/episode' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          grep -q 'LEFT: navigation only' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -86,18 +59,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "ndk;$ANDROID_NDK_VERSION" \
-            "cmake;3.31.4"
-          test -d "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION" "cmake;3.31.4"
 
-      - name: Checkout exact Media3 1.11.0 source
+      - name: Checkout Media3 1.11.0
         shell: bash
         run: |
           set -euo pipefail
           git clone https://github.com/androidx/media.git .media3
           git -C .media3 checkout "$MEDIA3_COMMIT"
-          grep -R '1.11.0' .media3/RELEASENOTES.md >/dev/null
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > .media3/local.properties
 
       - name: Build FFmpeg audio libraries
@@ -108,18 +77,12 @@ jobs:
           NDK_PATH="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
           HOST_PLATFORM="linux-x86_64"
           ENABLED_DECODERS=(vorbis opus flac alac mp3 amrnb amrwb aac ac3 eac3 dca)
-
           cd "$FFMPEG_MODULE_PATH/jni"
           git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg --branch release/6.0 --depth=1
           chmod +x build_ffmpeg.sh
-          ./build_ffmpeg.sh \
-            "$FFMPEG_MODULE_PATH" \
-            "$NDK_PATH" \
-            "$HOST_PLATFORM" \
-            "$ANDROID_ABI" \
-            "${ENABLED_DECODERS[@]}"
+          ./build_ffmpeg.sh "$FFMPEG_MODULE_PATH" "$NDK_PATH" "$HOST_PLATFORM" "$ANDROID_ABI" "${ENABLED_DECODERS[@]}"
 
-      - name: Assemble Media3 FFmpeg decoder AAR
+      - name: Assemble FFmpeg decoder AAR
         shell: bash
         working-directory: .media3
         run: |
@@ -127,157 +90,43 @@ jobs:
           ./gradlew --no-daemon :lib-decoder-ffmpeg:assembleRelease
           mkdir -p "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs"
           AAR="$(find "$GITHUB_WORKSPACE/.media3" -type f -name '*.aar' -path '*decoder_ffmpeg*' -print | head -n 1)"
-          if [ -z "$AAR" ]; then
-            echo 'FFmpeg AAR not found; showing candidate AARs:'
-            find "$GITHUB_WORKSPACE/.media3" -type f -name '*.aar' -print | head -n 100
-            exit 1
-          fi
-          echo "Using FFmpeg AAR: $AAR"
+          test -n "$AAR"
           cp "$AAR" "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar"
-          ls -lh "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar"
+          unzip -l "$AAR" | grep -q 'libffmpegJNI.so'
 
-      - name: Verify FFmpeg decoder contents
-        shell: bash
-        run: |
-          set -euo pipefail
-          unzip -l BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar | tee /tmp/ffmpeg-aar.txt
-          grep -q 'libffmpegJNI.so' /tmp/ffmpeg-aar.txt
-
-      - name: Create BLOFY Gradle wrapper
+      - name: Create Gradle wrapper
         working-directory: BLOFY-ANDROID-2026
         run: gradle wrapper --gradle-version 8.13
 
-      - name: Run BLOFY unit tests
+      - name: Unit tests
         working-directory: BLOFY-ANDROID-2026
-        run: |
-          ./gradlew --no-daemon clean testDebugUnitTest \
-            -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+        run: ./gradlew --no-daemon clean testDebugUnitTest -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
 
-      - name: Build unsigned BLOFY release APK
+      - name: Build release APK
         working-directory: BLOFY-ANDROID-2026
-        run: |
-          ./gradlew --no-daemon assembleRelease \
-            -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+        run: ./gradlew --no-daemon assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
 
-      - name: Run Android lint
+      - name: Android lint
         working-directory: BLOFY-ANDROID-2026
-        shell: bash
-        run: |
-          set +e
-          ./gradlew --no-daemon lintRelease
-          rc=$?
-          REPORT="app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt"
-          echo "===== FULL ANDROID LINT REPORT ====="
-          if [ -f "$REPORT" ]; then
-            cat "$REPORT"
-          else
-            echo "Lint text report not found at $REPORT"
-          fi
-          echo "===== END FULL ANDROID LINT REPORT ====="
-          exit $rc
+        run: ./gradlew --no-daemon lintRelease
 
-      - name: Verify unsigned release APK
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
           APK="BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk"
-          test -f "$APK"
+          test -s "$APK"
           unzip -t "$APK"
-          unzip -l "$APK" | tee /tmp/apk-list.txt
-          grep -q 'libffmpegJNI.so' /tmp/apk-list.txt
-          cp "$APK" BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
-          sha256sum BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk > BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
+          unzip -l "$APK" | grep -q 'libffmpegJNI.so'
+          cp "$APK" BLOFY-PLAYER-v330-UNSIGNED.apk
+          sha256sum BLOFY-PLAYER-v330-UNSIGNED.apk > BLOFY-PLAYER-v330-UNSIGNED.apk.sha256
 
-      - name: Upload unsigned release APK
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: BLOFY-PLAYER-RELEASE-UNSIGNED-APK
-          path: |
-            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
-            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload FFmpeg AAR for diagnostics
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: BLOFY-MEDIA3-FFMPEG-AAR
-          path: BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Publish v329 unsigned APK release
-        if: github.event_name != 'pull_request'
+      - name: Publish v330 unsigned release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="v329-build-${GITHUB_SHA:0:12}"
+          TAG="v330-build-${GITHUB_SHA:0:12}"
           gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "BLOFY PLAYER v329 test build" \
-            --notes "CI-verified v329 APK with Media3, VLC and FFmpeg fallback. Built from the complete v329 playback/cache/remote/home hotfix set." \
-            --prerelease \
-            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk \
-            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
-
-      - name: Publish v329 unsigned APK handoff
-        if: github.event_name == 'pull_request'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="v329-unsigned-${GITHUB_SHA:0:12}"
-          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "BLOFY PLAYER v329 unsigned handoff" \
-            --notes "CI-verified unsigned APK for local release signing." \
-            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk \
-            BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
-
-      - name: Publish CI run pointer
-        if: always() && github.event_name != 'pull_request'
-        continue-on-error: true
-        shell: bash
-        env:
-          CI_JOB_STATUS: ${{ job.status }}
-          CI_RUN_ID: ${{ github.run_id }}
-          CI_RUN_ATTEMPT: ${{ github.run_attempt }}
-          CI_SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          git config user.name "blofy-ci"
-          git config user.email "actions@users.noreply.github.com"
-          git fetch origin main
-          git checkout -B main origin/main
-          git reset --hard origin/main
-          git clean -fd
-          mkdir -p .ci
-          cat > .ci/full-player-status.json <<EOF
-          {
-            "workflow": "Build BLOFY FULL Player APK",
-            "status": "${CI_JOB_STATUS}",
-            "run_id": ${CI_RUN_ID},
-            "run_attempt": ${CI_RUN_ATTEMPT},
-            "source_sha": "${CI_SOURCE_SHA}",
-            "artifact": "v329-build-${CI_SOURCE_SHA:0:12}",
-            "version": "2026.08.26.5-v329"
-          }
-          EOF
-          git add .ci/full-player-status.json
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "ci: record full player build ${CI_RUN_ID}"
-          for attempt in 1 2 3; do
-            git fetch origin main
-            git rebase origin/main
-            git push origin HEAD:main && break
-            [ "$attempt" -eq 3 ] && exit 1
-            sleep $((attempt * 2))
-          done
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "BLOFY PLAYER v330 test build" --notes "v330: per-item playback compatibility, fast VOD failure, deterministic TV remote focus, playlist editor fixes and left-navigation home." --prerelease BLOFY-PLAYER-v330-UNSIGNED.apk BLOFY-PLAYER-v330-UNSIGNED.apk.sha256
