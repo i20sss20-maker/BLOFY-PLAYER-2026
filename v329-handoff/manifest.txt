@@ -1,0 +1,5 @@
+apk_sha256=b6e8a935a5958c0b0288c10ed83c9fbdd99ef256a560f84bc3ec56dfccad89d4
+apk_size=105787220
+zip_sha256=a5f3e1e1be08b90fbb6acd7456b4406a8a8af3958b6638631abef4a21057aa0b
+zip_size=52494189
+chunk_count=35
