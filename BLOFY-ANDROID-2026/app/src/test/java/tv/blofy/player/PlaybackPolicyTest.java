@@ -33,13 +33,14 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
-    public void startupTimeoutsAllowSlowProviderSources() {
-        assertEquals(60_000, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(90_000, PlaybackPolicy.startupTimeoutMs(1));
-        assertEquals(60_000, PlaybackPolicy.vodStartupTimeoutMs(false));
-        assertEquals(90_000, PlaybackPolicy.vodStartupTimeoutMs(true));
-        assertEquals(90_000, PlaybackPolicy.vlcStartupTimeoutMs(false));
-        assertEquals(90_000, PlaybackPolicy.vlcStartupTimeoutMs(true));
+    public void startupTimeoutsAreBoundedForFastFallback() {
+        assertEquals(7_000, PlaybackPolicy.startupTimeoutMs(0));
+        assertEquals(5_000, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(8_000, PlaybackPolicy.vodStartupTimeoutMs(false));
+        assertEquals(11_000, PlaybackPolicy.vodStartupTimeoutMs(true));
+        assertEquals(7_000, PlaybackPolicy.vlcStartupTimeoutMs(false));
+        assertEquals(10_000, PlaybackPolicy.vlcStartupTimeoutMs(true));
+        assertEquals(5_000, PlaybackPolicy.PREVIEW_STARTUP_TIMEOUT_MS);
     }
 
     @Test
