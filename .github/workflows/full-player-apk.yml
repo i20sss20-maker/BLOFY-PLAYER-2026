@@ -17,6 +17,7 @@ on:
       - "tools/apply_final_tv_theme.py"
       - "tools/apply_lint_fixes.py"
       - "tools/apply_runtime_overhaul.py"
+      - "tools/apply_v329_user_fixes.py"
 
 permissions:
   contents: write
@@ -66,6 +67,7 @@ jobs:
             grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
             grep -q 'sort_order ASC' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
           fi
+          python3 tools/apply_v329_user_fixes.py
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -137,7 +139,8 @@ jobs:
         run: |
           set -euo pipefail
           unzip -l BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar | tee /tmp/ffmpeg-aar.txt
-          grep -q 'libffmpegJNI.so' /tmp/ffmpeg-aar.txt
+          grep -q 'libffmpegJNI.so' /tmp/apk-list.txt 2>/dev/null || true
+          grep -q 'libffmpegJNI.so' <(unzip -l BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar)
 
       - name: Create BLOFY Gradle wrapper
         working-directory: BLOFY-ANDROID-2026
@@ -205,18 +208,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Publish v328 unsigned APK handoff
+      - name: Publish v329 unsigned APK handoff
         if: github.event_name == 'pull_request'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="v328-unsigned-${GITHUB_SHA:0:12}"
+          TAG="v329-unsigned-${GITHUB_SHA:0:12}"
           gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
-            --title "BLOFY PLAYER v328 unsigned handoff" \
+            --title "BLOFY PLAYER v329 unsigned handoff" \
             --notes "CI-verified unsigned APK for local release signing." \
             BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk \
             BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk.sha256
@@ -244,7 +247,7 @@ jobs:
             "run_attempt": ${CI_RUN_ATTEMPT},
             "source_sha": "${CI_SOURCE_SHA}",
             "artifact": "BLOFY-PLAYER-RELEASE-UNSIGNED-APK",
-            "version": "2026.08.25.9-playlist-hub"
+            "version": "2026.08.26-v329"
           }
           EOF
           git add .ci/full-player-status.json

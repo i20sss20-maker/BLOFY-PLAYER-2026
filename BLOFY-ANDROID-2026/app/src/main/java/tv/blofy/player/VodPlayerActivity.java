@@ -482,8 +482,8 @@ public final class VodPlayerActivity extends Activity implements Player.Listener
 
         DataSource.Factory source = PlaybackTransportFactory.create(
                 this, false, network,
-                ultraHd() ? 20_000 : 15_000,
-                ultraHd() ? 45_000 : 30_000,
+                ultraHd() ? 5_000 : 3_500,
+                ultraHd() ? 18_000 : 14_000,
                 attempt, playbackReferer);
         DefaultExtractorsFactory extractors = new DefaultExtractorsFactory();
         DefaultMediaSourceFactory mediaSources = new DefaultMediaSourceFactory(source, extractors);
