@@ -12,6 +12,7 @@ on:
       - "tools/apply_v332_adaptive.py"
       - "tools/apply_v332_controller_bridge.py"
       - "tools/apply_v332_ui.py"
+      - "tools/apply_v332_no_freeze.py"
       - ".github/workflows/v332-player-apk.yml"
 
 permissions:
@@ -49,10 +50,12 @@ jobs:
           python3 tools/apply_v332_adaptive.py
           python3 tools/apply_v332_controller_bridge.py
           python3 tools/apply_v332_ui.py
+          python3 tools/apply_v332_no_freeze.py
           grep -q 'versionCode = 332' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'AdaptivePlaybackController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'runCapabilityProbeAsync' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'PlaybackDiagnostics.record' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'جاري المحاولة' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'تشخيص التشغيل المتقدم' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java
           grep -q 'PlaybackDiagnosticsActivity' BLOFY-ANDROID-2026/app/src/main/AndroidManifest.xml
           grep -q 'أحدث الأفلام' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
@@ -130,4 +133,4 @@ jobs:
           set -euo pipefail
           TAG="v332-build-${GITHUB_SHA:0:12}"
           gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "BLOFY PLAYER v332 adaptive per-type test" --notes "v331 stable playback preserved, with per-type adaptive decisions, non-blocking deep probe, Cronet/compat/VLC fallback, diagnostics, left-navigation cinematic home, and TV remote-safe settings." --prerelease BLOFY-PLAYER-v332-UNSIGNED.apk BLOFY-PLAYER-v332-UNSIGNED.apk.sha256
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "BLOFY PLAYER v332 adaptive per-type test" --notes "v331 stable playback preserved, with per-type adaptive decisions, non-blocking deep probe, Cronet/compat/VLC fallback, diagnostics, left-navigation cinematic home, remote-safe failure handling, and TV settings." --prerelease BLOFY-PLAYER-v332-UNSIGNED.apk BLOFY-PLAYER-v332-UNSIGNED.apk.sha256
