@@ -5,10 +5,12 @@ on:
   push:
     branches: [v332-adaptive-playback-ui]
     paths:
+      - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/AdaptivePlaybackController.java"
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackCapabilityProbe.java"
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackDiagnostics.java"
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackDiagnosticsActivity.java"
       - "tools/apply_v332_adaptive.py"
+      - "tools/apply_v332_controller_bridge.py"
       - ".github/workflows/v332-player-apk.yml"
 
 permissions:
@@ -44,8 +46,10 @@ jobs:
           python3 tools/apply_v331_transport_manager.py
           python3 tools/apply_v331_compile_fix.py
           python3 tools/apply_v332_adaptive.py
+          python3 tools/apply_v332_controller_bridge.py
           grep -q 'versionCode = 332' BLOFY-ANDROID-2026/app/build.gradle.kts
-          grep -q 'PlaybackCapabilityProbe' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackCapabilityProbe.java
+          grep -q 'AdaptivePlaybackController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'runCapabilityProbeAsync' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'PlaybackDiagnostics.record' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'تشخيص التشغيل المتقدم' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java
           grep -q 'PlaybackDiagnosticsActivity' BLOFY-ANDROID-2026/app/src/main/AndroidManifest.xml
@@ -123,4 +127,4 @@ jobs:
           set -euo pipefail
           TAG="v332-build-${GITHUB_SHA:0:12}"
           gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "BLOFY PLAYER v332 adaptive per-type test" --notes "v331 stable playback preserved, with per-type learned profiles, Cronet/compat/VLC fallback, playback diagnostics, TV remote-safe diagnostics screen, and version 332 test instrumentation." --prerelease BLOFY-PLAYER-v332-UNSIGNED.apk BLOFY-PLAYER-v332-UNSIGNED.apk.sha256
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "BLOFY PLAYER v332 adaptive per-type test" --notes "v331 stable playback preserved, with per-type adaptive decisions, non-blocking deep probe, Cronet/compat/VLC fallback, diagnostics, and TV remote-safe settings." --prerelease BLOFY-PLAYER-v332-UNSIGNED.apk BLOFY-PLAYER-v332-UNSIGNED.apk.sha256
