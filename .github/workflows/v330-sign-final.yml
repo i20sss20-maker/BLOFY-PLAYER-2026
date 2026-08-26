@@ -1,0 +1,97 @@
+name: Sign BLOFY v330 FINAL
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v330-sign-final.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate one-time transport key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/blofy-v330-sign .ci
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/blofy-v330-sign/private.pem
+          openssl pkey -in /tmp/blofy-v330-sign/private.pem -pubout -out .ci/v330-sign-public.pem
+          git config user.name "blofy-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add .ci/v330-sign-public.pem
+          git commit -m "ci: publish one-time v330 signing public key"
+          git push origin HEAD:main
+
+      - name: Wait for encrypted signing payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 120); do
+            git fetch origin main >/dev/null 2>&1 || true
+            git checkout origin/main -- .ci/v330-sign-payload.b64 .ci/v330-sign-key.b64 2>/dev/null || true
+            if [ -s .ci/v330-sign-payload.b64 ] && [ -s .ci/v330-sign-key.b64 ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for encrypted payload" >&2
+          exit 1
+
+      - name: Decrypt signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .ci/v330-sign-key.b64 > /tmp/blofy-v330-sign/key.enc
+          openssl pkeyutl -decrypt -inkey /tmp/blofy-v330-sign/private.pem -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in /tmp/blofy-v330-sign/key.enc -out /tmp/blofy-v330-sign/aes.key
+          base64 -d .ci/v330-sign-payload.b64 > /tmp/blofy-v330-sign/payload.enc
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass file:/tmp/blofy-v330-sign/aes.key -in /tmp/blofy-v330-sign/payload.enc -out /tmp/blofy-v330-sign/payload.tar
+          tar -xf /tmp/blofy-v330-sign/payload.tar -C /tmp/blofy-v330-sign
+          test -s /tmp/blofy-v330-sign/BLOFY-PLAYER-RELEASE-SIGNING-KEY.p12
+          test -s /tmp/blofy-v330-sign/BLOFY-RELEASE-KEY-PASSWORD.secret
+
+      - name: Download unsigned v330
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download v330-build-beb640c9e166 --pattern 'BLOFY-PLAYER-v330-UNSIGNED.apk' --dir /tmp/blofy-v330-sign
+          test -s /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-UNSIGNED.apk
+
+      - name: Zipalign sign and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          PASS="$(cat /tmp/blofy-v330-sign/BLOFY-RELEASE-KEY-PASSWORD.secret)"
+          "$BUILD_TOOLS/zipalign" -f -p 4 /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-UNSIGNED.apk /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign --ks /tmp/blofy-v330-sign/BLOFY-PLAYER-RELEASE-SIGNING-KEY.p12 --ks-type PKCS12 --ks-key-alias blofy-release --ks-pass "pass:${PASS}" --key-pass "pass:${PASS}" --out /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-FINAL.apk /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-aligned.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-FINAL.apk
+          "$BUILD_TOOLS/zipalign" -c -v 4 /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-FINAL.apk
+          sha256sum /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-FINAL.apk > /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-FINAL.apk.sha256
+
+      - name: Publish v330 FINAL signed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete v330-final-signed --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create v330-final-signed --target beb640c9e16625a2d761e00b758c29023b3b4025 --title 'BLOFY PLAYER v330 FINAL signed' --notes 'Stable-key signed v330 test build.' /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-FINAL.apk /tmp/blofy-v330-sign/BLOFY-PLAYER-v330-FINAL.apk.sha256
+
+      - name: Cleanup transport files
+        if: always()
+        shell: bash
+        run: |
+          rm -rf /tmp/blofy-v330-sign
