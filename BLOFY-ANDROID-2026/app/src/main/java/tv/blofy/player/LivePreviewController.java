@@ -37,8 +37,8 @@ final class LivePreviewController implements Player.Listener {
         void error();
     }
 
-    private static final LruCache<String, Resolved> URL_CACHE = new LruCache<>(48);
-    private static final LruCache<String, Resolved> URL_CACHE_BY_URL = new LruCache<>(48);
+    private static final LruCache<String, Resolved> URL_CACHE = new LruCache<>(64);
+    private static final LruCache<String, Resolved> URL_CACHE_BY_URL = new LruCache<>(64);
     private final Context context;
     private final PlayerView view;
     private final BlofyApi api;
@@ -112,8 +112,10 @@ final class LivePreviewController implements Player.Listener {
         if (listener != null) listener.loading();
         if (pending != null) main.removeCallbacks(pending);
         cancelResolve();
+        // Start as soon as focus lands on a channel. Generation cancellation
+        // prevents rapid remote navigation from opening an old channel later.
         pending = () -> startPreview(item, token);
-        main.postDelayed(pending, 110L);
+        main.post(pending);
     }
 
     private void startPreview(BlofyModels.Media item, int token) {
@@ -149,7 +151,6 @@ final class LivePreviewController implements Player.Listener {
                 main.post(() -> {
                     if (token == generation.get() && listener != null) listener.error();
                 });
-                // Preview is optional; never block channel navigation because of it.
             }
         });
     }
@@ -169,9 +170,9 @@ final class LivePreviewController implements Player.Listener {
         }
         playerReferer = normalized;
         DataSource.Factory data = PlaybackTransportFactory.create(context, false, network,
-                3_000, 7_000, 0, normalized);
+                2_000, 4_500, 0, normalized);
         DefaultLoadControl load = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(800, 6_000, 250, 450)
+                .setBufferDurationsMs(450, 3_500, 120, 250)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
         DefaultRenderersFactory renderers = new DefaultRenderersFactory(context)
@@ -273,7 +274,7 @@ final class LivePreviewController implements Player.Listener {
             this.referer = referer == null ? "" : referer;
         }
         boolean expired() {
-            return android.os.SystemClock.elapsedRealtime() - createdAt > 10 * 60_000L;
+            return android.os.SystemClock.elapsedRealtime() - createdAt > 15 * 60_000L;
         }
     }
 }
