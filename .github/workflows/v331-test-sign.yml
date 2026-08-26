@@ -1,0 +1,55 @@
+name: Sign BLOFY v331 TEST
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v331-test-sign.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download v331 unsigned
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/v331
+          gh release download v331-build-cd87864ec2a9 --pattern 'BLOFY-PLAYER-v331-UNSIGNED.apk' --dir /tmp/v331
+          test -s /tmp/v331/BLOFY-PLAYER-v331-UNSIGNED.apk
+
+      - name: Create test signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -v -keystore /tmp/v331/blofy-v331-test.jks -storepass blofy331test -keypass blofy331test -alias blofy-v331-test -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=BLOFY PLAYER v331 Test, O=BLOFY, C=SA'
+
+      - name: Zipalign sign and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$BUILD_TOOLS/zipalign" -f -p 4 /tmp/v331/BLOFY-PLAYER-v331-UNSIGNED.apk /tmp/v331/BLOFY-PLAYER-v331-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign --ks /tmp/v331/blofy-v331-test.jks --ks-pass pass:blofy331test --key-pass pass:blofy331test --ks-key-alias blofy-v331-test --out /tmp/v331/BLOFY-PLAYER-v331-TEST-SIGNED.apk /tmp/v331/BLOFY-PLAYER-v331-aligned.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs /tmp/v331/BLOFY-PLAYER-v331-TEST-SIGNED.apk
+          "$BUILD_TOOLS/zipalign" -c -v 4 /tmp/v331/BLOFY-PLAYER-v331-TEST-SIGNED.apk
+          sha256sum /tmp/v331/BLOFY-PLAYER-v331-TEST-SIGNED.apk > /tmp/v331/BLOFY-PLAYER-v331-TEST-SIGNED.apk.sha256
+
+      - name: Publish signed test APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete v331-test-signed --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create v331-test-signed --target "$GITHUB_SHA" --title 'BLOFY PLAYER v331 TEST signed' --notes 'Disposable test-key signed v331. Uninstall builds signed with a different certificate before installing.' /tmp/v331/BLOFY-PLAYER-v331-TEST-SIGNED.apk /tmp/v331/BLOFY-PLAYER-v331-TEST-SIGNED.apk.sha256
