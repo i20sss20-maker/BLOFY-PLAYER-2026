@@ -13,6 +13,15 @@ def replace_once(path: Path, old: str, new: str):
     path.write_text(text.replace(old, new, 1))
 
 
+def replace_one_of(path: Path, variants, new: str):
+    text = path.read_text()
+    for old in variants:
+        if old in text:
+            path.write_text(text.replace(old, new, 1))
+            return
+    raise SystemExit(f"missing expected variants in {path}")
+
+
 def ensure_once(path: Path, needle: str, anchor: str, addition: str):
     text = path.read_text()
     if needle in text:
@@ -82,7 +91,6 @@ replace_once(player,
     }
 ''')
 
-# Deep probe happens on the existing resolver worker, never on the UI thread.
 replace_once(player,
 '''                String resolvedReferer = data.optString("referer", requestedReferer);
                 String finalResolved = resolved;
@@ -162,7 +170,6 @@ replace_once(player,
         releaseVlcPlayer();
 ''')
 
-# After any source restoration/retry, use only this type's learned profile.
 replace_once(player,
 '''    private void manualRetry() {
         recoveryStep = preferredRecoveryStep();
@@ -187,7 +194,6 @@ replace_once(player,
         long elapsed = playbackStartedAtMs == 0 ? 0L : SystemClock.elapsedRealtime() - playbackStartedAtMs;
         PlaybackDiagnostics.record(this, kind, extension, failedMode, "failure", reason, elapsed);
         if (usingVlc) {
-            // One bounded non-VLC attempt is allowed for difficult VOD before surfacing the error.
             if (!isLive() && AdaptivePlaybackController.PLATFORM.equals(nextAdaptiveMode)) {
                 usingVlc = false;
                 playbackMode = nextAdaptiveMode;
@@ -202,7 +208,8 @@ replace_once(player,
         Log.w(TAG, "bounded-recovery reason=" + reason + " ext=" + extension
 ''')
 
-replace_once(player,
+replace_one_of(player,
+[
 '''        if (!vlcAttempted) {
             recoveryStep = 2;
             if ("direct".equals(sourceVariant)) restoreCanonicalSource();
@@ -210,6 +217,14 @@ replace_once(player,
             return;
         }
 ''',
+'''        if (!vlcAttempted) {
+            if (!"no-extension".equals(sourceVariant)) restoreCanonicalSource();
+            recoveryStep = 2;
+            openVlc(reason);
+            return;
+        }
+'''
+],
 '''        if (!vlcAttempted) {
             playbackMode = nextAdaptiveMode;
             recoveryStep = preferredRecoveryStep();
