@@ -7,6 +7,7 @@ on:
     paths:
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java"
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackTransportFactory.java"
+      - "BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java"
       - "tools/apply_v331_transport_manager.py"
       - "tools/apply_v331_precompat.py"
       - "tools/apply_v331_compile_fix.py"
