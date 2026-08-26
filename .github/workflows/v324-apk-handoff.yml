@@ -1,5 +1,4 @@
-name: Prepare v329 APK handoff
-# One-time private signing handoff for the CI-verified v329 Android package.
+name: Secure sign BLOFY v329
 
 on:
   push:
@@ -12,46 +11,120 @@ permissions:
   contents: write
 
 jobs:
-  handoff:
+  sign:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download and split the verified unsigned APK
+      - name: Download verified v329 unsigned APK
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/v329-release /tmp/v329-handoff
+          mkdir -p /tmp/v329-sign
           gh release download v329-build-922a6fa7702a \
             --pattern 'BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk' \
-            --dir /tmp/v329-release
-          APK=/tmp/v329-release/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk
-          test -s "$APK"
-          zip -9 -j /tmp/BLOFY-PLAYER-v329-UNSIGNED.zip "$APK"
-          base64 -w 2000000 /tmp/BLOFY-PLAYER-v329-UNSIGNED.zip \
-            | split -d -a 3 -l 1 - /tmp/v329-handoff/chunk-
-          {
-            printf 'apk_sha256='; sha256sum "$APK" | cut -d' ' -f1
-            printf 'apk_size='; stat -c '%s' "$APK"
-            printf 'zip_sha256='; sha256sum /tmp/BLOFY-PLAYER-v329-UNSIGNED.zip | cut -d' ' -f1
-            printf 'zip_size='; stat -c '%s' /tmp/BLOFY-PLAYER-v329-UNSIGNED.zip
-            printf 'chunk_count='; find /tmp/v329-handoff -name 'chunk-*' -type f | wc -l
-          } > /tmp/v329-handoff/manifest.txt
+            --dir /tmp/v329-sign
+          mv /tmp/v329-sign/BLOFY-PLAYER-2026-RELEASE-UNSIGNED.apk /tmp/v329-sign/unsigned.apk
+          echo 'b6e8a935a5958c0b0288c10ed83c9fbdd99ef256a560f84bc3ec56dfccad89d4  /tmp/v329-sign/unsigned.apk' | sha256sum -c -
 
-      - name: Publish private handoff branch
+      - name: Create ephemeral signing handshake
         shell: bash
         run: |
           set -euo pipefail
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/v329-sign/ephemeral-private.pem
+          openssl pkey -in /tmp/v329-sign/ephemeral-private.pem -pubout -out /tmp/v329-sign/public.pem
           git config user.name blofy-ci
           git config user.email actions@users.noreply.github.com
-          git checkout --orphan v329-apk-handoff
+          git checkout --orphan v329-signing-handshake
           git rm -rf .
-          mkdir -p v329-handoff
-          cp /tmp/v329-handoff/* v329-handoff/
-          git add v329-handoff
-          git commit -m 'ci: prepare v329 unsigned APK handoff'
-          git push --force origin HEAD:refs/heads/v329-apk-handoff
+          mkdir -p v329-signing
+          cp /tmp/v329-sign/public.pem v329-signing/public.pem
+          printf 'run_id=%s\nsource_sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > v329-signing/request.txt
+          git add v329-signing
+          git commit -m 'ci: open ephemeral v329 signing handshake'
+          git push --force origin HEAD:refs/heads/v329-signing-handshake
+
+      - name: Wait for encrypted signing bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 120); do
+            git fetch -q origin v329-signing-handshake
+            if git cat-file -e origin/v329-signing-handshake:v329-signing/encrypted-key.b64 2>/dev/null && \
+               git cat-file -e origin/v329-signing-handshake:v329-signing/encrypted-bundle.b64 2>/dev/null; then
+              git show origin/v329-signing-handshake:v329-signing/encrypted-key.b64 > /tmp/v329-sign/encrypted-key.b64
+              git show origin/v329-signing-handshake:v329-signing/encrypted-bundle.b64 > /tmp/v329-sign/encrypted-bundle.b64
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Encrypted signing bundle was not supplied in time.' >&2
+          exit 1
+
+      - name: Decrypt signing bundle in runner memory
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d /tmp/v329-sign/encrypted-key.b64 > /tmp/v329-sign/encrypted-key.bin
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/v329-sign/ephemeral-private.pem \
+            -in /tmp/v329-sign/encrypted-key.bin \
+            -out /tmp/v329-sign/aes-pass.txt \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256
+          base64 -d /tmp/v329-sign/encrypted-bundle.b64 > /tmp/v329-sign/bundle.enc
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -pass file:/tmp/v329-sign/aes-pass.txt \
+            -in /tmp/v329-sign/bundle.enc \
+            -out /tmp/v329-sign/bundle.tar
+          tar -xf /tmp/v329-sign/bundle.tar -C /tmp/v329-sign
+          test -s /tmp/v329-sign/BLOFY-PLAYER-RELEASE-SIGNING-KEY.p12
+          test -s /tmp/v329-sign/BLOFY-RELEASE-KEY-PASSWORD.secret
+
+      - name: Zipalign and sign v329 with BLOFY stable key
+        shell: bash
+        run: |
+          set -euo pipefail
+          PASS="$(tr -d '\r\n' < /tmp/v329-sign/BLOFY-RELEASE-KEY-PASSWORD.secret)"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BUILD_TOOLS/zipalign" -f -p 4 /tmp/v329-sign/unsigned.apk /tmp/v329-sign/aligned.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks /tmp/v329-sign/BLOFY-PLAYER-RELEASE-SIGNING-KEY.p12 \
+            --ks-type PKCS12 \
+            --ks-key-alias blofy-release \
+            --ks-pass "pass:$PASS" \
+            --key-pass "pass:$PASS" \
+            --out /tmp/v329-sign/BLOFY-PLAYER-2026-v329-FINAL.apk \
+            /tmp/v329-sign/aligned.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs /tmp/v329-sign/BLOFY-PLAYER-2026-v329-FINAL.apk | tee /tmp/v329-sign/verify.txt
+          grep -qi '7b185bae8848c7157af2423359f7cd91c68416b861bcac7887363080fe26102e' /tmp/v329-sign/verify.txt
+          sha256sum /tmp/v329-sign/BLOFY-PLAYER-2026-v329-FINAL.apk > /tmp/v329-sign/BLOFY-PLAYER-2026-v329-FINAL.apk.sha256
+
+      - name: Publish signed v329 release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='v329-final-signed'
+          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title 'BLOFY PLAYER v329 FINAL signed' \
+            --notes 'Stable-key signed v329 test build.' \
+            /tmp/v329-sign/BLOFY-PLAYER-2026-v329-FINAL.apk \
+            /tmp/v329-sign/BLOFY-PLAYER-2026-v329-FINAL.apk.sha256
+
+      - name: Destroy decrypted signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -f /tmp/v329-sign/ephemeral-private.pem \
+                /tmp/v329-sign/aes-pass.txt \
+                /tmp/v329-sign/BLOFY-PLAYER-RELEASE-SIGNING-KEY.p12 \
+                /tmp/v329-sign/BLOFY-RELEASE-KEY-PASSWORD.secret \
+                /tmp/v329-sign/bundle.tar
