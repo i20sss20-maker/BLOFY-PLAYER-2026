@@ -23,7 +23,8 @@ patch(
     "        if (!showResumePrompt(detail)) primary.requestFocus();\n",
     "        primary.requestFocus();\n")
 
-# 2) Manual refresh bypasses the durable local catalog cache exactly once.
+# 2) Durable catalog cache: reuse unchanged playlists, but manual refresh and
+# server/account edits must invalidate the cached source identity.
 package_file = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java"
 package_text = package_file.read_text(encoding="utf-8")
 if "forceNextRefresh" not in package_text:
@@ -39,7 +40,12 @@ if "forceNextRefresh" not in package_text:
     package_text = package_text.replace(
         "        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0\n",
         "        if (!forceRefresh && sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0\n")
-    package_file.write_text(package_text, encoding="utf-8")
+
+old_identity = '''    private static String sourceIdentity(BlofyModels.Session session, String playlistId) {\n        if (playlistId != null && !playlistId.trim().isEmpty()\n                && !"current-session".equals(playlistId.trim())) {\n            return CatalogScope.forPlaylist(playlistId);\n        }\n        String username = session.account == null ? "" : session.account.optString("username",\n                session.account.optString("user", session.account.optString("id", "")));\n        String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;\n        return CatalogScope.forSession(raw);\n    }\n'''
+new_identity = '''    private static String sourceIdentity(BlofyModels.Session session, String playlistId) {\n        String username = session.account == null ? "" : session.account.optString("username",\n                session.account.optString("user", session.account.optString("id", "")));\n        String sessionFingerprint = session.kind + "|" + session.serverName + "|"\n                + session.name + "|" + username;\n        if (playlistId != null && !playlistId.trim().isEmpty()\n                && !"current-session".equals(playlistId.trim())) {\n            // Same saved playlist opens instantly, but editing its server/account\n            // changes this identity and forces one fresh import automatically.\n            return CatalogScope.forPlaylist(playlistId.trim() + "|" + sessionFingerprint);\n        }\n        return CatalogScope.forSession(sessionFingerprint);\n    }\n'''
+if old_identity in package_text:
+    package_text = package_text.replace(old_identity, new_identity, 1)
+package_file.write_text(package_text, encoding="utf-8")
 
 main_file = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java"
 main_text = main_file.read_text(encoding="utf-8")
