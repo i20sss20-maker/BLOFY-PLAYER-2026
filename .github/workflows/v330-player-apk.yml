@@ -7,6 +7,7 @@ on:
     paths:
       - "tools/apply_v330_hotfix.py"
       - "tools/apply_v330_vod_fix.py"
+      - "tools/apply_v330_compile_fix.py"
       - ".github/workflows/v330-player-apk.yml"
 
 permissions:
@@ -37,6 +38,7 @@ jobs:
           python3 tools/apply_v329_hotfix.py
           python3 tools/apply_v330_hotfix.py
           python3 tools/apply_v330_vod_fix.py
+          python3 tools/apply_v330_compile_fix.py
           grep -q 'versionCode = 330' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'v330' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'حفظ ومتابعة' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
