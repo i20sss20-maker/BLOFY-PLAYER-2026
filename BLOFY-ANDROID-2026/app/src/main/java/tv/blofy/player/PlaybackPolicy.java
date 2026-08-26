@@ -5,18 +5,19 @@ import java.util.Locale;
 /**
  * BLOFY playback recovery policy.
  *
- * IPTV servers and low-power televisions can need several seconds before the
- * first decodable keyframe arrives. Keep the watchdog long enough for a real
- * source to start; network and decoder errors still trigger recovery at once.
+ * Keep startup windows short enough that a dead/unsupported source never locks
+ * the TV experience, while still allowing slower IPTV providers a realistic
+ * chance to render the first keyframe. Hard network/decoder failures recover
+ * immediately in PlayerActivity; these watchdogs are only the final guard.
  */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 60_000;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 90_000;
-    static final int VOD_STARTUP_TIMEOUT_MS = 60_000;
-    static final int UHD_VOD_STARTUP_TIMEOUT_MS = 90_000;
-    static final int VLC_STARTUP_TIMEOUT_MS = 90_000;
-    static final int UHD_VLC_STARTUP_TIMEOUT_MS = 90_000;
-    static final int PREVIEW_STARTUP_TIMEOUT_MS = 20_000;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 7_000;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 5_000;
+    static final int VOD_STARTUP_TIMEOUT_MS = 8_000;
+    static final int UHD_VOD_STARTUP_TIMEOUT_MS = 11_000;
+    static final int VLC_STARTUP_TIMEOUT_MS = 7_000;
+    static final int UHD_VLC_STARTUP_TIMEOUT_MS = 10_000;
+    static final int PREVIEW_STARTUP_TIMEOUT_MS = 5_000;
 
     private PlaybackPolicy() {}
 
@@ -49,9 +50,6 @@ final class PlaybackPolicy {
             case "mp4":
             case "m4v":
             case "mov": return "video/mp4";
-            // Many IPTV panels return MKV/WebM with generic or incorrect HTTP
-            // Content-Type. Let Media3 sniff EBML/container bytes instead of
-            // forcing a type that can select the wrong extractor too early.
             case "mkv":
             case "webm": return null;
             case "ts":
