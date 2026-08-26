@@ -32,7 +32,7 @@ final class PackageImporter {
     }
 
     private static final int REQUESTED_PAGE_SIZE = 2000;
-    private static final long LEGACY_MIN_REQUEST_GAP_MS = 650L;
+    private static final long LEGACY_MIN_REQUEST_GAP_MS = 450L;
 
     private final BlofyApi api;
     private final CatalogDatabase database;
@@ -61,8 +61,19 @@ final class PackageImporter {
         BlofyModels.Session session = new BlofyModels.Session(getWithRetry("/api/session", false));
         if (!session.present) throw new Exception("لم يتم تسجيل بيانات الباقة بعد.");
 
-        emit(12, "تحليل الخادم", "تحديد نوع الباقة وإمكانات التشغيل");
         String sourceIdentity = sourceIdentity(session, playlistId);
+        String activeSource = database.metadata("active_source_id", "");
+        int cachedLive = database.count("live");
+        int cachedMovies = database.count("movies");
+        int cachedSeries = database.count("series");
+        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
+                && !"in_progress".equals(database.metadata("sync_state", ""))) {
+            String profile = database.metadata("playback_profile", "Media3 مباشر");
+            emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
+            return new Result(cachedLive, cachedMovies, cachedSeries, profile);
+        }
+
+        emit(12, "تحليل الخادم", "تحديد نوع الباقة وإمكانات التشغيل");
         database.beginStagedImport(sourceIdentity);
 
         try {
@@ -71,13 +82,14 @@ final class PackageImporter {
             importType("series", "المسلسلات", 69, 94);
 
             String profile = profile();
-            emit(95, "اعتماد بيانات الباقة", "حفظ القنوات والأفلام والمسلسلات للاستخدام");
+            emit(95, "اعتماد بيانات الباقة", "تثبيت البيانات المحفوظة على الجهاز");
             database.commitStagedImport(sourceIdentity, session.serverName, session.kind, profile);
-            emit(98, "تجهيز التشغيل", profile);
-            emit(100, "اكتملت قراءة الباقة", "Live " + database.count("live")
-                    + " • Movies " + database.count("movies")
-                    + " • Series " + database.count("series"));
-            return new Result(database.count("live"), database.count("movies"), database.count("series"), profile);
+            emit(99, "فتح BLOFY PLAYER", "تم الحفظ بنجاح");
+            int live = database.count("live");
+            int movies = database.count("movies");
+            int series = database.count("series");
+            emit(100, "جاهز", "Live " + live + " • Movies " + movies + " • Series " + series);
+            return new Result(live, movies, series, profile);
         } catch (Exception error) {
             database.abortStagedImport();
             throw error;
@@ -153,8 +165,8 @@ final class PackageImporter {
     }
 
     private JSONObject getWithRetry(String path, boolean catalogRequest) throws Exception {
-        final long[] httpDelays = {1_000L, 3_000L, 8_000L, 15_000L, 32_000L};
-        final long[] networkDelays = {350L, 900L, 2_000L, 5_000L, 10_000L};
+        final long[] httpDelays = {600L, 1_500L, 4_000L, 8_000L};
+        final long[] networkDelays = {250L, 650L, 1_500L, 3_500L};
         for (int attempt = 0; ; attempt++) {
             try {
                 if (catalogRequest) lastCatalogRequestAt = System.currentTimeMillis();
