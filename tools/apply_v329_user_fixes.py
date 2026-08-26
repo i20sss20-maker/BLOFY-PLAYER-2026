@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player"
@@ -67,10 +66,22 @@ def details(text):
     return text.replace(old, new, 1)
 
 
+def bump_version():
+    path = ROOT / "BLOFY-ANDROID-2026/app/build.gradle.kts"
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('versionCode = 328', 'versionCode = 329', 1)
+    text = text.replace('versionName = "2026.08.26.4-v328"', 'versionName = "2026.08.26.5-v329"', 1)
+    if 'versionCode = 329' not in text or '2026.08.26.5-v329' not in text:
+        raise SystemExit("Gradle v329 version bump failed")
+    path.write_text(text, encoding="utf-8")
+    print("patched app/build.gradle.kts")
+
+
 edit("MainActivity.java", main_activity)
 edit("CatalogDatabase.java", catalog_db)
 edit("PackageImporter.java", importer)
 edit("SettingsActivity.java", settings)
 edit("SevenMaxActivity.java", sevenmax)
 edit("DetailsActivity.java", details)
+bump_version()
 print("BLOFY v329 user feedback patch applied")
