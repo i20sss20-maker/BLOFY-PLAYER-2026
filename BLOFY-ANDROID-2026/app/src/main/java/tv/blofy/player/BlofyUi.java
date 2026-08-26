@@ -11,6 +11,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -105,8 +106,23 @@ final class BlofyUi {
                 : focusDrawable(context, Color.argb(210, 23, 21, 36), PANEL_SOFT, PURPLE_LIGHT));
         view.setFocusable(true);
         view.setStateListAnimator(null);
-        // Focus is expressed by border/color. Keep geometry visually stable on TV grids.
         attachScaleFocus(view, 1.008f);
+        // Some Android TV firmwares ignore nextFocusRight/Left on RTL GridLayout.
+        // Fall back to Android's geometric focus search so all four DPAD arrows
+        // remain responsive. Screens that install their own key listener override this.
+        view.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            int direction;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) direction = View.FOCUS_LEFT;
+            else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) direction = View.FOCUS_RIGHT;
+            else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) direction = View.FOCUS_UP;
+            else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) direction = View.FOCUS_DOWN;
+            else return false;
+            View next = v.focusSearch(direction);
+            if (next == null || next == v) return false;
+            next.requestFocus();
+            return true;
+        });
         return view;
     }
 
