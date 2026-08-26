@@ -1,0 +1,121 @@
+name: Build BLOFY v331 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java"
+      - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackTransportFactory.java"
+      - "tools/apply_v331_transport_manager.py"
+      - ".github/workflows/v331-player-apk.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: blofy-v331-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
+      ANDROID_NDK_VERSION: 26.1.10909125
+      ANDROID_ABI: 23
+      MEDIA3_COMMIT: e156aec119c304d3de70a2fa69e08dc585b9d92b
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply v330 baseline and v331 transport manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/apply_v329_hotfix.py
+          python3 tools/apply_v330_hotfix.py
+          python3 tools/apply_v330_vod_fix.py
+          python3 tools/apply_v330_compile_fix.py
+          python3 tools/apply_v331_transport_manager.py
+          grep -q 'versionCode = 331' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'PlaybackProfileManager' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'createLegacy7Max' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackTransportFactory.java
+          grep -q 'تحليل الخادم' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Install Android NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION" "cmake;3.31.4"
+
+      - name: Build Media3 FFmpeg decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/androidx/media.git .media3
+          git -C .media3 checkout "$MEDIA3_COMMIT"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > .media3/local.properties
+          FFMPEG_MODULE_PATH="$GITHUB_WORKSPACE/.media3/libraries/decoder_ffmpeg/src/main"
+          NDK_PATH="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          cd "$FFMPEG_MODULE_PATH/jni"
+          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg --branch release/6.0 --depth=1
+          chmod +x build_ffmpeg.sh
+          ./build_ffmpeg.sh "$FFMPEG_MODULE_PATH" "$NDK_PATH" linux-x86_64 "$ANDROID_ABI" vorbis opus flac alac mp3 amrnb amrwb aac ac3 eac3 dca
+          cd "$GITHUB_WORKSPACE/.media3"
+          ./gradlew --no-daemon :lib-decoder-ffmpeg:assembleRelease
+          mkdir -p "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs"
+          AAR="$(find "$GITHUB_WORKSPACE/.media3" -type f -name '*.aar' -path '*decoder_ffmpeg*' -print | head -n 1)"
+          test -n "$AAR"
+          cp "$AAR" "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar"
+
+      - name: Create Gradle wrapper
+        working-directory: BLOFY-ANDROID-2026
+        run: gradle wrapper --gradle-version 8.13
+
+      - name: Unit tests
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon clean testDebugUnitTest -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Build release APK
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Lint
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon lintRelease
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -f "$APK"
+          unzip -t "$APK"
+          unzip -l "$APK" > /tmp/apk-list.txt
+          grep -q 'libffmpegJNI.so' /tmp/apk-list.txt
+          cp "$APK" BLOFY-PLAYER-v331-UNSIGNED.apk
+          sha256sum BLOFY-PLAYER-v331-UNSIGNED.apk > BLOFY-PLAYER-v331-UNSIGNED.apk.sha256
+
+      - name: Publish v331 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v331-build-${GITHUB_SHA:0:12}"
+          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "BLOFY PLAYER v331 adaptive transport test" --notes "Provider analysis before import, learned per-playlist playback profiles, 7 Max legacy HTTP, Cronet, compatibility headers, v330 link variants, LibVLC fallback and FFmpeg decoder support." --prerelease BLOFY-PLAYER-v331-UNSIGNED.apk BLOFY-PLAYER-v331-UNSIGNED.apk.sha256
