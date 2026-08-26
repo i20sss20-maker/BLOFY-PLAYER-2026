@@ -11,6 +11,7 @@ on:
     paths:
       - "BLOFY-ANDROID-2026/**"
       - ".github/workflows/full-player-apk.yml"
+      - "tools/apply_v329_hotfix.py"
       - "tools/apply_sync_fix.py"
       - "tools/apply_7max_ui.py"
       - "tools/apply_final_stabilization.py"
@@ -48,9 +49,12 @@ jobs:
           echo "Building branch: ${BRANCH_NAME}"
           if grep -Eq 'versionCode = (32[8-9]|3[3-9][0-9]|[4-9][0-9]{2,})' BLOFY-ANDROID-2026/app/build.gradle.kts; then
             echo "Modern committed source detected: legacy rewrite passes are disabled."
+            python3 tools/apply_v329_hotfix.py
             test -f BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
             grep -q 'LivePreviewController' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
             grep -q 'POSTER_PAGE' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+            grep -q 'v329-home-hero' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+            grep -q 'forceNextRefresh' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           else
             python3 tools/apply_sync_fix.py
             python3 tools/apply_7max_ui.py
