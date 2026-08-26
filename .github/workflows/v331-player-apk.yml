@@ -8,6 +8,7 @@ on:
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java"
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackTransportFactory.java"
       - "tools/apply_v331_transport_manager.py"
+      - "tools/apply_v331_precompat.py"
       - ".github/workflows/v331-player-apk.yml"
 
 permissions:
@@ -39,6 +40,7 @@ jobs:
           python3 tools/apply_v330_hotfix.py
           python3 tools/apply_v330_vod_fix.py
           python3 tools/apply_v330_compile_fix.py
+          python3 tools/apply_v331_precompat.py
           python3 tools/apply_v331_transport_manager.py
           grep -q 'versionCode = 331' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'PlaybackProfileManager' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
