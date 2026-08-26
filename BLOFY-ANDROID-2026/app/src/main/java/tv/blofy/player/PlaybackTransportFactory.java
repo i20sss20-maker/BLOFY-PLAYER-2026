@@ -18,7 +18,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executor;
 
-/** Builds BLOFY platform HTTP and Google Play Services Cronet transports. */
+/** Builds BLOFY legacy, platform HTTP and Google Play Services Cronet transports. */
 @UnstableApi
 final class PlaybackTransportFactory {
     private static final String TAG = "BlofyTransport";
@@ -65,6 +65,14 @@ final class PlaybackTransportFactory {
 
     static boolean isCronetReady() {
         return cronetEngine != null;
+    }
+
+    /** Exact lightweight transport used by the old 7 Max-inspired core. */
+    static DataSource.Factory createLegacy7Max(Context context) {
+        Log.i(TAG, "transport=legacy7max-default-http");
+        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setAllowCrossProtocolRedirects(true);
+        return new DefaultDataSource.Factory(context, http);
     }
 
     static DataSource.Factory create(Context context, boolean preferCronet, Executor executor) {
