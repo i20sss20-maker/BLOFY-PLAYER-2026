@@ -11,8 +11,8 @@ import java.util.Locale;
  * immediately in PlayerActivity; these watchdogs are only the final guard.
  */
 final class PlaybackPolicy {
-    static final int INITIAL_STARTUP_TIMEOUT_MS = 7_000;
-    static final int RETRY_STARTUP_TIMEOUT_MS = 5_000;
+    static final int INITIAL_STARTUP_TIMEOUT_MS = 5_500;
+    static final int RETRY_STARTUP_TIMEOUT_MS = 3_000;
     static final int VOD_STARTUP_TIMEOUT_MS = 8_000;
     static final int UHD_VOD_STARTUP_TIMEOUT_MS = 11_000;
     static final int VLC_STARTUP_TIMEOUT_MS = 7_000;
