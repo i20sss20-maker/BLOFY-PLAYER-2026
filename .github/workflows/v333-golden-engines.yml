@@ -7,6 +7,8 @@ on:
     paths:
       - "tools/apply_v333_full_engines.py"
       - "tools/apply_v334_compat_engine.py"
+      - "tools/apply_v334_catalog_speed.py"
+      - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackRouteMemory.java"
       - ".github/workflows/v333-golden-engines.yml"
 
 permissions:
@@ -43,12 +45,17 @@ jobs:
           python3 tools/apply_v331_compile_fix.py
           python3 tools/apply_v333_full_engines.py
           python3 tools/apply_v334_compat_engine.py
+          python3 tools/apply_v334_catalog_speed.py
           grep -q 'versionCode = 1000333' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'preferredLiveExtension' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java
+          grep -q 'PlaybackRouteMemory' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'alternateLiveAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'containerSniffAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'preferCronet = recoveryStep == 1' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'EAI_NODATA' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
+          grep -q 'LIVE_PAGE = 72' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+          grep -q 'POSTER_PAGE = 48' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
+          grep -q 'جارٍ تجهيز القنوات' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'المسار العام غير متوافق' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           git diff --exit-code -- BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java || true
 
@@ -110,14 +117,14 @@ jobs:
           unzip -t "$APK"
           unzip -l "$APK" > /tmp/apk-list.txt
           grep -q 'libffmpegJNI.so' /tmp/apk-list.txt
-          cp "$APK" BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk
-          sha256sum BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk > BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk.sha256
+          cp "$APK" BLOFY-PLAYER-v334-COMPAT-UNSIGNED.apk
+          sha256sum BLOFY-PLAYER-v334-COMPAT-UNSIGNED.apk > BLOFY-PLAYER-v334-COMPAT-UNSIGNED.apk.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-PLAYER-v333-GOLDEN-UNSIGNED
+          name: BLOFY-PLAYER-v334-COMPAT-UNSIGNED
           path: |
-            BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk
-            BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk.sha256
+            BLOFY-PLAYER-v334-COMPAT-UNSIGNED.apk
+            BLOFY-PLAYER-v334-COMPAT-UNSIGNED.apk.sha256
           if-no-files-found: error
