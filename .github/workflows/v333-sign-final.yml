@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/blofy-v333-sign/unsigned
-          gh run download 33025029468 -n BLOFY-PLAYER-v333-GOLDEN-UNSIGNED -D /tmp/blofy-v333-sign/unsigned
+          gh run download 33043986204 -n BLOFY-PLAYER-v333-GOLDEN-UNSIGNED -D /tmp/blofy-v333-sign/unsigned
           test -s /tmp/blofy-v333-sign/unsigned/BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk
 
       - name: Zipalign sign and verify permanent certificate
