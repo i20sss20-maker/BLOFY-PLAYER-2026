@@ -39,6 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "v339 stability build trigger"
           python3 tools/apply_v329_hotfix.py
           python3 tools/apply_v330_hotfix.py
           python3 tools/apply_v330_vod_fix.py
