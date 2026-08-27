@@ -26,9 +26,14 @@ final class PlaybackRouteMemory {
         return source(context) + ":" + clean(kind) + ":" + clean(id);
     }
 
+    static String preferredMode(Context context, String kind, String id, String fallback) {
+        if (id == null || id.isEmpty()) return fallback;
+        String value = prefs(context).getString(PREFIX_TRANSPORT + itemKey(context, kind, id), "");
+        return value == null || value.isEmpty() ? fallback : value;
+    }
+
     static int preferredRecoveryStep(Context context, String kind, String id) {
-        if (id == null || id.isEmpty()) return 0;
-        String transport = prefs(context).getString(PREFIX_TRANSPORT + itemKey(context, kind, id), "");
+        String transport = preferredMode(context, kind, id, "");
         return "cronet".equals(transport) ? 1 : 0;
     }
 
@@ -43,14 +48,23 @@ final class PlaybackRouteMemory {
         if (id == null || id.isEmpty()) return;
         SharedPreferences.Editor editor = prefs(context).edit();
         String key = itemKey(context, kind, id);
-        if ("cronet".equals(transport) || "default-http".equals(transport)) {
-            editor.putString(PREFIX_TRANSPORT + key, transport);
+        if (transport != null && !transport.trim().isEmpty()) {
+            editor.putString(PREFIX_TRANSPORT + key, transport.trim());
         }
         if ("live".equals(clean(kind))) {
             String ext = normalizeLiveExtension(extension);
             if (!ext.isEmpty()) editor.putString(PREFIX_LIVE_EXT + key, ext);
         }
         editor.apply();
+    }
+
+    static void forgetItem(Context context, String kind, String id) {
+        if (id == null || id.isEmpty()) return;
+        String key = itemKey(context, kind, id);
+        prefs(context).edit()
+                .remove(PREFIX_TRANSPORT + key)
+                .remove(PREFIX_LIVE_EXT + key)
+                .apply();
     }
 
     static void clearSource(Context context) {
