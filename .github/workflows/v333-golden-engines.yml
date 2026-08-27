@@ -6,6 +6,8 @@ on:
     branches: [v333-from-golden-v331]
     paths:
       - "tools/apply_v333_full_engines.py"
+      - "tools/apply_v333_safe_provider_compat.py"
+      - "tools/apply_v334_compat_engine.py"
       - ".github/workflows/v333-golden-engines.yml"
 
 permissions:
@@ -29,7 +31,7 @@ jobs:
       - name: Checkout v333 branch
         uses: actions/checkout@v4
 
-      - name: Recreate exact golden v331 build then apply v333 engines
+      - name: Recreate golden v331 then apply complete compatibility engine
         shell: bash
         run: |
           set -euo pipefail
@@ -41,10 +43,15 @@ jobs:
           python3 tools/apply_v331_transport_manager.py
           python3 tools/apply_v331_compile_fix.py
           python3 tools/apply_v333_full_engines.py
+          python3 tools/apply_v333_safe_provider_compat.py
+          python3 tools/apply_v334_compat_engine.py
           grep -q 'versionCode = 1000333' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'preferredLiveExtension' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java
+          grep -q 'alternateLiveAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'containerSniffAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'preferCronet = recoveryStep == 1' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'EAI_NODATA' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
           grep -q 'المسار العام غير متوافق' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q 'PlaybackProfileManager' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           git diff --exit-code -- BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java || true
 
       - name: Java 17
