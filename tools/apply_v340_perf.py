@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# v340 R3: hot catalog pagination layer.
 ROOT = Path(__file__).resolve().parents[1]
 SEVEN = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java"
 text = SEVEN.read_text(encoding="utf-8")
