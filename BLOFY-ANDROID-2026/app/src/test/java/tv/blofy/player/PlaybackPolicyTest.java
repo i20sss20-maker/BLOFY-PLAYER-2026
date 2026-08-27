@@ -34,10 +34,9 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void startupTimeoutsAreBoundedForFastFallback() {
-        // v331 provider analysis chooses the likely transport up front, so the
-        // live watchdog can be tighter without changing VOD/VLC safety windows.
+        // v339 keeps the first attempt stable and shortens only compatibility fallback.
         assertEquals(5_500, PlaybackPolicy.startupTimeoutMs(0));
-        assertEquals(3_000, PlaybackPolicy.startupTimeoutMs(1));
+        assertEquals(2_500, PlaybackPolicy.startupTimeoutMs(1));
         assertEquals(8_000, PlaybackPolicy.vodStartupTimeoutMs(false));
         assertEquals(11_000, PlaybackPolicy.vodStartupTimeoutMs(true));
         assertEquals(7_000, PlaybackPolicy.vlcStartupTimeoutMs(false));
