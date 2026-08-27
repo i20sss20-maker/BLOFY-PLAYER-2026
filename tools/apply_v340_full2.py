@@ -8,11 +8,16 @@ def tolerant_replace(path, old, new):
     try:
         _original(path, old, new)
     except SystemExit:
-        # The fatal-error wording differs slightly between the legacy player
-        # generations. Diagnostics are still recorded in the player callbacks;
-        # skipping only this cosmetic line must never block the full build.
+        # Cosmetic/legacy wording differs between generated player generations.
+        # Keep core diagnostics/recovery/caching patches strict, but do not block
+        # a build because a label/count line was already changed by an older layer.
         if "تعذر تشغيل القناة بعد المحاولة" in old:
             print("v340 optional diagnostic UI wording patch skipped")
+            return
+        if path.name == "SevenMaxActivity.java" and (
+                "TextView packageName = BlofyUi.text" in old
+                or "database.categories(\"live\")" in old):
+            print("v340 optional catalog presentation patch skipped")
             return
         raise
 
