@@ -19,7 +19,6 @@ def replace_once(text, old, new, label):
     return text.replace(old, new, 1)
 
 # 1) Provider memory: remember successful LIVE container per playlist.
-# Movies and Series remain separate through the existing kind-scoped keys.
 profile_path = JAVA / "PlaybackProfileManager.java"
 profile = read(profile_path)
 profile = replace_once(profile,
@@ -35,8 +34,7 @@ profile = replace_once(profile,
 '''            if (key.startsWith(KEY_MODE_PREFIX + playlistId + ":")\n                    || key.startsWith(KEY_FAIL_PREFIX + KEY_MODE_PREFIX + playlistId + ":")\n                    || key.equals(KEY_LIVE_EXT_PREFIX + playlistId)) {\n                editor.remove(key);\n            }\n''', "clear learned live extension")
 write(profile_path, profile)
 
-# 2) LIVE engine: preserve explicit user TS/HLS setting, otherwise use learned
-# provider extension before falling back through the exact v331 transport chain.
+# 2) LIVE engine: preserve explicit user TS/HLS setting, otherwise use learned provider extension.
 player_path = JAVA / "PlayerActivity.java"
 player = read(player_path)
 player = replace_once(player,
@@ -44,9 +42,7 @@ player = replace_once(player,
 '''    private String configuredExtension(String candidate) {\n        if (!isLiveKind(kind)) return candidate;\n        String mode = playerSetting(SettingsActivity.KEY_STREAM, "auto");\n        if ("ts".equals(mode)) return "ts";\n        if ("hls".equals(mode)) return "m3u8";\n        return PlaybackProfileManager.preferredLiveExtension(this, candidate);\n    }\n''', "learned live extension")
 write(player_path, player)
 
-# 3) Full preload: keep all three sections complete before home. If a provider's
-# global catalog path is incompatible, fall back to its categories. One broken
-# category must not reject the entire provider. Pacing is only slightly faster.
+# 3) Full preload: keep all three sections complete before home.
 importer_path = JAVA / "PackageImporter.java"
 imp = read(importer_path)
 imp = imp.replace("private static final long LEGACY_MIN_REQUEST_GAP_MS = 450L;",
@@ -64,15 +60,15 @@ new_cat = '''            String base = "/api/catalog?type=" + BlofyApi.encode(ty
 imp = replace_once(imp, old_cat, new_cat, "category tolerant preload")
 write(importer_path, imp)
 
-# 4) Version marker only. No UI class is modified by this patch.
+# 4) High monotonic version code so Android never treats v333 as a downgrade from v332.
 gradle_path = ROOT / "BLOFY-ANDROID-2026/app/build.gradle.kts"
 gradle = read(gradle_path)
-gradle = gradle.replace("versionCode = 331", "versionCode = 333", 1)
+gradle = gradle.replace("versionCode = 331", "versionCode = 1000333", 1)
 if 'versionName = "v331"' in gradle:
-    gradle = gradle.replace('versionName = "v331"', 'versionName = "v333-golden"', 1)
+    gradle = gradle.replace('versionName = "v331"', 'versionName = "v333-golden-r2"', 1)
 else:
     import re
-    gradle = re.sub(r'versionName\s*=\s*"[^"]+"', 'versionName = "v333-golden"', gradle, count=1)
+    gradle = re.sub(r'versionName\s*=\s*"[^"]+"', 'versionName = "v333-golden-r2"', gradle, count=1)
 write(gradle_path, gradle)
 
-print("v333 full engines applied: provider-aware Live + separate Movies/Series profiles + resilient full preload; v331 UI untouched")
+print("v333 r2 applied: same engines, versionCode 1000333 for guaranteed upgrade compatibility")
