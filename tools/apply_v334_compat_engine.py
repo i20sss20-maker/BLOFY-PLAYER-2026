@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player"
 PLAYER = JAVA / "PlayerActivity.java"
 POLICY = JAVA / "PlaybackPolicy.java"
+ROUTES = JAVA / "PlaybackRouteMemory.java"
 
 
 def patch(path, old, new, label):
@@ -44,6 +45,67 @@ def replace_method(path, signature, replacement, label):
         raise SystemExit(f"v334 compatibility method end missing: {label}")
     path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
 
+# Persistent per-stream route memory. This is deliberately more specific than
+# provider-wide memory because real Xtream playlists can mix TS/HLS/codecs.
+ROUTES.write_text(r'''package tv.blofy.player;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+import java.util.Locale;
+
+/** Remembers a proven playback route for one playlist + media kind + stream id. */
+final class PlaybackRouteMemory {
+    private static final String PREFS = "blofy_playback_routes_v1";
+    private static final String EXT = "ext:";
+    private static final String STEP = "step:";
+
+    private PlaybackRouteMemory() {}
+
+    private static SharedPreferences prefs(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static String playlist(Context context) {
+        try {
+            PlaylistStore store = new PlaylistStore(context);
+            String id = store.activeId();
+            return id == null || id.trim().isEmpty() ? "default" : id.trim();
+        } catch (Throwable ignored) {
+            return "default";
+        }
+    }
+
+    private static String key(Context context, String kind, String streamId) {
+        String safeKind = kind == null ? "unknown" : kind.trim().toLowerCase(Locale.US);
+        String safeId = streamId == null ? "" : streamId.trim();
+        return playlist(context) + ":" + safeKind + ":" + safeId;
+    }
+
+    static String preferredLiveExtension(Context context, String streamId, String fallback) {
+        String value = prefs(context).getString(EXT + key(context, "live", streamId), "");
+        return value == null || value.isEmpty() ? fallback : value;
+    }
+
+    static int preferredRecoveryStep(Context context, String kind, String streamId) {
+        int step = prefs(context).getInt(STEP + key(context, kind, streamId), 0);
+        return step == 1 ? 1 : 0;
+    }
+
+    static void recordSuccess(Context context, String kind, String streamId,
+                              String extension, String transport) {
+        if (streamId == null || streamId.trim().isEmpty()) return;
+        String routeKey = key(context, kind, streamId);
+        SharedPreferences.Editor editor = prefs(context).edit();
+        if ("live".equals(kind)) {
+            String ext = PlaybackPolicy.normalizeExtension(extension, "");
+            if ("ts".equals(ext) || "m3u8".equals(ext)) editor.putString(EXT + routeKey, ext);
+        }
+        editor.putInt(STEP + routeKey, "cronet".equals(transport) ? 1 : 0).apply();
+    }
+}
+''', encoding="utf-8")
+
 patch(PLAYER,
 '''    private boolean warmLiveSwitchPending;\n    private boolean vlcSubtitlePreferenceApplied;\n''',
 '''    private boolean warmLiveSwitchPending;\n    private boolean vlcSubtitlePreferenceApplied;\n    private boolean alternateLiveAttempted;\n    private boolean containerSniffAttempted;\n''', "compatibility state flags")
@@ -79,7 +141,7 @@ optional_patch(PLAYER,
 
 replace_method(PLAYER,
 "    private void recoverFromFailure(String reason)",
-'''    private void recoverFromFailure(String reason) {\n        if (isFinishing() || isDestroyed()) return;\n        playbackHandler.removeCallbacks(playbackTimeout);\n        playbackHandler.removeCallbacks(markPlaybackStable);\n\n        if (usingVlc) {\n            showPlaybackFailure(reason);\n            return;\n        }\n\n        Log.w(TAG, "adaptive-recovery reason=" + reason + " ext=" + extension\n                + " variant=" + sourceVariant + " uhd=" + isUltraHd()\n                + " transport=" + activeTransportName());\n\n        // A hard network/HTTP/DNS failure gets one direct-source attempt first.\n        if (PlaybackPolicy.isNetworkFailure(reason)\n                && !PlaybackPolicy.isStartupTimeout(reason)\n                && "canonical".equals(sourceVariant) && !id.isEmpty()) {\n            releasePlayer();\n            sourceVariant = "direct";\n            recoveryStep = 1;\n            url = null;\n            resolvePlaybackLink();\n            return;\n        }\n\n        // LIVE is successful only after a real first frame. If canonical/direct\n        // stalls or renders black, try the alternate Xtream TS/HLS route once.\n        if (isLive() && !alternateLiveAttempted && !id.isEmpty()) {\n            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            alternateLiveAttempted = true;\n            releasePlayer();\n            extension = PlaybackPolicy.alternateLiveExtension(extension);\n            sourceVariant = "canonical";\n            recoveryStep = 1;\n            url = null;\n            resolvePlaybackLink();\n            return;\n        }\n\n        // Movies/episodes may advertise mp4/mkv incorrectly. Reopen the same\n        // source without MIME forcing so Media3 can sniff the real container.\n        if (!isLive() && !containerSniffAttempted && validUrl(url)) {\n            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            containerSniffAttempted = true;\n            sourceVariant = "no-extension";\n            recoveryStep = 1;\n            releaseMedia3Player();\n            firstFrameRendered = false;\n            initializePlayer();\n            return;\n        }\n\n        // Final broad codec/protocol fallback.\n        if (!vlcAttempted) {\n            recoveryStep = 2;\n            if (isLive() && alternateLiveAttempted) restoreCanonicalSource();\n            else if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            openVlc(reason);\n            return;\n        }\n\n        showPlaybackFailure(reason);\n    }''',
+'''    private void recoverFromFailure(String reason) {\n        if (isFinishing() || isDestroyed()) return;\n        playbackHandler.removeCallbacks(playbackTimeout);\n        playbackHandler.removeCallbacks(markPlaybackStable);\n\n        if (usingVlc) {\n            showPlaybackFailure(reason);\n            return;\n        }\n\n        Log.w(TAG, "adaptive-recovery reason=" + reason + " ext=" + extension\n                + " variant=" + sourceVariant + " uhd=" + isUltraHd()\n                + " transport=" + activeTransportName());\n\n        if (PlaybackPolicy.isNetworkFailure(reason)\n                && !PlaybackPolicy.isStartupTimeout(reason)\n                && "canonical".equals(sourceVariant) && !id.isEmpty()) {\n            releasePlayer();\n            sourceVariant = "direct";\n            recoveryStep = 1;\n            url = null;\n            resolvePlaybackLink();\n            return;\n        }\n\n        if (isLive() && !alternateLiveAttempted && !id.isEmpty()) {\n            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            alternateLiveAttempted = true;\n            releasePlayer();\n            extension = PlaybackPolicy.alternateLiveExtension(extension);\n            sourceVariant = "canonical";\n            recoveryStep = 1;\n            url = null;\n            resolvePlaybackLink();\n            return;\n        }\n\n        if (!isLive() && !containerSniffAttempted && validUrl(url)) {\n            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            containerSniffAttempted = true;\n            sourceVariant = "no-extension";\n            recoveryStep = 1;\n            releaseMedia3Player();\n            firstFrameRendered = false;\n            initializePlayer();\n            return;\n        }\n\n        if (!vlcAttempted) {\n            recoveryStep = 2;\n            if (isLive() && alternateLiveAttempted) restoreCanonicalSource();\n            else if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            openVlc(reason);\n            return;\n        }\n\n        showPlaybackFailure(reason);\n    }''',
 "four-stage recovery state machine")
 
 patch(PLAYER,
