@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player"
@@ -13,19 +14,45 @@ def patch(path, old, new, label):
         raise SystemExit(f"v334 compatibility patch mismatch: {label}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+
+def replace_method(path, signature, replacement, label):
+    text = path.read_text(encoding="utf-8")
+    start = text.find(signature)
+    if start < 0:
+        raise SystemExit(f"v334 compatibility method missing: {label}")
+    brace = text.find("{", start)
+    if brace < 0:
+        raise SystemExit(f"v334 compatibility method brace missing: {label}")
+    depth = 0
+    end = -1
+    for i in range(brace, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end < 0:
+        raise SystemExit(f"v334 compatibility method end missing: {label}")
+    path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+
 # Per-source bounded fallback state. Never change sources that already render.
 patch(PLAYER,
 '''    private boolean warmLiveSwitchPending;\n    private boolean vlcSubtitlePreferenceApplied;\n''',
 '''    private boolean warmLiveSwitchPending;\n    private boolean vlcSubtitlePreferenceApplied;\n    private boolean alternateLiveAttempted;\n    private boolean containerSniffAttempted;\n''', "compatibility state flags")
 
-# Cronet existed in the app but the player always selected platform HTTP.
-patch(PLAYER,
-'''    private DataSource.Factory createDataSourceFactory() {\n        // Avoid an identical queued retry while the Cronet provider is still\n        // installing. The compatibility fallback is a different decoder/stack.\n        return PlaybackTransportFactory.create(this, false, network,\n                15_000, 30_000, recoveryStep, playbackReferer);\n    }\n''',
-'''    private DataSource.Factory createDataSourceFactory() {\n        boolean preferCronet = recoveryStep == 1 && PlaybackTransportFactory.isCronetReady();\n        return PlaybackTransportFactory.create(this, preferCronet, network,\n                recoveryStep == 0 ? 8_000 : 4_000,\n                recoveryStep == 0 ? 20_000 : 10_000,\n                recoveryStep, playbackReferer);\n    }\n''', "activate bounded Cronet")
+# Cronet existed in the app but was not actually selected by PlayerActivity.
+# Replace the whole generated method rather than matching old comments/spacing.
+replace_method(PLAYER,
+"    private DataSource.Factory createDataSourceFactory()",
+'''    private DataSource.Factory createDataSourceFactory() {\n        boolean preferCronet = recoveryStep == 1 && PlaybackTransportFactory.isCronetReady();\n        return PlaybackTransportFactory.create(this, preferCronet, network,\n                recoveryStep == 0 ? 8_000 : 4_000,\n                recoveryStep == 0 ? 20_000 : 10_000,\n                recoveryStep, playbackReferer);\n    }''',
+"activate bounded Cronet")
 
-patch(PLAYER,
-'''    private String activeTransportName() {\n        return usingVlc ? "libvlc" : "default-http";\n    }\n''',
-'''    private String activeTransportName() {\n        if (usingVlc) return "libvlc";\n        return recoveryStep == 1 && PlaybackTransportFactory.isCronetReady()\n                ? "cronet" : "default-http";\n    }\n''', "transport diagnostics")
+replace_method(PLAYER,
+"    private String activeTransportName()",
+'''    private String activeTransportName() {\n        if (usingVlc) return "libvlc";\n        return recoveryStep == 1 && PlaybackTransportFactory.isCronetReady()\n                ? "cronet" : "default-http";\n    }''',
+"transport diagnostics")
 
 # Optional resolve failures should never show a fatal dialog while a canonical
 # source is still available.
