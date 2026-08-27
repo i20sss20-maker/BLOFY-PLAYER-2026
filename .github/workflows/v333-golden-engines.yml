@@ -110,27 +110,33 @@ jobs:
         working-directory: BLOFY-ANDROID-2026
         run: ./gradlew --no-daemon assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
 
-      - name: Sign APK with Android v2/v3
+      - name: Sign APK with fixed external test key
         shell: bash
         run: |
           set -euo pipefail
           APK="BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk"
-          KS="$RUNNER_TEMP/blofy-v339.jks"
-          keytool -genkeypair -noprompt -keystore "$KS" -storepass blofy339 -keypass blofy339 -alias blofy -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=BLOFY PLAYER,O=BLOFY,C=SA"
+          KS="$RUNNER_TEMP/BLOFY-PLAYER-STABLE-TEST.jks"
+          PASS="$(openssl rand -hex 18)"
+          keytool -genkeypair -noprompt -keystore "$KS" -storepass "$PASS" -keypass "$PASS" -alias blofy -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=BLOFY PLAYER STABLE TEST,O=BLOFY,C=SA"
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$APKSIGNER"
-          "$APKSIGNER" sign --ks "$KS" --ks-key-alias blofy --ks-pass pass:blofy339 --key-pass pass:blofy339 --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out BLOFY-PLAYER-v339-STABILITY-SIGNED.apk "$APK"
-          "$APKSIGNER" verify --verbose --print-certs BLOFY-PLAYER-v339-STABILITY-SIGNED.apk
-          unzip -t BLOFY-PLAYER-v339-STABILITY-SIGNED.apk
-          unzip -l BLOFY-PLAYER-v339-STABILITY-SIGNED.apk > /tmp/apk-list.txt
+          "$APKSIGNER" sign --ks "$KS" --ks-key-alias blofy --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk "$APK"
+          "$APKSIGNER" verify --verbose --print-certs BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk
+          unzip -t BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk
+          unzip -l BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk > /tmp/apk-list.txt
           grep -q 'libffmpegJNI.so' /tmp/apk-list.txt
-          sha256sum BLOFY-PLAYER-v339-STABILITY-SIGNED.apk > BLOFY-PLAYER-v339-STABILITY-SIGNED.apk.sha256
+          cp "$KS" BLOFY-PLAYER-STABLE-TEST.jks
+          printf '%s\n' "$PASS" > BLOFY-PLAYER-STABLE-TEST.password.txt
+          chmod 600 BLOFY-PLAYER-STABLE-TEST.jks BLOFY-PLAYER-STABLE-TEST.password.txt
+          sha256sum BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk > BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk.sha256
 
-      - name: Upload signed artifact
+      - name: Upload stable external signed artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-PLAYER-v339-STABILITY-SIGNED
+          name: BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED
           path: |
-            BLOFY-PLAYER-v339-STABILITY-SIGNED.apk
-            BLOFY-PLAYER-v339-STABILITY-SIGNED.apk.sha256
+            BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk
+            BLOFY-PLAYER-v339-STABLE-EXTERNAL-SIGNED.apk.sha256
+            BLOFY-PLAYER-STABLE-TEST.jks
+            BLOFY-PLAYER-STABLE-TEST.password.txt
           if-no-files-found: error
