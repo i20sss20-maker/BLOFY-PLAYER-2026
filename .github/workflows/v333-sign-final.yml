@@ -86,8 +86,7 @@ jobs:
           "$BUILD_TOOLS/apksigner" sign --ks /tmp/blofy-v333-sign/BLOFY-PLAYER-PERMANENT-SIGNING.p12 --ks-type PKCS12 --ks-key-alias blofy-player --ks-pass "pass:${PASS}" --key-pass "pass:${PASS}" --out "$OUT" "$ALIGNED"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$OUT" | tee /tmp/blofy-v333-sign/verify.txt
           "$BUILD_TOOLS/zipalign" -c -v 4 "$OUT"
-          CERT="$($BUILD_TOOLS/apksigner verify --print-certs "$OUT" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]')"
-          test "$CERT" = "9661C732B120A103D9883C02F398D7A202A8BCC083DB4305413B61F49BD575B4"
+          grep -Eiq 'certificate SHA-256 digest: 9661c732b120a103d9883c02f398d7a202a8bcc083db4305413b61f49bd575b4' /tmp/blofy-v333-sign/verify.txt
           sha256sum "$OUT" > /tmp/blofy-v333-sign/BLOFY-PLAYER-v333-FINAL-SIGNED.apk.sha256
 
       - name: Upload signed APK
