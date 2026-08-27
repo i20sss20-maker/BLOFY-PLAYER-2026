@@ -41,7 +41,7 @@ jobs:
           python3 tools/apply_v331_transport_manager.py
           python3 tools/apply_v331_compile_fix.py
           python3 tools/apply_v333_full_engines.py
-          grep -q 'versionCode = 333' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'versionCode = 1000333' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'preferredLiveExtension' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java
           grep -q 'المسار العام غير متوافق' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           grep -q 'PlaybackProfileManager' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
