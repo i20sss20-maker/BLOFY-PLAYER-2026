@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAYER = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java"
@@ -90,3 +91,6 @@ for token in ["playbackSessionEpoch", "stale-timeout-ignored", "stale-resolve-ig
         raise SystemExit("v340 session guard invariant missing: " + token)
 
 print("v340 session guard applied: stale timeout/resolve suppression + long-session cleanup")
+
+# Apply the final error-dialog/recovery de-duplication on top of the session epoch layer.
+runpy.run_path(str(ROOT / "tools/apply_v340_error_guard.py"), run_name="__main__")
