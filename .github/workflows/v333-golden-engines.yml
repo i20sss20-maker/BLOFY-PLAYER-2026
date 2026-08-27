@@ -12,6 +12,7 @@ on:
       - "tools/apply_v339_stability.py"
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackRouteMemory.java"
       - "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogUiCache.java"
+      - "BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java"
       - ".github/workflows/v333-golden-engines.yml"
 
 permissions:
@@ -39,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "v339 stability build trigger"
+          echo "v339 stability rebuild after timeout test fix"
           python3 tools/apply_v329_hotfix.py
           python3 tools/apply_v330_hotfix.py
           python3 tools/apply_v330_vod_fix.py
