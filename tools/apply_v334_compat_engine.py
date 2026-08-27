@@ -4,156 +4,87 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player"
 PLAYER = JAVA / "PlayerActivity.java"
+PROFILE = JAVA / "PlaybackProfileManager.java"
 POLICY = JAVA / "PlaybackPolicy.java"
-ROUTES = JAVA / "PlaybackRouteMemory.java"
 
 
-def patch(path, old, new, label):
-    text = path.read_text(encoding="utf-8")
+def read(path):
+    return path.read_text(encoding="utf-8")
+
+
+def write(path, text):
+    path.write_text(text, encoding="utf-8")
+
+
+def replace_once(path, old, new, label):
+    text = read(path)
     if old not in text:
-        raise SystemExit(f"v334 compatibility patch mismatch: {label}")
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        raise SystemExit(f"v334 patch mismatch: {label}")
+    write(path, text.replace(old, new, 1))
 
+# -----------------------------------------------------------------------------
+# 1) Keep the full v331 transport chain, but make LIVE learning per-stream.
+#    Movies/Series deliberately retain provider/content-family learning.
+# -----------------------------------------------------------------------------
+replace_once(PROFILE,
+'''    private static final String KEY_FAIL_PREFIX = "fail:";\n    private static final String KEY_LIVE_EXT_PREFIX = "live_ext:";\n''',
+'''    private static final String KEY_FAIL_PREFIX = "fail:";\n    private static final String KEY_LIVE_EXT_PREFIX = "live_ext:";\n    private static final String KEY_STREAM_MODE_PREFIX = "stream_mode:";\n    private static final String KEY_STREAM_FAIL_PREFIX = "stream_fail:";\n    private static final String KEY_STREAM_EXT_PREFIX = "stream_ext:";\n''', "per-stream preference keys")
 
-def optional_patch(path, old, new, label):
-    text = path.read_text(encoding="utf-8")
-    if old not in text:
-        print(f"v334 optional patch skipped: {label}")
-        return
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+replace_once(PROFILE,
+'''    static String preferredMode(Context context, String kind, String extension) {\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        SharedPreferences prefs = prefs(context);\n        String key = modeKey(playlistId, kind, extension);\n        return prefs.getString(key, MODE_LEGACY);\n    }\n''',
+'''    static String preferredMode(Context context, String kind, String extension) {\n        return preferredMode(context, kind, extension, "");\n    }\n\n    static String preferredMode(Context context, String kind, String extension, String streamId) {\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        SharedPreferences prefs = prefs(context);\n        if ("live".equals(normalizeKind(kind)) && streamId != null && !streamId.isEmpty()) {\n            String streamKey = streamModeKey(playlistId, streamId);\n            String learned = prefs.getString(streamKey, "");\n            if (learned != null && !learned.isEmpty()) return learned;\n        }\n        String key = modeKey(playlistId, kind, extension);\n        return prefs.getString(key, MODE_LEGACY);\n    }\n''', "per-stream preferred mode")
 
+replace_once(PROFILE,
+'''    static void recordSuccess(Context context, String kind, String extension, String mode) {\n        if (mode == null || mode.isEmpty()) return;\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        String key = modeKey(playlistId, kind, extension);\n        SharedPreferences.Editor editor = prefs(context).edit()\n                .putString(key, mode).putInt(KEY_FAIL_PREFIX + key, 0);\n        if ("live".equals(normalizeKind(kind))) {\n            String liveExt = normalizeLiveExtension(extension);\n            if (!liveExt.isEmpty()) editor.putString(KEY_LIVE_EXT_PREFIX + playlistId, liveExt);\n        }\n        editor.apply();\n    }\n''',
+'''    static void recordSuccess(Context context, String kind, String extension, String mode) {\n        recordSuccess(context, kind, extension, "", mode);\n    }\n\n    static void recordSuccess(Context context, String kind, String extension, String streamId, String mode) {\n        if (mode == null || mode.isEmpty()) return;\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        SharedPreferences.Editor editor = prefs(context).edit();\n        if ("live".equals(normalizeKind(kind)) && streamId != null && !streamId.isEmpty()) {\n            String streamKey = streamModeKey(playlistId, streamId);\n            editor.putString(streamKey, mode).putInt(KEY_STREAM_FAIL_PREFIX + streamKey, 0);\n            String liveExt = normalizeLiveExtension(extension);\n            if (!liveExt.isEmpty()) editor.putString(streamExtKey(playlistId, streamId), liveExt);\n        } else {\n            String key = modeKey(playlistId, kind, extension);\n            editor.putString(key, mode).putInt(KEY_FAIL_PREFIX + key, 0);\n            if ("live".equals(normalizeKind(kind))) {\n                String liveExt = normalizeLiveExtension(extension);\n                if (!liveExt.isEmpty()) editor.putString(KEY_LIVE_EXT_PREFIX + playlistId, liveExt);\n            }\n        }\n        editor.apply();\n    }\n''', "per-stream success learning")
 
-def replace_method(path, signature, replacement, label):
-    text = path.read_text(encoding="utf-8")
-    start = text.find(signature)
-    if start < 0:
-        raise SystemExit(f"v334 compatibility method missing: {label}")
-    brace = text.find("{", start)
-    if brace < 0:
-        raise SystemExit(f"v334 compatibility method brace missing: {label}")
-    depth = 0
-    end = -1
-    for i in range(brace, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end < 0:
-        raise SystemExit(f"v334 compatibility method end missing: {label}")
-    path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+replace_once(PROFILE,
+'''    static void recordFailure(Context context, String kind, String extension, String mode) {\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        String key = modeKey(playlistId, kind, extension);\n        SharedPreferences prefs = prefs(context);\n        int failures = prefs.getInt(KEY_FAIL_PREFIX + key, 0) + 1;\n        SharedPreferences.Editor editor = prefs.edit().putInt(KEY_FAIL_PREFIX + key, failures);\n        if (failures >= 2 && mode != null && mode.equals(prefs.getString(key, MODE_LEGACY))) {\n            editor.remove(key).putInt(KEY_FAIL_PREFIX + key, 0);\n        }\n        editor.apply();\n    }\n''',
+'''    static void recordFailure(Context context, String kind, String extension, String mode) {\n        recordFailure(context, kind, extension, "", mode);\n    }\n\n    static void recordFailure(Context context, String kind, String extension, String streamId, String mode) {\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        SharedPreferences prefs = prefs(context);\n        if ("live".equals(normalizeKind(kind)) && streamId != null && !streamId.isEmpty()) {\n            String key = streamModeKey(playlistId, streamId);\n            int failures = prefs.getInt(KEY_STREAM_FAIL_PREFIX + key, 0) + 1;\n            SharedPreferences.Editor editor = prefs.edit().putInt(KEY_STREAM_FAIL_PREFIX + key, failures);\n            if (failures >= 2 && mode != null && mode.equals(prefs.getString(key, ""))) {\n                editor.remove(key).remove(streamExtKey(playlistId, streamId))\n                        .putInt(KEY_STREAM_FAIL_PREFIX + key, 0);\n            }\n            editor.apply();\n            return;\n        }\n        String key = modeKey(playlistId, kind, extension);\n        int failures = prefs.getInt(KEY_FAIL_PREFIX + key, 0) + 1;\n        SharedPreferences.Editor editor = prefs.edit().putInt(KEY_FAIL_PREFIX + key, failures);\n        if (failures >= 2 && mode != null && mode.equals(prefs.getString(key, MODE_LEGACY))) {\n            editor.remove(key).putInt(KEY_FAIL_PREFIX + key, 0);\n        }\n        editor.apply();\n    }\n''', "per-stream failure learning")
 
-# Persistent per-stream route memory. This is deliberately more specific than
-# provider-wide memory because real Xtream playlists can mix TS/HLS/codecs.
-ROUTES.write_text(r'''package tv.blofy.player;
+replace_once(PROFILE,
+'''    static String preferredLiveExtension(Context context, String fallback) {\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        String learned = prefs(context).getString(KEY_LIVE_EXT_PREFIX + playlistId, "");\n        return learned == null || learned.isEmpty() ? fallback : learned;\n    }\n''',
+'''    static String preferredLiveExtension(Context context, String fallback) {\n        return preferredLiveExtension(context, "", fallback);\n    }\n\n    static String preferredLiveExtension(Context context, String streamId, String fallback) {\n        PlaylistStore store = new PlaylistStore(context);\n        String playlistId = activePlaylistId(store);\n        SharedPreferences prefs = prefs(context);\n        if (streamId != null && !streamId.isEmpty()) {\n            String streamExt = prefs.getString(streamExtKey(playlistId, streamId), "");\n            if (streamExt != null && !streamExt.isEmpty()) return streamExt;\n        }\n        String learned = prefs.getString(KEY_LIVE_EXT_PREFIX + playlistId, "");\n        return learned == null || learned.isEmpty() ? fallback : learned;\n    }\n''', "per-stream live extension")
 
-import android.content.Context;
-import android.content.SharedPreferences;
+replace_once(PROFILE,
+'''    private static String modeKey(String playlistId, String kind, String extension) {\n        return KEY_MODE_PREFIX + playlistId + ":" + normalizeKind(kind) + ":" + family(extension);\n    }\n''',
+'''    private static String modeKey(String playlistId, String kind, String extension) {\n        return KEY_MODE_PREFIX + playlistId + ":" + normalizeKind(kind) + ":" + family(extension);\n    }\n\n    private static String streamModeKey(String playlistId, String streamId) {\n        return KEY_STREAM_MODE_PREFIX + playlistId + ":live:" + streamId;\n    }\n\n    private static String streamExtKey(String playlistId, String streamId) {\n        return KEY_STREAM_EXT_PREFIX + playlistId + ":live:" + streamId;\n    }\n''', "per-stream key helpers")
 
-import java.util.Locale;
+replace_once(PROFILE,
+'''            if (key.startsWith(KEY_MODE_PREFIX + playlistId + ":")\n                    || key.startsWith(KEY_FAIL_PREFIX + KEY_MODE_PREFIX + playlistId + ":")\n                    || key.equals(KEY_LIVE_EXT_PREFIX + playlistId)) {\n                editor.remove(key);\n            }\n''',
+'''            if (key.startsWith(KEY_MODE_PREFIX + playlistId + ":")\n                    || key.startsWith(KEY_FAIL_PREFIX + KEY_MODE_PREFIX + playlistId + ":")\n                    || key.startsWith(KEY_STREAM_MODE_PREFIX + playlistId + ":")\n                    || key.startsWith(KEY_STREAM_FAIL_PREFIX + KEY_STREAM_MODE_PREFIX + playlistId + ":")\n                    || key.startsWith(KEY_STREAM_EXT_PREFIX + playlistId + ":")\n                    || key.equals(KEY_LIVE_EXT_PREFIX + playlistId)) {\n                editor.remove(key);\n            }\n''', "clear per-stream profile")
 
-/** Remembers a proven playback route for one playlist + media kind + stream id. */
-final class PlaybackRouteMemory {
-    private static final String PREFS = "blofy_playback_routes_v1";
-    private static final String EXT = "ext:";
-    private static final String STEP = "step:";
+# PlayerActivity: preserve v331's transportMode state machine, only scope LIVE
+# learning to the current stream id.
+replace_once(PLAYER,
+'''        transportMode = PlaybackProfileManager.preferredMode(this, kind, extension);\n        recoveryStep = preferredRecoveryStep();\n''',
+'''        transportMode = PlaybackProfileManager.preferredMode(this, kind, extension, id);\n        recoveryStep = preferredRecoveryStep();\n''', "initial per-stream transport")
 
-    private PlaybackRouteMemory() {}
+# Occurs on live switch and manual retry. Replace every remaining exact call.
+player = read(PLAYER)
+player = player.replace(
+    'transportMode = PlaybackProfileManager.preferredMode(this, kind, extension);',
+    'transportMode = PlaybackProfileManager.preferredMode(this, kind, extension, id);')
+player = player.replace(
+    'PlaybackProfileManager.recordSuccess(this, kind, extension, activeTransportName());',
+    'PlaybackProfileManager.recordSuccess(this, kind, extension, id, activeTransportName());')
+player = player.replace(
+    'PlaybackProfileManager.recordFailure(this, kind, extension, transportMode);',
+    'PlaybackProfileManager.recordFailure(this, kind, extension, id, transportMode);')
+player = player.replace(
+    'PlaybackProfileManager.recordSuccess(this, kind, extension, PlaybackProfileManager.MODE_VLC);',
+    'PlaybackProfileManager.recordSuccess(this, kind, extension, id, PlaybackProfileManager.MODE_VLC);')
+player = player.replace(
+    'return PlaybackProfileManager.preferredLiveExtension(this, candidate);',
+    'return PlaybackProfileManager.preferredLiveExtension(this, id, candidate);')
+write(PLAYER, player)
 
-    private static SharedPreferences prefs(Context context) {
-        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-    }
-
-    private static String playlist(Context context) {
-        try {
-            PlaylistStore store = new PlaylistStore(context);
-            String id = store.activeId();
-            return id == null || id.trim().isEmpty() ? "default" : id.trim();
-        } catch (Throwable ignored) {
-            return "default";
-        }
-    }
-
-    private static String key(Context context, String kind, String streamId) {
-        String safeKind = kind == null ? "unknown" : kind.trim().toLowerCase(Locale.US);
-        String safeId = streamId == null ? "" : streamId.trim();
-        return playlist(context) + ":" + safeKind + ":" + safeId;
-    }
-
-    static String preferredLiveExtension(Context context, String streamId, String fallback) {
-        String value = prefs(context).getString(EXT + key(context, "live", streamId), "");
-        return value == null || value.isEmpty() ? fallback : value;
-    }
-
-    static int preferredRecoveryStep(Context context, String kind, String streamId) {
-        int step = prefs(context).getInt(STEP + key(context, kind, streamId), 0);
-        return step == 1 ? 1 : 0;
-    }
-
-    static void recordSuccess(Context context, String kind, String streamId,
-                              String extension, String transport) {
-        if (streamId == null || streamId.trim().isEmpty()) return;
-        String routeKey = key(context, kind, streamId);
-        SharedPreferences.Editor editor = prefs(context).edit();
-        if ("live".equals(kind)) {
-            String ext = PlaybackPolicy.normalizeExtension(extension, "");
-            if ("ts".equals(ext) || "m3u8".equals(ext)) editor.putString(EXT + routeKey, ext);
-        }
-        editor.putInt(STEP + routeKey, "cronet".equals(transport) ? 1 : 0).apply();
-    }
-}
-''', encoding="utf-8")
-
-patch(PLAYER,
-'''    private boolean warmLiveSwitchPending;\n    private boolean vlcSubtitlePreferenceApplied;\n''',
-'''    private boolean warmLiveSwitchPending;\n    private boolean vlcSubtitlePreferenceApplied;\n    private boolean alternateLiveAttempted;\n    private boolean containerSniffAttempted;\n''', "compatibility state flags")
-
-replace_method(PLAYER,
-"    private String configuredExtension(String candidate)",
-'''    private String configuredExtension(String candidate) {\n        if (!isLiveKind(kind)) return candidate;\n        String mode = playerSetting(SettingsActivity.KEY_STREAM, "auto");\n        if ("ts".equals(mode)) return "ts";\n        if ("hls".equals(mode)) return "m3u8";\n        String itemRoute = PlaybackRouteMemory.preferredLiveExtension(this, id, "");\n        if (!itemRoute.isEmpty()) return itemRoute;\n        return PlaybackProfileManager.preferredLiveExtension(this, candidate);\n    }''',
-"per-stream live extension memory")
-
-replace_method(PLAYER,
-"    private int preferredRecoveryStep()",
-'''    private int preferredRecoveryStep() {\n        return PlaybackRouteMemory.preferredRecoveryStep(this, kind, id);\n    }''',
-"per-stream transport memory")
-
-replace_method(PLAYER,
-"    private void rememberSuccessfulTransport()",
-'''    private void rememberSuccessfulTransport() {\n        PlaybackRouteMemory.recordSuccess(this, kind, id, extension, activeTransportName());\n        PlaybackProfileManager.recordSuccess(this, kind, extension, activeTransportName());\n    }''',
-"persist successful route")
-
-replace_method(PLAYER,
-"    private DataSource.Factory createDataSourceFactory()",
-'''    private DataSource.Factory createDataSourceFactory() {\n        boolean preferCronet = recoveryStep == 1 && PlaybackTransportFactory.isCronetReady();\n        return PlaybackTransportFactory.create(this, preferCronet, network,\n                recoveryStep == 0 ? 8_000 : 4_000,\n                recoveryStep == 0 ? 20_000 : 10_000,\n                recoveryStep, playbackReferer);\n    }''',
-"activate bounded Cronet")
-
-replace_method(PLAYER,
-"    private String activeTransportName()",
-'''    private String activeTransportName() {\n        if (usingVlc) return "libvlc";\n        return recoveryStep == 1 && PlaybackTransportFactory.isCronetReady()\n                ? "cronet" : "default-http";\n    }''',
-"transport diagnostics")
-
-optional_patch(PLAYER,
-'''                    warmLiveSwitchPending = false;\n                    if ("direct".equals(requestedVariant) && restoreCanonicalSource()) {\n                        if (lifecycleStarted) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n                    showResolveError(PlaybackPolicy.resolveErrorMessage(error));\n''',
-'''                    warmLiveSwitchPending = false;\n                    if (("direct".equals(requestedVariant) || alternateLiveAttempted)\n                            && restoreCanonicalSource()) {\n                        if (lifecycleStarted) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n                    showResolveError(PlaybackPolicy.resolveErrorMessage(error));\n''', "silent optional resolve fallback")
-
-replace_method(PLAYER,
-"    private void recoverFromFailure(String reason)",
-'''    private void recoverFromFailure(String reason) {\n        if (isFinishing() || isDestroyed()) return;\n        playbackHandler.removeCallbacks(playbackTimeout);\n        playbackHandler.removeCallbacks(markPlaybackStable);\n\n        if (usingVlc) {\n            showPlaybackFailure(reason);\n            return;\n        }\n\n        Log.w(TAG, "adaptive-recovery reason=" + reason + " ext=" + extension\n                + " variant=" + sourceVariant + " uhd=" + isUltraHd()\n                + " transport=" + activeTransportName());\n\n        if (PlaybackPolicy.isNetworkFailure(reason)\n                && !PlaybackPolicy.isStartupTimeout(reason)\n                && "canonical".equals(sourceVariant) && !id.isEmpty()) {\n            releasePlayer();\n            sourceVariant = "direct";\n            recoveryStep = 1;\n            url = null;\n            resolvePlaybackLink();\n            return;\n        }\n\n        if (isLive() && !alternateLiveAttempted && !id.isEmpty()) {\n            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            alternateLiveAttempted = true;\n            releasePlayer();\n            extension = PlaybackPolicy.alternateLiveExtension(extension);\n            sourceVariant = "canonical";\n            recoveryStep = 1;\n            url = null;\n            resolvePlaybackLink();\n            return;\n        }\n\n        if (!isLive() && !containerSniffAttempted && validUrl(url)) {\n            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            containerSniffAttempted = true;\n            sourceVariant = "no-extension";\n            recoveryStep = 1;\n            releaseMedia3Player();\n            firstFrameRendered = false;\n            initializePlayer();\n            return;\n        }\n\n        if (!vlcAttempted) {\n            recoveryStep = 2;\n            if (isLive() && alternateLiveAttempted) restoreCanonicalSource();\n            else if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n            openVlc(reason);\n            return;\n        }\n\n        showPlaybackFailure(reason);\n    }''',
-"four-stage recovery state machine")
-
-patch(PLAYER,
-'''    private void switchLiveChannel(BlofyModels.Media media) {\n        if (!isLive() || media == null || media.id.equals(id)) return;\n''',
-'''    private void switchLiveChannel(BlofyModels.Media media) {\n        if (!isLive() || media == null || media.id.equals(id)) return;\n        alternateLiveAttempted = false;\n        containerSniffAttempted = false;\n''', "reset on channel switch")
-
-optional_patch(PLAYER,
-'''    private void manualRetry() {\n        recoveryStep = preferredRecoveryStep();\n        vlcAttempted = false;\n        sourceVariant = "canonical";\n''',
-'''    private void manualRetry() {\n        recoveryStep = preferredRecoveryStep();\n        vlcAttempted = false;\n        alternateLiveAttempted = false;\n        containerSniffAttempted = false;\n        sourceVariant = "canonical";\n''', "manual retry reset")
-
-patch(POLICY,
+# -----------------------------------------------------------------------------
+# 2) DNS/hostname failures are hard network failures: move immediately to the
+#    next route instead of waiting for the startup watchdog.
+# -----------------------------------------------------------------------------
+replace_once(POLICY,
 '''        return value.contains("HTTP") || value.contains("IO_") || value.contains("NETWORK")\n                || value.contains("CONNECTION") || value.contains("TIMEOUT")\n                || value.contains("BAD_HTTP_STATUS");\n''',
 '''        return value.contains("HTTP") || value.contains("IO_") || value.contains("NETWORK")\n                || value.contains("CONNECTION") || value.contains("TIMEOUT")\n                || value.contains("BAD_HTTP_STATUS") || value.contains("EAI_NODATA")\n                || value.contains("DNS") || value.contains("UNKNOWNHOST")\n                || value.contains("UNKNOWN_HOST") || value.contains("NO ADDRESS ASSOCIATED")\n                || value.contains("UNABLE TO RESOLVE HOST");\n''', "DNS fast failure")
 
-print("v334 compatibility engine applied: per-stream memory + first-frame Live + TS/HLS + VOD sniff + Cronet + DNS fast-failure + LibVLC")
+print("v334 applied: full v331 transport chain preserved + per-stream Live learning + DNS fast-failure")
