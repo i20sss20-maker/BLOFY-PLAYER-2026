@@ -1,0 +1,106 @@
+name: Sign BLOFY v333 FINAL
+
+on:
+  push:
+    branches: [v333-from-golden-v331]
+    paths:
+      - ".github/workflows/v333-sign-final.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: v333-from-golden-v331
+
+      - name: Generate one-time transport key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/blofy-v333-sign .ci
+          rm -f .ci/v333-sign-public.pem .ci/v333-sign-payload.b64 .ci/v333-sign-key.b64
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/blofy-v333-sign/private.pem
+          openssl pkey -in /tmp/blofy-v333-sign/private.pem -pubout -out .ci/v333-sign-public.pem
+          git config user.name "blofy-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add .ci/v333-sign-public.pem
+          git commit -m "ci: publish one-time v333 signing public key"
+          git push origin HEAD:v333-from-golden-v331
+
+      - name: Wait for encrypted signing payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 180); do
+            git fetch origin v333-from-golden-v331 >/dev/null 2>&1 || true
+            git checkout origin/v333-from-golden-v331 -- .ci/v333-sign-payload.b64 .ci/v333-sign-key.b64 2>/dev/null || true
+            if [ -s .ci/v333-sign-payload.b64 ] && [ -s .ci/v333-sign-key.b64 ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for encrypted payload" >&2
+          exit 1
+
+      - name: Decrypt permanent BLOFY signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .ci/v333-sign-key.b64 > /tmp/blofy-v333-sign/key.enc
+          openssl pkeyutl -decrypt -inkey /tmp/blofy-v333-sign/private.pem -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in /tmp/blofy-v333-sign/key.enc -out /tmp/blofy-v333-sign/aes.key
+          base64 -d .ci/v333-sign-payload.b64 > /tmp/blofy-v333-sign/payload.enc
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass file:/tmp/blofy-v333-sign/aes.key -in /tmp/blofy-v333-sign/payload.enc -out /tmp/blofy-v333-sign/payload.tar
+          tar -xf /tmp/blofy-v333-sign/payload.tar -C /tmp/blofy-v333-sign
+          test -s /tmp/blofy-v333-sign/BLOFY-PLAYER-PERMANENT-SIGNING.p12
+          test -s /tmp/blofy-v333-sign/BLOFY-RELEASE-KEY-PASSWORD.secret
+
+      - name: Download successful unsigned v333 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/blofy-v333-sign/unsigned
+          gh run download 33025029468 -n BLOFY-PLAYER-v333-GOLDEN-UNSIGNED -D /tmp/blofy-v333-sign/unsigned
+          test -s /tmp/blofy-v333-sign/unsigned/BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk
+
+      - name: Zipalign sign and verify permanent certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          PASS="$(cat /tmp/blofy-v333-sign/BLOFY-RELEASE-KEY-PASSWORD.secret | tr -d '\r\n')"
+          IN=/tmp/blofy-v333-sign/unsigned/BLOFY-PLAYER-v333-GOLDEN-UNSIGNED.apk
+          ALIGNED=/tmp/blofy-v333-sign/BLOFY-PLAYER-v333-aligned.apk
+          OUT=/tmp/blofy-v333-sign/BLOFY-PLAYER-v333-FINAL-SIGNED.apk
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$IN" "$ALIGNED"
+          "$BUILD_TOOLS/apksigner" sign --ks /tmp/blofy-v333-sign/BLOFY-PLAYER-PERMANENT-SIGNING.p12 --ks-type PKCS12 --ks-key-alias blofy-player --ks-pass "pass:${PASS}" --key-pass "pass:${PASS}" --out "$OUT" "$ALIGNED"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$OUT" | tee /tmp/blofy-v333-sign/verify.txt
+          "$BUILD_TOOLS/zipalign" -c -v 4 "$OUT"
+          CERT="$($BUILD_TOOLS/apksigner verify --print-certs "$OUT" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]')"
+          test "$CERT" = "9661C732B120A103D9883C02F398D7A202A8BCC083DB4305413B61F49BD575B4"
+          sha256sum "$OUT" > /tmp/blofy-v333-sign/BLOFY-PLAYER-v333-FINAL-SIGNED.apk.sha256
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOFY-PLAYER-v333-FINAL-SIGNED
+          path: |
+            /tmp/blofy-v333-sign/BLOFY-PLAYER-v333-FINAL-SIGNED.apk
+            /tmp/blofy-v333-sign/BLOFY-PLAYER-v333-FINAL-SIGNED.apk.sha256
+            /tmp/blofy-v333-sign/verify.txt
+          if-no-files-found: error
+
+      - name: Cleanup signing files
+        if: always()
+        shell: bash
+        run: rm -rf /tmp/blofy-v333-sign
