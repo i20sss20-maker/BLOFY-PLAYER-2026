@@ -52,10 +52,9 @@ jobs:
           python3 tools/apply_v337_vod_compat.py
           grep -q 'versionCode = 1000333' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'preferredLiveExtension' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java
-          grep -q 'PlaybackRouteMemory' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'alternateLiveAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'containerSniffAttempted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'preferCronet = recoveryStep == 1' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'PlaybackRouteMemory.preferredMode' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'MODE_CRONET.equals(transportMode)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'liveAlternateTried' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'EAI_NODATA' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
           grep -q 'LIVE_PAGE = 72' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'POSTER_PAGE = 48' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
