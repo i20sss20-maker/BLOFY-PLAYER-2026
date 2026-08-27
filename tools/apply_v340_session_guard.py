@@ -57,10 +57,11 @@ replace_once(
 '''        int epoch = ++liveSwitchEpoch;\n        playbackSessionEpoch++;\n        playbackHandler.removeCallbacks(playbackTimeout);\n''',
 "live switch session bump")
 
-# A manual retry is a brand-new session too; invalidate old resolver/player work first.
+# A manual retry is a brand-new session too. Patch only the method opening so this
+# remains compatible with diagnostic/manual-retry body changes from prior layers.
 replace_once(
-'''    private void manualRetry() {\n        recoveryStep = preferredRecoveryStep();\n''',
-'''    private void manualRetry() {\n        playbackSessionEpoch++;\n        cancelResolve(true);\n        recoveryStep = preferredRecoveryStep();\n''',
+'''    private void manualRetry() {\n''',
+'''    private void manualRetry() {\n        playbackSessionEpoch++;\n        cancelResolve(true);\n''',
 "manual retry cleanup")
 
 # Leaving the player must invalidate all pending UI callbacks before releasing engines.
