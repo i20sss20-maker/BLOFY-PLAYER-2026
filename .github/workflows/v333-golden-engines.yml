@@ -6,7 +6,6 @@ on:
     branches: [v333-from-golden-v331]
     paths:
       - "tools/apply_v333_full_engines.py"
-      - "tools/apply_v333_safe_provider_compat.py"
       - "tools/apply_v334_compat_engine.py"
       - ".github/workflows/v333-golden-engines.yml"
 
@@ -43,7 +42,6 @@ jobs:
           python3 tools/apply_v331_transport_manager.py
           python3 tools/apply_v331_compile_fix.py
           python3 tools/apply_v333_full_engines.py
-          python3 tools/apply_v333_safe_provider_compat.py
           python3 tools/apply_v334_compat_engine.py
           grep -q 'versionCode = 1000333' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'preferredLiveExtension' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackProfileManager.java
