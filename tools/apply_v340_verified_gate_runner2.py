@@ -12,7 +12,7 @@ end = source.find(end_marker)
 if start < 0 or end < 0 or end <= start:
     raise SystemExit('runner2: cached gate section not found')
 
-replacement = r'''# 1) Cached catalog must still pass the verified 3/3 gate before entering.
+replacement = r"""# 1) Cached catalog must still pass the verified 3/3 gate before entering.
 text = PACKAGE.read_text(encoding="utf-8")
 block_start = text.find('        if (sourceIdentity.equals(activeSource)')
 block_end = text.find('        emit(12, "تحليل الخادم"', block_start)
@@ -54,6 +54,6 @@ elif '!preflight.accepted()' not in text:
     raise SystemExit('verified runner: post-import strict gate not found')
 PACKAGE.write_text(text, encoding="utf-8")
 
-'''
+"""
 source = source[:start] + replacement + source[end:]
 exec(compile(source, str(RUNNER), 'exec'), {"__name__": "__main__", "__file__": str(RUNNER)})
