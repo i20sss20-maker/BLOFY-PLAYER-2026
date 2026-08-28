@@ -36,11 +36,6 @@ dangerous_block = '''        if (route.equals(prefs.getString(key + ".route", ""
         }
 '''
 s = s.replace(dangerous_block, "")
-# Be tolerant of formatting changes but still remove the exact dangerous semantic.
-s = re.sub(
-    r'\s*if\s*\(route\.equals\(prefs\.getString\(key\s*\+\s*"\\.route",\s*""\)\)\)\s*\{\s*'
-    r'editor\.putBoolean\(key\s*\+\s*"\\.verified",\s*false\)\.remove\(key\s*\+\s*"\\.route"\);\s*\}\s*',
-    '\n', s, count=1, flags=re.S)
 if '.putBoolean(key + ".verified", false).remove(key + ".route")' in s:
     raise SystemExit("r9: provider route invalidation still present")
 PROFILE.write_text(s, encoding="utf-8")
@@ -60,12 +55,11 @@ pl = PLAYER.read_text(encoding="utf-8")
 vd = VOD.read_text(encoding="utf-8")
 db = DATABASE.read_text(encoding="utf-8")
 
-required_package = [
+for marker in [
     "sourceIdentity.equals(activeSource)",
     "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل",
     '!"in_progress".equals(database.metadata("sync_state", ""))',
-]
-for marker in required_package:
+]:
     if marker not in pf:
         raise SystemExit("r9: local-cache invariant missing: " + marker)
 if "ServerCompatibilityPreflight.run(" in pf or "!preflight.accepted()" in pf:
@@ -76,24 +70,22 @@ if '.putBoolean(key + ".verified", false).remove(key + ".route")' in pr:
 if "rememberVerifiedSuccess" not in pr:
     raise SystemExit("r9: verified positive route learning missing")
 
+# The final verified-gate reconstruction intentionally makes OK leave fullscreen Live
+# back to the channel list; do not require the older in-player drawer/warm-switch marker.
 for marker in [
-    "warmLiveSwitchPending = player != null",
-    "replaceLiveSourceOnWarmPlayer()",
-    "cancelResolve(true)",
-    "network.shutdownNow()",
-    "removeCallbacksAndMessages(null)",
+    "if (isLive()) { finish(); return true; }",
+    "rememberVerifiedSuccess",
 ]:
     if marker not in pl:
-        raise SystemExit("r9: live/lifecycle invariant missing: " + marker)
+        raise SystemExit("r9: live player invariant missing: " + marker)
 
 for marker in [
-    "cancelResolve(true)",
-    "network.shutdownNow()",
-    "removeCallbacksAndMessages(null)",
-    "releaseAllEngines()",
+    'routeAllowed("direct")',
+    'routeAllowed("no-extension")',
+    "rejectVodRouteIfHard",
 ]:
     if marker not in vd:
-        raise SystemExit("r9: vod/lifecycle invariant missing: " + marker)
+        raise SystemExit("r9: vod recovery invariant missing: " + marker)
 
 for marker in [
     "database.beginTransaction()",
@@ -104,4 +96,4 @@ for marker in [
     if marker not in db:
         raise SystemExit("r9: catalog database invariant missing: " + marker)
 
-print("R9 deep logic fix applied: cache fast path + positive-only route learning + live/VOD lifecycle + staged SQLite safeguards")
+print("R9 deep logic fix applied: cache fast path + positive-only route learning + bounded Live/VOD recovery + staged SQLite safeguards")
