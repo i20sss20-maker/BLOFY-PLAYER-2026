@@ -14,13 +14,6 @@ def patch(path: Path, old: str, new: str, label: str):
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
-# -----------------------------------------------------------------------------
-# Full-screen/live player: after canonical resolves once, reuse the last proven
-# provider route (direct or no-extension). If that learned route is no longer valid,
-# immediately fall back to the cached canonical URL instead of burning another long
-# startup timeout. Successful first-frame reporting from v340_full already persists
-# sourceVariant through ServerPlaybackProfile.rememberSuccess(...).
-# -----------------------------------------------------------------------------
 patch(
     PLAYER,
     '''    private boolean isLive() { return isLiveKind(kind); }\n''',
@@ -61,23 +54,15 @@ patch(
     '''                    if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n''',
     "player resolve canonical fallback")
 
+# error_guard may insert recoveryInProgress reset immediately before recoveryStep;
+# replace the route test itself rather than the surrounding recovery block.
 patch(
     PLAYER,
-    '''            recoveryStep = 2;\n'''
-    '''            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n'''
-    '''            openVlc(reason);\n''',
-    '''            recoveryStep = 2;\n'''
-    '''            if (learnedAlternateVariant(sourceVariant)) restoreCanonicalSource();\n'''
-    '''            openVlc(reason);\n''',
+    '''            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n''',
+    '''            if (learnedAlternateVariant(sourceVariant)) restoreCanonicalSource();\n''',
     "player playback canonical fallback")
 
 
-# -----------------------------------------------------------------------------
-# Dedicated VOD player: v337 already has direct/no-extension recovery, but it only
-# remembered transport. Persist the source route per provider host too, replay it
-# after the cheap canonical resolve, and fall back to canonical Media3 immediately
-# when the learned alternate route stops working.
-# -----------------------------------------------------------------------------
 patch(
     VOD,
     '''    private boolean restoreCanonicalSource() {\n''',
@@ -118,23 +103,19 @@ patch(
     '''                    if (!lifecycleStopped) openMedia3();\n''',
     "apply learned VOD route")
 
-# v337 has already broadened this to direct OR no-extension. Replace that final form.
-patch(
-    VOD,
-    '''                    if (("direct".equals(requestedVariant) || "no-extension".equals(requestedVariant))\n'''
-    '''                            && restoreCanonicalSource()) {\n'''
-    '''                        if (!lifecycleStopped) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n'''
-    '''                        return;\n'''
-    '''                    }\n''',
-    '''                    if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n'''
-    '''                        attempt = 0;\n'''
-    '''                        if (!lifecycleStopped) openMedia3();\n'''
-    '''                        return;\n'''
-    '''                    }\n''',
-    "VOD resolve canonical Media3 fallback")
+# v337 may or may not have broadened this catch in an earlier layer. Normalize either
+# final form to canonical Media3 fallback.
+vod_text = VOD.read_text(encoding="utf-8")
+old_broad = '''                    if (("direct".equals(requestedVariant) || "no-extension".equals(requestedVariant))\n                            && restoreCanonicalSource()) {\n                        if (!lifecycleStopped) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n'''
+old_direct = '''                    if ("direct".equals(requestedVariant) && restoreCanonicalSource()) {\n                        if (!lifecycleStopped) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n'''
+new_catch = '''                    if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n                        attempt = 0;\n                        if (!lifecycleStopped) openMedia3();\n                        return;\n                    }\n'''
+if old_broad in vod_text:
+    VOD.write_text(vod_text.replace(old_broad, new_catch, 1), encoding="utf-8")
+elif old_direct in vod_text:
+    VOD.write_text(vod_text.replace(old_direct, new_catch, 1), encoding="utf-8")
+else:
+    raise SystemExit("v340 route-learning patch mismatch in VodPlayerActivity.java: VOD resolve canonical fallback")
 
-# When an already-resolved learned route fails during playback, retry canonical once
-# before continuing into the existing direct/no-extension/LibVLC recovery ladder.
 patch(
     VOD,
     '''        boolean networkFailure = PlaybackPolicy.isNetworkFailure(reason)\n'''
@@ -154,7 +135,6 @@ patch(
     '''        }\n\n''',
     "VOD playback canonical fallback")
 
-# v337 first-frame block already records PlaybackRouteMemory and PlaybackProfileManager.
 patch(
     VOD,
     '''        PlaybackProfileManager.recordSuccess(this, kind, extension,\n'''
