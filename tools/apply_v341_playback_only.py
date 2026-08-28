@@ -268,6 +268,16 @@ replace_once(transport,
 
 player = JAVA / "PlayerActivity.java"
 replace_once(player,
+'''                String resolvedExtension = configuredExtension(PlaybackPolicy.normalizeExtension(
+                        data.optString("extension", requestedExtension), requestedExtension));
+''',
+'''                // The requested extension was already configured before resolve.
+                // Respect the actual resolver result here so a TS/HLS alternate is
+                // not overwritten by the old per-channel preference that just failed.
+                String resolvedExtension = PlaybackPolicy.normalizeExtension(
+                        data.optString("extension", requestedExtension), requestedExtension);
+''', "resolver owns actual live extension")
+replace_once(player,
 '''                    if (isLive() && "auto".equals(playerSetting(SettingsActivity.KEY_STREAM, "auto"))) {
                         ServerPlaybackProfile.Profile profile = ServerPlaybackProfile.load(this, url);
                         if (profile.fresh() && !profile.preferredLiveExtension.isEmpty()) {
