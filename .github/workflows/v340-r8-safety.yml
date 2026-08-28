@@ -65,6 +65,8 @@ jobs:
           VOD=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           PREVIEW=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/LivePreviewController.java
           ! grep -q 'ServerCompatibilityPreflight.run(' "$PACKAGE"
+          ! grep -q 'preflight\.' "$PACKAGE"
+          ! grep -q 'cachedGate' "$PACKAGE"
           grep -q 'blofy_server_playback_profiles_v3' "$PROFILE"
           grep -q 'route-rejected-local' "$PROFILE"
           grep -q 'if (isLive()) { finish(); return true; }' "$PLAYER"
