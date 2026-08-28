@@ -34,8 +34,6 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void startupTimeoutsAreBoundedForFastFallback() {
-        // v340 final compatibility core: faster first decision, short learned-route
-        // retry, and separate bounded windows for normal/UHD VOD and LibVLC.
         assertEquals(5_000, PlaybackPolicy.startupTimeoutMs(0));
         assertEquals(2_500, PlaybackPolicy.startupTimeoutMs(1));
         assertEquals(6_500, PlaybackPolicy.vodStartupTimeoutMs(false));
@@ -55,6 +53,15 @@ public final class PlaybackPolicyTest {
     }
 
     @Test
+    public void hardRouteFailuresRejectKnownDeadRoutes() {
+        assertTrue(PlaybackPolicy.isHardRouteFailure("HTTP 404"));
+        assertTrue(PlaybackPolicy.isHardRouteFailure("HTTP 551"));
+        assertTrue(PlaybackPolicy.isHardRouteFailure("provider HTTP410"));
+        assertFalse(PlaybackPolicy.isHardRouteFailure("HTTP 429"));
+        assertFalse(PlaybackPolicy.isHardRouteFailure("verification-timeout"));
+    }
+
+    @Test
     public void liveFallbackSwitchesBetweenTsAndHls() {
         assertEquals("m3u8", PlaybackPolicy.alternateLiveExtension("ts"));
         assertEquals("ts", PlaybackPolicy.alternateLiveExtension("m3u8"));
@@ -71,5 +78,4 @@ public final class PlaybackPolicyTest {
         assertEquals("رسالة الخادم",
                 PlaybackPolicy.resolveErrorMessage(new Exception("رسالة الخادم")));
     }
-
 }
