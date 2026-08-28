@@ -34,14 +34,15 @@ public final class PlaybackPolicyTest {
 
     @Test
     public void startupTimeoutsAreBoundedForFastFallback() {
-        // v339 keeps the first attempt stable and shortens only compatibility fallback.
-        assertEquals(5_500, PlaybackPolicy.startupTimeoutMs(0));
+        // v340 final compatibility core: faster first decision, short learned-route
+        // retry, and separate bounded windows for normal/UHD VOD and LibVLC.
+        assertEquals(5_000, PlaybackPolicy.startupTimeoutMs(0));
         assertEquals(2_500, PlaybackPolicy.startupTimeoutMs(1));
-        assertEquals(8_000, PlaybackPolicy.vodStartupTimeoutMs(false));
-        assertEquals(11_000, PlaybackPolicy.vodStartupTimeoutMs(true));
-        assertEquals(7_000, PlaybackPolicy.vlcStartupTimeoutMs(false));
-        assertEquals(10_000, PlaybackPolicy.vlcStartupTimeoutMs(true));
-        assertEquals(5_000, PlaybackPolicy.PREVIEW_STARTUP_TIMEOUT_MS);
+        assertEquals(6_500, PlaybackPolicy.vodStartupTimeoutMs(false));
+        assertEquals(9_000, PlaybackPolicy.vodStartupTimeoutMs(true));
+        assertEquals(5_500, PlaybackPolicy.vlcStartupTimeoutMs(false));
+        assertEquals(8_000, PlaybackPolicy.vlcStartupTimeoutMs(true));
+        assertEquals(3_500, PlaybackPolicy.PREVIEW_STARTUP_TIMEOUT_MS);
     }
 
     @Test
