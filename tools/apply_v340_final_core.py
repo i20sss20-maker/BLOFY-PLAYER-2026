@@ -47,8 +47,7 @@ final class ServerCompatibilityPreflight {
 
     static Result run(Context context, BlofyApi api, CatalogDatabase database, String playlistId) {
         StringBuilder report = new StringBuilder(2048);
-        report.append("BLOFY Server Compatibility Preflight\nplaylist=")
-                .append(safe(playlistId)).append('\n');
+        report.append("BLOFY Server Compatibility Preflight\nplaylist=").append(safe(playlistId)).append('\n');
         int[] live = testFamily(context, api, database, "live", report);
         int[] movies = testFamily(context, api, database, "movies", report);
         int[] series = testFamily(context, api, database, "series", report);
@@ -61,8 +60,7 @@ final class ServerCompatibilityPreflight {
         report.append("summary=").append(summary).append('\n');
         String key = key(playlistId);
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString(key + ":summary", summary)
-                .putString(key + ":report", report.toString())
+                .putString(key + ":summary", summary).putString(key + ":report", report.toString())
                 .putInt(key + ":live", liveScore).putInt(key + ":movies", moviesScore)
                 .putInt(key + ":series", seriesScore).putLong(key + ":at", System.currentTimeMillis()).apply();
         PlaybackDiagnostics.marker(context, "compatibility-preflight", "server", safe(playlistId), "",
@@ -74,7 +72,6 @@ final class ServerCompatibilityPreflight {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(key(playlistId) + ":summary", "لم يتم الفحص بعد");
     }
-
     static String savedReport(Context context, String playlistId) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(key(playlistId) + ":report", "لا يوجد تقرير توافق محفوظ بعد.");
@@ -131,9 +128,7 @@ final class ServerCompatibilityPreflight {
     }
 
     private static int score(int ok, int tested) { return tested <= 0 ? 0 : Math.round((ok * 100f) / tested); }
-    private static String key(String playlistId) {
-        return Integer.toHexString(safe(playlistId).trim().toLowerCase(Locale.US).hashCode());
-    }
+    private static String key(String playlistId) { return Integer.toHexString(safe(playlistId).trim().toLowerCase(Locale.US).hashCode()); }
     private static String safe(String value) { return value == null ? "" : value; }
 }
 ''', encoding="utf-8")
@@ -143,13 +138,10 @@ pattern = re.compile(
     r'            String profile = profile\(\);\n'
     r'            emit\(95, "اعتماد بيانات الباقة", "تثبيت البيانات المحفوظة على الجهاز"\);\n'
     r'            database\.commitStagedImport\(sourceIdentity, session\.serverName, session\.kind, profile\);\n'
-    r'.*?'
-    r'            return new Result\(live, movies, series, profile\);\n',
-    re.DOTALL)
-replacement = '''            String profile = profile();\n            emit(95, "اعتماد بيانات الباقة", "تثبيت جميع البيانات المحفوظة على الجهاز");\n            database.commitStagedImport(sourceIdentity, session.serverName, session.kind, profile);\n            int live = database.count("live");\n            int movies = database.count("movies");\n            int series = database.count("series");\n            CatalogUiCache.warm(database);\n\n            emit(96, "فحص توافق التشغيل", "اختبار عينات Live و Movies و Series على أكثر من مسار");\n            ServerCompatibilityPreflight.Result preflight = ServerCompatibilityPreflight.run(\n                    api.context(), api, database, playlistId);\n            emit(99, "نتيجة التوافق", preflight.summary);\n            if (preflight.completeFailure() && (live + movies + series) > 0) {\n                throw new Exception("تم حفظ الباقة كاملة، لكن فشل اختبار التشغيل على جميع العينات والمسارات. "\n                        + preflight.summary + " • افتح تقرير التشخيص لمعرفة السبب.");\n            }\n            emit(100, "جاهز", "Live " + live + " • Movies " + movies + " • Series " + series\n                    + " • " + preflight.summary);\n            return new Result(live, movies, series, profile);\n'''
+    r'.*?return new Result\(live, movies, series, profile\);\n', re.DOTALL)
+replacement = '''            String profile = profile();\n            emit(95, "اعتماد بيانات الباقة", "تثبيت جميع البيانات المحفوظة على الجهاز");\n            database.commitStagedImport(sourceIdentity, session.serverName, session.kind, profile);\n            int live = database.count("live");\n            int movies = database.count("movies");\n            int series = database.count("series");\n            CatalogUiCache.warm(database);\n            emit(96, "فحص توافق التشغيل", "اختبار عينات Live و Movies و Series على أكثر من مسار");\n            ServerCompatibilityPreflight.Result preflight = ServerCompatibilityPreflight.run(\n                    api.context(), api, database, playlistId);\n            emit(99, "نتيجة التوافق", preflight.summary);\n            if (preflight.completeFailure() && (live + movies + series) > 0) {\n                throw new Exception("تم حفظ الباقة كاملة، لكن فشل اختبار التشغيل على جميع العينات والمسارات. "\n                        + preflight.summary + " • افتح تقرير التشخيص لمعرفة السبب.");\n            }\n            emit(100, "جاهز", "Live " + live + " • Movies " + movies + " • Series " + series\n                    + " • " + preflight.summary);\n            return new Result(live, movies, series, profile);\n'''
 package, hits = pattern.subn(replacement, package, count=1)
-if hits != 1:
-    raise SystemExit("v340 final core patch mismatch: post-import preflight")
+if hits != 1: raise SystemExit("v340 final core patch mismatch: post-import preflight")
 PACKAGE.write_text(package, encoding="utf-8")
 
 api = API.read_text(encoding="utf-8")
@@ -157,18 +149,19 @@ api = replace_once(api, '    String baseUrl() { return baseUrl; }\n',
                    '    Context context() { return context; }\n    String baseUrl() { return baseUrl; }\n', 'api context accessor')
 API.write_text(api, encoding="utf-8")
 
+# Normalize whatever values earlier patches produced; names are the invariant.
 policy = POLICY.read_text(encoding="utf-8")
-for old, new in [
-    ('static final int INITIAL_STARTUP_TIMEOUT_MS = 7_000;', 'static final int INITIAL_STARTUP_TIMEOUT_MS = 5_000;'),
-    ('static final int RETRY_STARTUP_TIMEOUT_MS = 5_000;', 'static final int RETRY_STARTUP_TIMEOUT_MS = 3_500;'),
-    ('static final int VOD_STARTUP_TIMEOUT_MS = 8_000;', 'static final int VOD_STARTUP_TIMEOUT_MS = 6_500;'),
-    ('static final int UHD_VOD_STARTUP_TIMEOUT_MS = 11_000;', 'static final int UHD_VOD_STARTUP_TIMEOUT_MS = 9_000;'),
-    ('static final int VLC_STARTUP_TIMEOUT_MS = 7_000;', 'static final int VLC_STARTUP_TIMEOUT_MS = 5_500;'),
-    ('static final int UHD_VLC_STARTUP_TIMEOUT_MS = 10_000;', 'static final int UHD_VLC_STARTUP_TIMEOUT_MS = 8_000;'),
-    ('static final int PREVIEW_STARTUP_TIMEOUT_MS = 5_000;', 'static final int PREVIEW_STARTUP_TIMEOUT_MS = 3_500;'),
+for name, value in [
+    ('INITIAL_STARTUP_TIMEOUT_MS', '5_000'),
+    ('RETRY_STARTUP_TIMEOUT_MS', '2_500'),
+    ('VOD_STARTUP_TIMEOUT_MS', '6_500'),
+    ('UHD_VOD_STARTUP_TIMEOUT_MS', '9_000'),
+    ('VLC_STARTUP_TIMEOUT_MS', '5_500'),
+    ('UHD_VLC_STARTUP_TIMEOUT_MS', '8_000'),
+    ('PREVIEW_STARTUP_TIMEOUT_MS', '3_500'),
 ]:
-    if old not in policy: raise SystemExit("v340 final core patch mismatch: playback timeout " + old)
-    policy = policy.replace(old, new, 1)
+    policy, hits = re.subn(r'(static final int ' + re.escape(name) + r' = )[^;]+;', r'\g<1>' + value + ';', policy, count=1)
+    if hits != 1: raise SystemExit('v340 final core patch mismatch: timeout ' + name)
 POLICY.write_text(policy, encoding="utf-8")
 
 main = MAIN.read_text(encoding="utf-8")
@@ -189,7 +182,7 @@ for path, tokens in [
     (PACKAGE, ["فحص توافق التشغيل", "ServerCompatibilityPreflight.Result", "preflight.completeFailure"]),
     (MAIN, ["showImportDiagnostics", "عرض تقرير التشخيص"]),
     (SETTINGS, ["◎  توافق السيرفر", "savedSummary"]),
-    (POLICY, ["INITIAL_STARTUP_TIMEOUT_MS = 5_000", "RETRY_STARTUP_TIMEOUT_MS = 3_500"]),
+    (POLICY, ["INITIAL_STARTUP_TIMEOUT_MS = 5_000", "RETRY_STARTUP_TIMEOUT_MS = 2_500"]),
 ]:
     value = path.read_text(encoding="utf-8")
     for token in tokens:
