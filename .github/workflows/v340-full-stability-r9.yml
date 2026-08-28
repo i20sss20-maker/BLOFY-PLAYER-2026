@@ -29,90 +29,170 @@ jobs:
       EXPECTED_CERT_SHA256: f54493426cd16e2fc67390c307937d5d2bb04f81201f4bad3355ae66ff4813a6
 
     steps:
-      - name: Checkout
+      - name: Checkout v340 branch
         uses: actions/checkout@v4
-      - name: Reconstruct and apply R9
+
+      - name: Recreate stable base and apply full v340 R9 stack
         shell: bash
         run: |
           set -euo pipefail
-          for f in apply_v329_hotfix.py apply_v330_hotfix.py apply_v330_vod_fix.py apply_v330_compile_fix.py apply_v331_precompat.py apply_v331_transport_manager.py apply_v331_compile_fix.py apply_v333_full_engines.py apply_v334_compat_engine.py apply_v336_diagnostics_reset.py apply_v337_vod_compat.py apply_v339_stability.py apply_v340_full2.py apply_v340_perf.py apply_v340_live_guard.py apply_v340_compile_fix.py apply_v340_session_guard.py apply_v340_route_learning.py apply_v340_final_foundation.py apply_v340_final_core.py apply_v340_source_probe.py apply_v340_verified_gate_runner2.py apply_v340_final_safety_r8.py apply_v340_r9_deep_logic_fix.py; do python3 tools/$f; done
-          P=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          R=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerPlaybackProfile.java
-          grep -q 'تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل' "$P"
-          ! grep -q 'ServerCompatibilityPreflight.run(' "$P"
-          ! grep -q 'putBoolean(key + ".verified", false).remove(key + ".route")' "$R"
-          grep -q 'rememberVerifiedSuccess' "$R"
+          python3 tools/apply_v329_hotfix.py
+          python3 tools/apply_v330_hotfix.py
+          python3 tools/apply_v330_vod_fix.py
+          python3 tools/apply_v330_compile_fix.py
+          python3 tools/apply_v331_precompat.py
+          python3 tools/apply_v331_transport_manager.py
+          python3 tools/apply_v331_compile_fix.py
+          python3 tools/apply_v333_full_engines.py
+          python3 tools/apply_v334_compat_engine.py
+          python3 tools/apply_v336_diagnostics_reset.py
+          python3 tools/apply_v337_vod_compat.py
+          python3 tools/apply_v339_stability.py
+          python3 tools/apply_v340_full2.py
+          python3 tools/apply_v340_perf.py
+          python3 tools/apply_v340_live_guard.py
+          python3 tools/apply_v340_compile_fix.py
+          python3 tools/apply_v340_session_guard.py
+          python3 tools/apply_v340_route_learning.py
+          python3 tools/apply_v340_final_foundation.py
+          python3 tools/apply_v340_final_core.py
+          python3 tools/apply_v340_source_probe.py
+          python3 tools/apply_v340_verified_gate_runner2.py
+          python3 tools/apply_v340_final_safety_r8.py
+          python3 tools/apply_v340_r9_deep_logic_fix.py
+
+          PACKAGE=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          PROFILE=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerPlaybackProfile.java
+          PLAYER=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          VOD=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          DATABASE=BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
+          grep -q 'تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل' "$PACKAGE"
+          ! grep -q 'ServerCompatibilityPreflight.run(' "$PACKAGE"
+          ! grep -q 'putBoolean(key + ".verified", false).remove(key + ".route")' "$PROFILE"
+          grep -q 'rememberVerifiedSuccess' "$PROFILE"
+          grep -q 'warmLiveSwitchPending = player != null' "$PLAYER"
+          grep -q 'cancelResolve(true)' "$PLAYER"
+          grep -q 'network.shutdownNow()' "$PLAYER"
+          grep -q 'cancelResolve(true)' "$VOD"
+          grep -q 'network.shutdownNow()' "$VOD"
+          grep -q 'media_staging' "$DATABASE"
+          grep -q 'sync_state", "complete"' "$DATABASE"
           grep -q 'versionCode = 1000342' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'versionName = "v340-full-stability-r9"' BLOFY-ANDROID-2026/app/build.gradle.kts
+
       - name: Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: NDK CMake
-        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION" "cmake;3.31.4"
-      - name: FFmpeg Media3
+
+      - name: Install Android NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION" "cmake;3.31.4"
+
+      - name: Build Media3 FFmpeg decoder
         shell: bash
         run: |
           set -euo pipefail
           git clone https://github.com/androidx/media.git .media3
           git -C .media3 checkout "$MEDIA3_COMMIT"
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > .media3/local.properties
-          P="$GITHUB_WORKSPACE/.media3/libraries/decoder_ffmpeg/src/main"; N="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
-          cd "$P/jni"; git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg --branch release/6.0 --depth=1
+          FFMPEG_MODULE_PATH="$GITHUB_WORKSPACE/.media3/libraries/decoder_ffmpeg/src/main"
+          NDK_PATH="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          cd "$FFMPEG_MODULE_PATH/jni"
+          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg --branch release/6.0 --depth=1
           chmod +x build_ffmpeg.sh
-          ./build_ffmpeg.sh "$P" "$N" linux-x86_64 "$ANDROID_ABI" vorbis opus flac alac mp3 amrnb amrwb aac ac3 eac3 dca
-          cd "$GITHUB_WORKSPACE/.media3"; ./gradlew --no-daemon :lib-decoder-ffmpeg:assembleRelease
+          ./build_ffmpeg.sh "$FFMPEG_MODULE_PATH" "$NDK_PATH" linux-x86_64 "$ANDROID_ABI" vorbis opus flac alac mp3 amrnb amrwb aac ac3 eac3 dca
+          cd "$GITHUB_WORKSPACE/.media3"
+          ./gradlew --no-daemon :lib-decoder-ffmpeg:assembleRelease
           mkdir -p "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs"
-          cp "$(find . -type f -name '*.aar' -path '*decoder_ffmpeg*' | head -1)" "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar"
-      - name: Tests lint release
+          AAR="$(find "$GITHUB_WORKSPACE/.media3" -type f -name '*.aar' -path '*decoder_ffmpeg*' -print | head -n 1)"
+          test -n "$AAR"
+          cp "$AAR" "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar"
+
+      - name: Create Gradle wrapper
         working-directory: BLOFY-ANDROID-2026
-        run: |
-          gradle wrapper --gradle-version 8.13
-          ./gradlew --no-daemon clean testDebugUnitTest lintRelease assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
-      - name: Restore signing key
+        run: gradle wrapper --gradle-version 8.13
+
+      - name: Unit tests and lint
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon clean testDebugUnitTest lintRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Build release APK
+        working-directory: BLOFY-ANDROID-2026
+        run: ./gradlew --no-daemon assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+
+      - name: Restore exact v339 external signing key
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${V339_KEY_ARTIFACT_ID}/zip" -o "$RUNNER_TEMP/key.zip"
-          mkdir -p "$RUNNER_TEMP/key"; unzip -q "$RUNNER_TEMP/key.zip" -d "$RUNNER_TEMP/key"
-      - name: Sign and deep QA
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${V339_KEY_ARTIFACT_ID}/zip" \
+            -o "$RUNNER_TEMP/v339-signing.zip"
+          mkdir -p "$RUNNER_TEMP/v339-signing"
+          unzip -q "$RUNNER_TEMP/v339-signing.zip" -d "$RUNNER_TEMP/v339-signing"
+          test -s "$RUNNER_TEMP/v339-signing/BLOFY-PLAYER-STABLE-TEST.jks"
+          test -s "$RUNNER_TEMP/v339-signing/BLOFY-PLAYER-STABLE-TEST.password.txt"
+
+      - name: Sign R9
         shell: bash
         run: |
           set -euo pipefail
-          APK=BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk
-          PASS="$(tr -d '\r\n' < "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.password.txt")"
-          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          OUT=BLOFY-PLAYER-v340-R9-FULL-STABILITY-SIGNED.apk
-          "$BT/apksigner" sign --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "$OUT" "$APK"
-          "$BT/apksigner" verify --verbose --print-certs "$OUT" | tee /tmp/sig
-          grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" /tmp/sig
-          "$BT/zipalign" -c -v 4 "$OUT" >/tmp/align
-          "$BT/aapt" dump badging "$OUT" | tee /tmp/badging
-          grep -q "versionCode='1000342' versionName='v340-full-stability-r9'" /tmp/badging
-          grep -q "native-code:.*'arm64-v8a'" /tmp/badging
-          grep -q "native-code:.*'armeabi-v7a'" /tmp/badging
-          unzip -t "$OUT" >/tmp/zip; grep -q 'No errors detected' /tmp/zip
-          python3 - "$OUT" <<'PY'
-          import collections,pathlib,sys,zipfile,zlib,struct
-          p=pathlib.Path(sys.argv[1])
-          with zipfile.ZipFile(p) as z:
-            assert z.testzip() is None
-            ns=z.namelist(); assert not [n for n,c in collections.Counter(ns).items() if c>1]
-            dex=[n for n in ns if n.startswith('classes') and n.endswith('.dex')]; assert dex
-            for n in dex:
-              d=z.read(n); assert d[:4]==b'dex\n'; assert struct.unpack_from('<I',d,32)[0]==len(d); assert zlib.adler32(d[12:])&0xffffffff==struct.unpack_from('<I',d,8)[0]
-            req=['lib/arm64-v8a/libffmpegJNI.so','lib/arm64-v8a/libvlc.so','lib/arm64-v8a/libvlcjni.so','lib/armeabi-v7a/libffmpegJNI.so','lib/armeabi-v7a/libvlc.so','lib/armeabi-v7a/libvlcjni.so']
-            assert not [x for x in req if x not in ns]
-          PY
-          sha256sum "$OUT" > "$OUT.sha256"
-      - name: Upload R9
+          APK="BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk"
+          KS="$RUNNER_TEMP/v339-signing/BLOFY-PLAYER-STABLE-TEST.jks"
+          PASS="$(tr -d '\r\n' < "$RUNNER_TEMP/v339-signing/BLOFY-PLAYER-STABLE-TEST.password.txt")"
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$BT/apksigner" sign --ks "$KS" --ks-key-alias blofy --ks-pass pass:"$PASS" --key-pass pass:"$PASS" \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out BLOFY-PLAYER-v340-R9-FULL-STABILITY-SIGNED.apk "$APK"
+          echo "BT=$BT" >> "$GITHUB_ENV"
+          echo "FINAL_APK=$GITHUB_WORKSPACE/BLOFY-PLAYER-v340-R9-FULL-STABILITY-SIGNED.apk" >> "$GITHUB_ENV"
+
+      - name: Deep final APK QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$BT/apksigner" verify --verbose --print-certs "$FINAL_APK" | tee /tmp/signature.txt
+          grep -q 'Verified using v1 scheme (JAR signing): true' /tmp/signature.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/signature.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/signature.txt
+          grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" /tmp/signature.txt
+          grep -q 'Number of signers: 1' /tmp/signature.txt
+          "$BT/zipalign" -c -v 4 "$FINAL_APK" >/tmp/zipalign.txt
+          grep -Eq 'Verification success(fu|u)l' /tmp/zipalign.txt
+          "$BT/aapt" dump badging "$FINAL_APK" | tee /tmp/badging.txt
+          "$BT/aapt" dump permissions "$FINAL_APK" | tee /tmp/permissions.txt
+          grep -q "package: name='tv.blofy.player' versionCode='1000342' versionName='v340-full-stability-r9'" /tmp/badging.txt
+          grep -q "sdkVersion:'23'" /tmp/badging.txt
+          grep -q "targetSdkVersion:'36'" /tmp/badging.txt
+          grep -q "launchable-activity: name='tv.blofy.player.MainActivity'" /tmp/badging.txt
+          grep -q "leanback-launchable-activity: name='tv.blofy.player.MainActivity'" /tmp/badging.txt
+          grep -q "native-code:.*'arm64-v8a'" /tmp/badging.txt
+          grep -q "native-code:.*'armeabi-v7a'" /tmp/badging.txt
+          if grep -q "native-code:.*'x86'" /tmp/badging.txt; then exit 1; fi
+          for p in CAMERA RECORD_AUDIO READ_CONTACTS WRITE_CONTACTS ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION READ_SMS SEND_SMS RECEIVE_SMS READ_PHONE_STATE CALL_PHONE WRITE_EXTERNAL_STORAGE READ_EXTERNAL_STORAGE MANAGE_EXTERNAL_STORAGE READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_MEDIA_AUDIO; do
+            if grep -q "android.permission.$p" /tmp/permissions.txt; then echo "Unexpected dangerous permission: $p"; exit 1; fi
+          done
+          unzip -t "$FINAL_APK" >/tmp/unzip.txt
+          grep -q 'No errors detected' /tmp/unzip.txt
+          python3 -c 'import collections,pathlib,sys,zipfile,zlib,struct; p=pathlib.Path(sys.argv[1]); z=zipfile.ZipFile(p); assert z.testzip() is None; ns=z.namelist(); assert not [n for n,c in collections.Counter(ns).items() if c>1]; dex=[n for n in ns if n.startswith("classes") and n.endswith(".dex")]; assert dex; [(lambda d: (d[:4]==b"dex\\n" and struct.unpack_from("<I",d,32)[0]==len(d) and (zlib.adler32(d[12:])&0xffffffff)==struct.unpack_from("<I",d,8)[0]))(z.read(n)) or (_ for _ in ()).throw(AssertionError(n)) for n in dex]; req=["lib/arm64-v8a/libffmpegJNI.so","lib/arm64-v8a/libvlc.so","lib/arm64-v8a/libvlcjni.so","lib/arm64-v8a/libc++_shared.so","lib/armeabi-v7a/libffmpegJNI.so","lib/armeabi-v7a/libvlc.so","lib/armeabi-v7a/libvlcjni.so","lib/armeabi-v7a/libc++_shared.so"]; assert not [n for n in req if n not in ns]; abis={n.split("/")[1] for n in ns if n.startswith("lib/") and n.count("/")>=2}; assert abis=={"arm64-v8a","armeabi-v7a"}; print("deep zip/dex/native QA OK")' "$FINAL_APK"
+          TMP="$RUNNER_TEMP/native-r9"
+          mkdir -p "$TMP"
+          unzip -q "$FINAL_APK" 'lib/*' -d "$TMP"
+          for so in "$TMP"/lib/arm64-v8a/*.so; do readelf -h "$so" | grep -q 'Class:.*ELF64'; readelf -h "$so" | grep -q 'Machine:.*AArch64'; done
+          for so in "$TMP"/lib/armeabi-v7a/*.so; do readelf -h "$so" | grep -q 'Class:.*ELF32'; readelf -h "$so" | grep -q 'Machine:.*ARM'; done
+          sha256sum "$FINAL_APK" | tee BLOFY-PLAYER-v340-R9-FULL-STABILITY-SIGNED.apk.sha256
+
+      - name: Upload signed R9 artifact
         uses: actions/upload-artifact@v4
         with:
           name: BLOFY-PLAYER-v340-R9-FULL-STABILITY-SIGNED
