@@ -7,6 +7,7 @@ on:
     paths:
       - "tools/apply_v340_compile_fix.py"
       - "tools/apply_v340_session_guard.py"
+      - "tools/apply_v340_route_learning.py"
       - ".github/workflows/v340-full-stability-r6.yml"
 
 permissions:
@@ -53,6 +54,7 @@ jobs:
           python3 tools/apply_v340_live_guard.py
           python3 tools/apply_v340_compile_fix.py
           python3 tools/apply_v340_session_guard.py
+          python3 tools/apply_v340_route_learning.py
           grep -q 'PlaybackDiagnostics' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'ServerPlaybackProfile' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'CatalogUiCache.categoryPage' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
@@ -61,6 +63,9 @@ jobs:
           grep -q 'final List<BlofyModels.Media> delivered = next' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'stale-timeout-ignored' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'stale-resolve-ignored' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'learned-route-retry' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'learned-vod-route-retry' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          grep -q 'learned-vod-route-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
 
       - name: Java 17
         uses: actions/setup-java@v4
