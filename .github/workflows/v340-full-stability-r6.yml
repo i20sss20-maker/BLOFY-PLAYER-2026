@@ -11,6 +11,7 @@ on:
       - "tools/apply_v340_final_foundation.py"
       - "tools/apply_v340_final_core.py"
       - "tools/apply_v340_source_probe.py"
+      - "tools/apply_v340_verified_gate.py"
       - "BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java"
       - ".github/workflows/v340-full-stability-r6.yml"
 
@@ -62,23 +63,25 @@ jobs:
           python3 tools/apply_v340_final_foundation.py
           python3 tools/apply_v340_final_core.py
           python3 tools/apply_v340_source_probe.py
+          python3 tools/apply_v340_verified_gate.py
           grep -q 'PlaybackDiagnostics' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'ServerPlaybackProfile' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'blofy_server_playback_profiles_v2' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerPlaybackProfile.java
+          grep -q 'rememberVerifiedSuccess' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerPlaybackProfile.java
           grep -q 'CatalogUiCache.categoryPage' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'liveStallWatchdog' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'live-switch-cancel' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'final List<BlofyModels.Media> delivered = next' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'stale-timeout-ignored' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'stale-resolve-ignored' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'learned-route-retry' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'learned-vod-route-retry' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
-          grep -q 'learned-vod-route-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'readableReport' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackDiagnostics.java
           grep -q 'showDiagnosticsReport' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java
-          grep -q 'ServerCompatibilityPreflight' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
-          grep -q 'probeSource' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
-          grep -q 'source-readable' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
-          grep -q 'فحص توافق التشغيل' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q 'rule=3-of-3 required' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
+          grep -q 'MediaExtractor' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
+          grep -q 'cachedGate.accepted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q '!preflight.accepted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
+          grep -q 'if (isLive()) { finish(); return true; }' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'postDelayed(pending, 380L)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/LivePreviewController.java
+          grep -q 'routeAllowed("direct")' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          grep -q 'routeAllowed("no-extension")' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          grep -q 'isHardRouteFailure' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
           grep -q 'showImportDiagnostics' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
 
       - name: Java 17
