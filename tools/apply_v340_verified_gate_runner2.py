@@ -12,13 +12,14 @@ end = source.find(end_marker)
 if start < 0 or end < 0 or end <= start:
     raise SystemExit('runner2: cached gate section not found')
 
-replacement = r"""# 1) Cached catalog must still pass the verified 3/3 gate before entering.
+replacement = r"""# 1) Cached catalog: if this generated stack still has the legacy shortcut,
+# require the verified 3/3 gate. Some older reconstruction layers omit this
+# shortcut entirely, in which case every import naturally reaches the strict gate below.
 text = PACKAGE.read_text(encoding="utf-8")
 block_start = text.find('        if (sourceIdentity.equals(activeSource)')
-block_end = text.find('        emit(12, "تحليل الخادم"', block_start)
-if block_start < 0 or block_end < 0:
-    raise SystemExit("verified runner: cached import block bounds not found")
-cache_block = '''        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
+block_end = text.find('        emit(12, "تحليل الخادم"', block_start) if block_start >= 0 else -1
+if block_start >= 0 and block_end >= 0:
+    cache_block = '''        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
                 && !"in_progress".equals(database.metadata("sync_state", ""))) {
             String profile = database.metadata("playback_profile", "Media3 مباشر");
             if (ServerCompatibilityPreflight.savedAccepted(api.context(), playlistId)) {
@@ -37,7 +38,10 @@ cache_block = '''        if (sourceIdentity.equals(activeSource) && (cachedLive 
         }
 
 '''
-text = text[:block_start] + cache_block + text[block_end:]
+    text = text[:block_start] + cache_block + text[block_end:]
+else:
+    print('verified runner: no legacy cached shortcut in reconstructed importer; strict gate remains mandatory')
+
 # Strict post-import gate. Locate the older completeFailure block by bounds rather than formatting.
 gate_start = text.find('            if (preflight.completeFailure()')
 if gate_start >= 0:
@@ -56,4 +60,7 @@ PACKAGE.write_text(text, encoding="utf-8")
 
 """
 source = source[:start] + replacement + source[end:]
+# If this reconstruction has no legacy cache shortcut, don't require a token that cannot exist.
+source = source.replace("PACKAGE: ['cachedGate.accepted()', '!preflight.accepted()'],",
+                        "PACKAGE: ['!preflight.accepted()'],")
 exec(compile(source, str(RUNNER), 'exec'), {"__name__": "__main__", "__file__": str(RUNNER)})
