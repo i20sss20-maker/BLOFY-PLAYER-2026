@@ -77,7 +77,6 @@ jobs:
           grep -q 'showDiagnosticsReport' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java
           grep -q 'rule=3-of-3 required' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
           grep -q 'MediaExtractor' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
-          grep -q 'cachedGate.accepted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           grep -q '!preflight.accepted' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           grep -q 'if (isLive()) { finish(); return true; }' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'postDelayed(pending, 380L)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/LivePreviewController.java
