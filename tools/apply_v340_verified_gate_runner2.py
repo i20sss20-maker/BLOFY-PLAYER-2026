@@ -64,3 +64,15 @@ source = source[:start] + replacement + source[end:]
 source = source.replace("PACKAGE: ['cachedGate.accepted()', '!preflight.accepted()'],",
                         "PACKAGE: ['!preflight.accepted()'],")
 exec(compile(source, str(RUNNER), 'exec'), {"__name__": "__main__", "__file__": str(RUNNER)})
+
+# The reconstruction intentionally starts from the v333 golden base. Stamp the
+# final package only after every v340 patch has been applied so Android and QA
+# identify the installed binary as v340 rather than the historical base.
+gradle = ROOT / "BLOFY-ANDROID-2026/app/build.gradle.kts"
+gradle_text = gradle.read_text(encoding="utf-8")
+gradle_text, code_count = re.subn(r'versionCode\s*=\s*\d+', 'versionCode = 1000340', gradle_text, count=1)
+gradle_text, name_count = re.subn(r'versionName\s*=\s*"[^"]*"', 'versionName = "v340-full-stability-r7"', gradle_text, count=1)
+if code_count != 1 or name_count != 1:
+    raise SystemExit('runner2: unable to stamp v340 release metadata')
+gradle.write_text(gradle_text, encoding="utf-8")
+print('v340 release metadata stamped: versionCode=1000340 versionName=v340-full-stability-r7')
