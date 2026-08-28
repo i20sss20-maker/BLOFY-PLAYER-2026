@@ -10,6 +10,7 @@ on:
       - "tools/apply_v340_route_learning.py"
       - "tools/apply_v340_final_foundation.py"
       - "tools/apply_v340_final_core.py"
+      - "tools/apply_v340_source_probe.py"
       - "BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java"
       - ".github/workflows/v340-full-stability-r6.yml"
 
@@ -60,6 +61,7 @@ jobs:
           python3 tools/apply_v340_route_learning.py
           python3 tools/apply_v340_final_foundation.py
           python3 tools/apply_v340_final_core.py
+          python3 tools/apply_v340_source_probe.py
           grep -q 'PlaybackDiagnostics' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'ServerPlaybackProfile' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'CatalogUiCache.categoryPage' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
@@ -74,6 +76,8 @@ jobs:
           grep -q 'readableReport' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackDiagnostics.java
           grep -q 'showDiagnosticsReport' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java
           grep -q 'ServerCompatibilityPreflight' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
+          grep -q 'probeSource' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
+          grep -q 'source-readable' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerCompatibilityPreflight.java
           grep -q 'فحص توافق التشغيل' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           grep -q 'showImportDiagnostics' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/MainActivity.java
 
