@@ -11,36 +11,14 @@ GRADLE = ROOT / "BLOFY-ANDROID-2026/app/build.gradle.kts"
 # 1) Import must finish from the local catalog and enter immediately.
 # Compatibility stays diagnostic only; it must never trap the user at 95-96%.
 text = PACKAGE.read_text(encoding="utf-8")
-text, hits = re.subn(
-    r'\n\s*emit\(96,\s*"[^\"]*",\s*"[^\"]*"\);\n'
-    r'\s*ServerCompatibilityPreflight\.Result\s+preflight\s*=\s*ServerCompatibilityPreflight\.run\(.*?\);\n'
-    r'\s*if\s*\(!preflight\.accepted\(\)\)\s*\{.*?\n\s*\}\n'
-    r'\s*emit\(100,\s*"جاهز",\s*preflight\.summary\);',
-    '\n            emit(100, "جاهز", "تم حفظ البيانات كاملة؛ فحص التشغيل التشخيصي متاح من الإعدادات");',
-    text, count=1, flags=re.S)
 
-# Some reconstruction layers use slightly different wording. Remove any remaining
-# automatic preflight call from PackageImporter while preserving the final success emit.
-if 'ServerCompatibilityPreflight.run(' in text:
-    start = text.find('ServerCompatibilityPreflight.Result preflight = ServerCompatibilityPreflight.run(')
-    if start >= 0:
-        line_start = text.rfind('\n', 0, start) + 1
-        end = text.find('emit(100, "جاهز"', start)
-        if end >= 0:
-            end_line = text.find('\n', end)
-            if end_line < 0: end_line = len(text)
-            indent = text[line_start:start]
-            replacement = indent + 'emit(100, "جاهز", "تم حفظ البيانات كاملة؛ فحص التشغيل التشخيصي متاح من الإعدادات");'
-            text = text[:line_start] + replacement + text[end_line:]
-
-# Cached catalogs must also open immediately. If a legacy cached gate survived,
-# replace it with the direct cached return and do not re-run compatibility probes.
-cache_start = text.find('if (sourceIdentity.equals(activeSource)')
-if cache_start >= 0:
-    cache_end = text.find('emit(12, "تحليل الخادم"', cache_start)
-    if cache_end > cache_start and 'ServerCompatibilityPreflight.run(' in text[cache_start:cache_end]:
-        block_start = text.rfind('        ', 0, cache_start)
-        if block_start < 0: block_start = cache_start
+# Cached catalogs: if a generated layer inserted the verified gate, collapse that
+# whole cache block back to a direct local-cache return.
+cache_start = text.find('        if (sourceIdentity.equals(activeSource)')
+cache_end = text.find('        emit(12, "تحليل الخادم"', cache_start) if cache_start >= 0 else -1
+if cache_start >= 0 and cache_end > cache_start:
+    cache_block = text[cache_start:cache_end]
+    if 'ServerCompatibilityPreflight' in cache_block or 'cachedGate' in cache_block:
         replacement = '''        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
                 && !"in_progress".equals(database.metadata("sync_state", ""))) {
             String profile = database.metadata("playback_profile", "Media3 مباشر");
@@ -49,10 +27,37 @@ if cache_start >= 0:
         }
 
 '''
-        text = text[:block_start] + replacement + text[cache_end:]
+        text = text[:cache_start] + replacement + text[cache_end:]
 
+# Post-import gate: remove from declaration through the final ready emit. The
+# historical stack changed wording several times, so locate it by stable anchors.
+start = text.find('            ServerCompatibilityPreflight.Result preflight = ServerCompatibilityPreflight.run(')
+if start < 0:
+    start = text.find('ServerCompatibilityPreflight.Result preflight = ServerCompatibilityPreflight.run(')
+if start >= 0:
+    line_start = text.rfind('\n', 0, start) + 1
+    ready = text.find('emit(100, "جاهز"', start)
+    if ready < 0:
+        raise SystemExit('R8 safety: final ready emit after preflight not found')
+    ready_end = text.find('\n', ready)
+    if ready_end < 0:
+        ready_end = len(text)
+    indent_match = re.match(r'\s*', text[line_start:start])
+    indent = indent_match.group(0) if indent_match else '            '
+    replacement = indent + 'emit(100, "جاهز", "تم حفظ البيانات كاملة؛ فحص التشغيل التشخيصي متاح من الإعدادات");'
+    text = text[:line_start] + replacement + text[ready_end:]
+
+# Defensive cleanup for fragments left by historical multiline exception text.
+text = re.sub(r'(?m)^\s*\+\s*"\s*•\s*"\s*\+\s*preflight\.summary\);\s*\n?', '', text)
+text = re.sub(r'(?m)^\s*\+\s*preflight\.summary\s*\+?.*?;\s*\n?', '', text)
+text = re.sub(r'(?m)^\s*preflight\.summary\s*\+?.*?;\s*\n?', '', text)
+
+# There must be no automatic gate reference left in PackageImporter. Settings can
+# still invoke ServerCompatibilityPreflight explicitly for diagnostics.
 if 'ServerCompatibilityPreflight.run(' in text:
     raise SystemExit('R8 safety: automatic compatibility preflight still present in PackageImporter')
+if 'preflight.' in text or 'cachedGate' in text:
+    raise SystemExit('R8 safety: stale preflight fragment remains in PackageImporter')
 PACKAGE.write_text(text, encoding="utf-8")
 
 # 2) Positive learning remains server/kind scoped, but negative route failures are
@@ -104,6 +109,8 @@ GRADLE.write_text(gradle, encoding='utf-8')
 package_final = PACKAGE.read_text(encoding='utf-8')
 profile_final = PROFILE.read_text(encoding='utf-8')
 assert 'ServerCompatibilityPreflight.run(' not in package_final
+assert 'preflight.' not in package_final
+assert 'cachedGate' not in package_final
 assert 'blofy_server_playback_profiles_v3' in profile_final
 assert 'return false;' in profile_final
 assert 'route-rejected-local' in profile_final
