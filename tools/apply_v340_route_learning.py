@@ -54,28 +54,31 @@ patch(VOD,
 '''                    if ("canonical".equals(requestedVariant)) {\n                        canonicalUrl = resolvedUrl;\n                        canonicalExtension = extension;\n                        canonicalReferer = playbackReferer;\n                        ServerPlaybackProfile.Profile learned = ServerPlaybackProfile.load(this, canonicalUrl);\n                        if (learned.fresh() && learnedAlternateVariant(learned.preferredRoute)) {\n                            sourceVariant = learned.preferredRoute;\n                            alternateSourceAttempted = "direct".equals(sourceVariant);\n                            containerRouteAttempted = "no-extension".equals(sourceVariant);\n                            attempt = 1;\n                            resolvedUrl = "";\n                            resolving = false;\n                            PlaybackDiagnostics.marker(this, "learned-vod-route-retry", kind, id, extension,\n                                    sourceVariant, "canonical-ready");\n                            resolve();\n                            return;\n                        }\n                    }\n                    resolving = false;\n                    if (!lifecycleStopped) openMedia3();\n''',
 "apply learned VOD route")
 
-# Normalize the resolver-error branch regardless of whether v337 left the direct-only
-# form, the direct/no-extension form, or another whitespace-equivalent layout.
 vod_text = VOD.read_text(encoding="utf-8")
-resolver_pattern = re.compile(
-    r'(?P<indent>\s*)if\s*\(\s*(?:\(\s*)?"direct"\.equals\(requestedVariant\)'
-    r'(?:\s*\|\|\s*"no-extension"\.equals\(requestedVariant\)\s*\))?\s*'
-    r'&&\s*restoreCanonicalSource\(\)\s*\)\s*\{\s*'
-    r'if\s*\(!lifecycleStopped\)\s*openVlc\(PlaybackPolicy\.resolveErrorMessage\(error\)\);\s*'
-    r'return;\s*\}',
-    re.MULTILINE)
-match = resolver_pattern.search(vod_text)
-if not match:
-    raise SystemExit("v340 route-learning patch mismatch in VodPlayerActivity.java: VOD resolve canonical fallback")
-indent = match.group('indent')
-replacement = (
-    indent + 'if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n'
-    + indent + '    attempt = 0;\n'
-    + indent + '    if (!lifecycleStopped) openMedia3();\n'
-    + indent + '    return;\n'
-    + indent + '}'
-)
-vod_text = vod_text[:match.start()] + replacement + vod_text[match.end():]
+new_catch = '''                    if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n                        attempt = 0;\n                        if (!lifecycleStopped) openMedia3();\n                        return;\n                    }\n'''
+old_v330 = '''                    if ("direct".equals(requestedVariant) && restoreCanonicalSource()) {\n                        sourceVariant = "no-extension";\n                        attempt = 2;\n                        if (!lifecycleStopped) openMedia3();\n                        return;\n                    }\n'''
+old_direct_vlc = '''                    if ("direct".equals(requestedVariant) && restoreCanonicalSource()) {\n                        if (!lifecycleStopped) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n'''
+old_broad_vlc = '''                    if (("direct".equals(requestedVariant) || "no-extension".equals(requestedVariant))\n                            && restoreCanonicalSource()) {\n                        if (!lifecycleStopped) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n'''
+if old_v330 in vod_text:
+    vod_text = vod_text.replace(old_v330, new_catch, 1)
+elif old_broad_vlc in vod_text:
+    vod_text = vod_text.replace(old_broad_vlc, new_catch, 1)
+elif old_direct_vlc in vod_text:
+    vod_text = vod_text.replace(old_direct_vlc, new_catch, 1)
+else:
+    resolver_pattern = re.compile(
+        r'(?P<indent>\s*)if\s*\([^\n]*requestedVariant[^\n]*restoreCanonicalSource\(\)[^\n]*\)\s*\{'
+        r'.{0,350}?return;\s*\}', re.MULTILINE | re.DOTALL)
+    match = resolver_pattern.search(vod_text)
+    if not match:
+        raise SystemExit("v340 route-learning patch mismatch in VodPlayerActivity.java: VOD resolve canonical fallback")
+    indent = match.group('indent')
+    replacement = (indent + 'if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n'
+                   + indent + '    attempt = 0;\n'
+                   + indent + '    if (!lifecycleStopped) openMedia3();\n'
+                   + indent + '    return;\n'
+                   + indent + '}')
+    vod_text = vod_text[:match.start()] + replacement + vod_text[match.end():]
 VOD.write_text(vod_text, encoding="utf-8")
 
 patch(VOD,
