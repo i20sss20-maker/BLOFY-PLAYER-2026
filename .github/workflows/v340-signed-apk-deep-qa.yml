@@ -1,0 +1,173 @@
+name: Deep QA BLOFY v340 Signed APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v340-full-stability]
+    paths:
+      - ".github/workflows/v340-signed-apk-deep-qa.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deep-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ARTIFACT_ID: 9703479678
+      EXPECTED_PACKAGE: tv.blofy.player
+      EXPECTED_CERT_SHA256: f54493426cd16e2fc67390c307937d5d2bb04f81201f4bad3355ae66ff4813a6
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download exact signed artifact from successful R6 run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o "$RUNNER_TEMP/v340-artifact.zip"
+          mkdir -p "$RUNNER_TEMP/v340-artifact"
+          unzip -q "$RUNNER_TEMP/v340-artifact.zip" -d "$RUNNER_TEMP/v340-artifact"
+          APK="$RUNNER_TEMP/v340-artifact/BLOFY-PLAYER-v340-R6-FULL-STABILITY-SIGNED.apk"
+          test -s "$APK"
+          test -s "$APK.sha256"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+      - name: Verify checksum archive and ZIP integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$(dirname "$APK")"
+          sha256sum -c "$(basename "$APK").sha256"
+          unzip -t "$APK" >/tmp/unzip-test.txt
+          grep -q "No errors detected" /tmp/unzip-test.txt
+          sha256sum "$APK"
+
+      - name: Locate Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -x "$BUILD_TOOLS/apksigner"
+          test -x "$BUILD_TOOLS/zipalign"
+          test -x "$BUILD_TOOLS/aapt"
+          echo "APKSIGNER=$BUILD_TOOLS/apksigner" >> "$GITHUB_ENV"
+          echo "ZIPALIGN=$BUILD_TOOLS/zipalign" >> "$GITHUB_ENV"
+          echo "AAPT=$BUILD_TOOLS/aapt" >> "$GITHUB_ENV"
+
+      - name: Verify APK signing certificate and schemes
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee /tmp/signature.txt
+          grep -q 'Verified using v1 scheme (JAR signing): true' /tmp/signature.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/signature.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/signature.txt
+          grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" /tmp/signature.txt
+          grep -q 'Number of signers: 1' /tmp/signature.txt
+
+      - name: Verify ZIP alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ZIPALIGN" -c -v 4 "$APK" | tee /tmp/zipalign.txt
+          grep -q 'Verification succesful' /tmp/zipalign.txt || grep -q 'Verification successful' /tmp/zipalign.txt
+
+      - name: Inspect package manifest SDK ABI and launchability
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
+          "$AAPT" dump permissions "$APK" | tee /tmp/permissions.txt
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml | tee /tmp/manifest-tree.txt >/dev/null
+          grep -q "package: name='$EXPECTED_PACKAGE'" /tmp/badging.txt
+          grep -q "sdkVersion:'23'" /tmp/badging.txt
+          grep -q "targetSdkVersion:'36'" /tmp/badging.txt
+          grep -q "launchable-activity: name='tv.blofy.player.MainActivity'" /tmp/badging.txt
+          grep -q "leanback-launchable-activity: name='tv.blofy.player.MainActivity'" /tmp/badging.txt
+          grep -q "native-code:.*'armeabi-v7a'" /tmp/badging.txt
+          grep -q "native-code:.*'arm64-v8a'" /tmp/badging.txt
+          if grep -q "native-code:.*'x86'" /tmp/badging.txt; then echo 'Unexpected x86 ABI in final APK'; exit 1; fi
+          if grep -q 'android:debuggable(0x0101000f).*0xffffffff' /tmp/manifest-tree.txt; then echo 'Release APK is debuggable'; exit 1; fi
+          TRUE_EXPORTED="$(grep -c 'android:exported(0x01010010).*0xffffffff' /tmp/manifest-tree.txt || true)"
+          test "$TRUE_EXPORTED" -eq 1
+          echo "Only one exported component flag is true (MainActivity expected)."
+
+      - name: Reject unexpected dangerous permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "android.permission.INTERNET" /tmp/permissions.txt
+          grep -q "android.permission.ACCESS_NETWORK_STATE" /tmp/permissions.txt
+          grep -q "android.permission.WAKE_LOCK" /tmp/permissions.txt
+          for p in CAMERA RECORD_AUDIO READ_CONTACTS WRITE_CONTACTS ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION READ_SMS SEND_SMS RECEIVE_SMS READ_PHONE_STATE CALL_PHONE WRITE_EXTERNAL_STORAGE READ_EXTERNAL_STORAGE MANAGE_EXTERNAL_STORAGE READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_MEDIA_AUDIO; do
+            if grep -q "android.permission.$p" /tmp/permissions.txt; then
+              echo "Unexpected dangerous permission: $p"
+              exit 1
+            fi
+          done
+
+      - name: Deep ZIP DEX and native-library audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$APK" <<'PY'
+          import collections, pathlib, struct, sys, zipfile
+          apk = pathlib.Path(sys.argv[1])
+          with zipfile.ZipFile(apk) as z:
+              bad_crc = z.testzip()
+              assert bad_crc is None, f"CRC failure: {bad_crc}"
+              names = z.namelist()
+              duplicates = [n for n,c in collections.Counter(names).items() if c > 1]
+              unsafe = [n for n in names if n.startswith('/') or '..' in pathlib.PurePosixPath(n).parts]
+              assert not duplicates, f"duplicate ZIP entries: {duplicates}"
+              assert not unsafe, f"unsafe ZIP paths: {unsafe}"
+              dex = sorted(n for n in names if n.startswith('classes') and n.endswith('.dex'))
+              assert dex, 'no DEX files'
+              for name in dex:
+                  assert z.read(name)[:4] == b'dex\n', f'bad DEX magic: {name}'
+              required = [
+                  'lib/arm64-v8a/libffmpegJNI.so', 'lib/arm64-v8a/libvlc.so', 'lib/arm64-v8a/libvlcjni.so',
+                  'lib/armeabi-v7a/libffmpegJNI.so', 'lib/armeabi-v7a/libvlc.so', 'lib/armeabi-v7a/libvlcjni.so',
+              ]
+              missing = [n for n in required if n not in names]
+              assert not missing, f'missing native libraries: {missing}'
+              other_abis = sorted({p.split('/')[1] for p in names if p.startswith('lib/') and p.count('/') >= 2} - {'arm64-v8a','armeabi-v7a'})
+              assert not other_abis, f'unexpected ABIs: {other_abis}'
+              print(f'entries={len(names)} dex={len(dex)} native_required={len(required)} duplicates=0 unsafe=0 crc=ok')
+          PY
+          TMP="$RUNNER_TEMP/native-qa"
+          rm -rf "$TMP" && mkdir -p "$TMP"
+          unzip -q "$APK" 'lib/*' -d "$TMP"
+          for so in "$TMP"/lib/arm64-v8a/*.so; do
+            readelf -h "$so" | grep -q 'Class:.*ELF64'
+            readelf -h "$so" | grep -q 'Machine:.*AArch64'
+          done
+          for so in "$TMP"/lib/armeabi-v7a/*.so; do
+            readelf -h "$so" | grep -q 'Class:.*ELF32'
+            readelf -h "$so" | grep -q 'Machine:.*ARM'
+          done
+
+      - name: Report final package facts
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== PACKAGE ==='
+          grep '^package:' /tmp/badging.txt
+          echo '=== SDK ==='
+          grep -E "sdkVersion|targetSdkVersion" /tmp/badging.txt
+          echo '=== ABI ==='
+          grep '^native-code:' /tmp/badging.txt
+          echo '=== SIGNER ==='
+          grep -E 'certificate DN|certificate SHA-256 digest|Number of signers' /tmp/signature.txt
+          echo '=== APK SHA256 ==='
+          sha256sum "$APK"
