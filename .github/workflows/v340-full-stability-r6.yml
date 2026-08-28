@@ -13,6 +13,7 @@ on:
       - "tools/apply_v340_source_probe.py"
       - "tools/apply_v340_verified_gate.py"
       - "tools/apply_v340_verified_gate_runner.py"
+      - "tools/apply_v340_verified_gate_runner2.py"
       - "BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java"
       - ".github/workflows/v340-full-stability-r6.yml"
 
@@ -64,7 +65,7 @@ jobs:
           python3 tools/apply_v340_final_foundation.py
           python3 tools/apply_v340_final_core.py
           python3 tools/apply_v340_source_probe.py
-          python3 tools/apply_v340_verified_gate_runner.py
+          python3 tools/apply_v340_verified_gate_runner2.py
           grep -q 'PlaybackDiagnostics' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'blofy_server_playback_profiles_v2' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerPlaybackProfile.java
           grep -q 'rememberVerifiedSuccess' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ServerPlaybackProfile.java
