@@ -37,6 +37,11 @@ text = re.sub(
     '\n', text, count=1, flags=re.S)
 text = re.sub(r'\n\s*if\s*\(!preflight\.accepted\(\)\)\s*\{.*?\}\s*', '\n', text, count=1, flags=re.S)
 text = re.sub(r'\n\s*if\s*\(preflight\.completeFailure\(\).*?\)\s*\{.*?\}\s*', '\n', text, count=1, flags=re.S)
+# Remove any orphan UI/report lines left behind by older generated gate layers.
+text = re.sub(r'\n\s*emit\(99,\s*"نتيجة التوافق",\s*preflight\.summary\);\s*', '\n', text)
+text = text.replace(' + " • " + preflight.summary', '')
+text = text.replace('+ " • " + preflight.summary', '')
+text = text.replace('preflight.summary', '"تم حفظ البيانات بنجاح"')
 text = text.replace('emit(99, "فتح BLOFY PLAYER", "تم الحفظ بنجاح");',
                     'emit(99, "فتح BLOFY PLAYER", "تم حفظ البيانات؛ تحسين التشغيل يتم أثناء الاستخدام");')
 PACKAGE.write_text(text, encoding="utf-8")
@@ -113,8 +118,8 @@ GRADLE.write_text(gradle, encoding='utf-8')
 package_final = PACKAGE.read_text(encoding='utf-8')
 profile_final = PROFILE.read_text(encoding='utf-8')
 preflight_final = PREFLIGHT.read_text(encoding='utf-8')
-if 'ServerCompatibilityPreflight.run(' in package_final or '!preflight.accepted()' in package_final:
-    raise SystemExit('r8: blocking preflight still present in PackageImporter')
+if 'ServerCompatibilityPreflight.run(' in package_final or '!preflight.accepted()' in package_final or 'preflight.' in package_final:
+    raise SystemExit('r8: blocking/orphan preflight code still present in PackageImporter')
 if 'negative route decisions are intentionally not persisted' not in profile_final or 'rememberVerifiedSuccess' not in profile_final:
     raise SystemExit('r8: profile positive-learning invariant failed')
 if 'SAMPLE_COUNT = 1' not in preflight_final or 'VERIFY_TIMEOUT_MS = 6_000L' not in preflight_final:
