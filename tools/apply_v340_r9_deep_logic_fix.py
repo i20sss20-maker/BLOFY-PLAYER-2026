@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
-ROOT=Path(__file__).resolve().parents[1]
-JAVA=ROOT/'BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player'
-PACKAGE=JAVA/'PackageImporter.java'
-PROFILE=JAVA/'ServerPlaybackProfile.java'
-GRADLE=ROOT/'BLOFY-ANDROID-2026/app/build.gradle.kts'
 
-# Guarantee cached catalog fast path even when earlier reconstruction layers omit it.
-p=PACKAGE.read_text(encoding='utf-8')
-if 'تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل' not in p:
-    anchor='''        int cachedSeries = database.count("series");\n'''
+ROOT = Path(__file__).resolve().parents[1]
+JAVA = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player"
+PACKAGE = JAVA / "PackageImporter.java"
+PROFILE = JAVA / "ServerPlaybackProfile.java"
+PLAYER = JAVA / "PlayerActivity.java"
+VOD = JAVA / "VodPlayerActivity.java"
+DATABASE = JAVA / "CatalogDatabase.java"
+GRADLE = ROOT / "BLOFY-ANDROID-2026/app/build.gradle.kts"
+
+# 1) Never reload a complete local catalog for the same playlist/source.
+p = PACKAGE.read_text(encoding="utf-8")
+if "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل" not in p:
+    anchor = '        int cachedSeries = database.count("series");\n'
     if anchor not in p:
-        raise SystemExit('r9: cached-series anchor missing')
-    block='''        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
+        raise SystemExit("r9: cached-series anchor missing")
+    block = '''        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
                 && !"in_progress".equals(database.metadata("sync_state", ""))) {
             String profile = database.metadata("playback_profile", "Media3 مباشر");
             emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
@@ -21,32 +25,83 @@ if 'تم فتح النسخة المحفوظة على الجهاز بدون إع�
         }
 
 '''
-    p=p.replace(anchor,anchor+block,1)
-PACKAGE.write_text(p,encoding='utf-8')
+    p = p.replace(anchor, anchor + block, 1)
+PACKAGE.write_text(p, encoding="utf-8")
 
-# A single hard failure is diagnostic only. Never erase a verified family route because
-# one movie/channel is dead; positive learning is replaced only by another proven success.
-s=PROFILE.read_text(encoding='utf-8')
-pattern=re.compile(r'''        if \(route\.equals\(prefs\.getString\(key \+ "\\.route", ""\)\)\) \{\n            editor\.putBoolean\(key \+ "\\.verified", false\)\.remove\(key \+ "\\.route"\);\n        \}\n''')
-s,hits=pattern.subn('',s,count=1)
-if hits==0:
-    # tolerate already-safe generated source, but forbid the dangerous behavior below.
-    pass
+# 2) Positive-only route learning. One dead channel/movie must not erase a route
+# that was previously proven on the same provider/content family.
+s = PROFILE.read_text(encoding="utf-8")
+dangerous_block = '''        if (route.equals(prefs.getString(key + ".route", ""))) {
+            editor.putBoolean(key + ".verified", false).remove(key + ".route");
+        }
+'''
+s = s.replace(dangerous_block, "")
+# Be tolerant of formatting changes but still remove the exact dangerous semantic.
+s = re.sub(
+    r'\s*if\s*\(route\.equals\(prefs\.getString\(key\s*\+\s*"\\.route",\s*""\)\)\)\s*\{\s*'
+    r'editor\.putBoolean\(key\s*\+\s*"\\.verified",\s*false\)\.remove\(key\s*\+\s*"\\.route"\);\s*\}\s*',
+    '\n', s, count=1, flags=re.S)
 if '.putBoolean(key + ".verified", false).remove(key + ".route")' in s:
-    raise SystemExit('r9: provider route invalidation still present')
-PROFILE.write_text(s,encoding='utf-8')
+    raise SystemExit("r9: provider route invalidation still present")
+PROFILE.write_text(s, encoding="utf-8")
 
-# R9 identity
-g=GRADLE.read_text(encoding='utf-8')
-g=re.sub(r'versionCode\s*=\s*\d+','versionCode = 1000342',g,count=1)
-g=re.sub(r'versionName\s*=\s*"[^"]*"','versionName = "v340-full-stability-r9"',g,count=1)
-GRADLE.write_text(g,encoding='utf-8')
+# 3) Final release identity.
+g = GRADLE.read_text(encoding="utf-8")
+g, c1 = re.subn(r'versionCode\s*=\s*\d+', 'versionCode = 1000342', g, count=1)
+g, c2 = re.subn(r'versionName\s*=\s*"[^"]*"', 'versionName = "v340-full-stability-r9"', g, count=1)
+if c1 != 1 or c2 != 1:
+    raise SystemExit("r9: version stamp failed")
+GRADLE.write_text(g, encoding="utf-8")
 
-pf=PACKAGE.read_text(encoding='utf-8')
-pr=PROFILE.read_text(encoding='utf-8')
-assert 'sourceIdentity.equals(activeSource)' in pf
-assert 'تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل' in pf
-assert 'ServerCompatibilityPreflight.run(' not in pf
-assert '.putBoolean(key + ".verified", false).remove(key + ".route")' not in pr
-assert 'rememberVerifiedSuccess' in pr
-print('R9 deep logic fix: guaranteed local-cache fast path + positive-only route learning')
+# 4) Deep invariants: fail the build rather than ship a regression.
+pf = PACKAGE.read_text(encoding="utf-8")
+pr = PROFILE.read_text(encoding="utf-8")
+pl = PLAYER.read_text(encoding="utf-8")
+vd = VOD.read_text(encoding="utf-8")
+db = DATABASE.read_text(encoding="utf-8")
+
+required_package = [
+    "sourceIdentity.equals(activeSource)",
+    "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل",
+    '!"in_progress".equals(database.metadata("sync_state", ""))',
+]
+for marker in required_package:
+    if marker not in pf:
+        raise SystemExit("r9: local-cache invariant missing: " + marker)
+if "ServerCompatibilityPreflight.run(" in pf or "!preflight.accepted()" in pf:
+    raise SystemExit("r9: blocking preflight returned")
+
+if '.putBoolean(key + ".verified", false).remove(key + ".route")' in pr:
+    raise SystemExit("r9: destructive negative route learning returned")
+if "rememberVerifiedSuccess" not in pr:
+    raise SystemExit("r9: verified positive route learning missing")
+
+for marker in [
+    "warmLiveSwitchPending = player != null",
+    "replaceLiveSourceOnWarmPlayer()",
+    "cancelResolve(true)",
+    "network.shutdownNow()",
+    "removeCallbacksAndMessages(null)",
+]:
+    if marker not in pl:
+        raise SystemExit("r9: live/lifecycle invariant missing: " + marker)
+
+for marker in [
+    "cancelResolve(true)",
+    "network.shutdownNow()",
+    "removeCallbacksAndMessages(null)",
+    "releaseAllEngines()",
+]:
+    if marker not in vd:
+        raise SystemExit("r9: vod/lifecycle invariant missing: " + marker)
+
+for marker in [
+    "database.beginTransaction()",
+    "media_staging",
+    'putMetadata(database, "sync_state", "complete")',
+    "committing the playable package must not wait for FTS",
+]:
+    if marker not in db:
+        raise SystemExit("r9: catalog database invariant missing: " + marker)
+
+print("R9 deep logic fix applied: cache fast path + positive-only route learning + live/VOD lifecycle + staged SQLite safeguards")
