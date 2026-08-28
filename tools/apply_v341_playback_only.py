@@ -332,11 +332,14 @@ replace_once(player,
 '''        if (isLive()) {
             PlaybackPolicy.RecoveryClass failureType = PlaybackPolicy.classifyRecovery(reason);
 
-            // A valid link with the wrong declared container is common on IPTV
-            // panels. First retry the exact same URL without forcing a MIME type;
-            // only then ask the provider for the alternate TS/HLS URL.
+            // A parser/container mismatch retries the exact same URL without a
+            // forced MIME type. HTTP format statuses go directly to the alternate
+            // TS/HLS URL because changing a local MIME hint cannot fix an HTTP 4xx.
             if (PlaybackPolicy.isFormatFailure(reason)) {
-                if (!"no-extension".equals(sourceVariant) && restoreCanonicalSource()) {
+                if (failureType == PlaybackPolicy.RecoveryClass.FORMAT
+                        && !liveAlternateTried
+                        && !"no-extension".equals(sourceVariant)
+                        && restoreCanonicalSource()) {
                     releasePlayer();
                     transportMode = PlaybackProfileManager.MODE_COMPAT;
                     sourceVariant = "no-extension";
@@ -442,6 +445,25 @@ replace_once(player,
 
     private void showPlaybackFailure(String reason) {
 ''', "safe VLC fallback")
+replace_once(player,
+'''        switch (event.type) {
+            case org.videolan.libvlc.MediaPlayer.Event.Vout:
+            case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
+            case org.videolan.libvlc.MediaPlayer.Event.PositionChanged:
+                applyVlcSubtitlePreference();
+                markVlcFirstFrame();
+                break;
+''',
+'''        switch (event.type) {
+            case org.videolan.libvlc.MediaPlayer.Event.Vout:
+                applyVlcSubtitlePreference();
+                markVlcFirstFrame();
+                break;
+            case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
+            case org.videolan.libvlc.MediaPlayer.Event.PositionChanged:
+                applyVlcSubtitlePreference();
+                break;
+''', "VLC success requires video output")
 
 vod = JAVA / "VodPlayerActivity.java"
 replace_once(vod,
@@ -539,6 +561,194 @@ replace_once(vod,
 
         // Startup, parser, codec or a failed direct source gets one neutral
 ''', "network ladder cap")
+
+# Keep the exact learned VOD transport.  The old integer attempt value could
+# not distinguish a proven platform-HTTP compatibility route from Cronet.
+replace_once(vod,
+'''    private String sourceVariant = "canonical";
+    private long resumePosition;
+''',
+'''    private String sourceVariant = "canonical";
+    private String transportMode = PlaybackProfileManager.MODE_LEGACY;
+    private long resumePosition;
+''', "VOD transport field")
+replace_once(vod,
+'''        attempt = PlaybackRouteMemory.preferredRecoveryStep(this, kind, id);
+''',
+'''        transportMode = PlaybackRouteMemory.normalizeStoredRoute(
+                PlaybackRouteMemory.preferredMode(this, kind, id, ""));
+        if (transportMode.isEmpty()) transportMode = PlaybackProfileManager.MODE_LEGACY;
+        attempt = PlaybackRouteMemory.recoveryStepForMode(transportMode);
+''', "load exact VOD transport")
+replace_once(vod,
+'''                        if (attempt >= 2) openVlc("المسار المتوافق المحفوظ لهذا المحتوى");
+                        else openMedia3();
+''',
+'''                        if (PlaybackProfileManager.MODE_VLC.equals(transportMode)) {
+                            openVlc("المسار المتوافق المحفوظ لهذا المحتوى");
+                        }
+                        else openMedia3();
+''', "open learned VLC route")
+replace_once(vod,
+'''                        sourceVariant = "no-extension";
+                        attempt = 2;
+                        if (!lifecycleStopped) openMedia3();
+''',
+'''                        sourceVariant = "no-extension";
+                        transportMode = PlaybackProfileManager.MODE_COMPAT;
+                        attempt = 1;
+                        if (!lifecycleStopped) openMedia3();
+''', "direct resolve fallback stays Media3")
+replace_once(vod,
+'''        sourceVariant = "canonical";
+        attempt = 2;
+        return true;
+''',
+'''        sourceVariant = "canonical";
+        return true;
+''', "canonical restore does not choose engine")
+replace_once(vod,
+'''        boolean preferCronet = attempt == 1 && PlaybackTransportFactory.isCronetReady();
+        DataSource.Factory source = PlaybackTransportFactory.create(
+                this, preferCronet, network,
+                attempt == 0 ? (ultraHd() ? 5_000 : 3_500) : 3_500,
+                attempt == 0 ? (ultraHd() ? 12_000 : 8_000) : 8_000,
+                attempt, playbackReferer);
+''',
+'''        boolean preferCronet = PlaybackProfileManager.MODE_CRONET.equals(transportMode)
+                && PlaybackTransportFactory.isCronetReady();
+        if (PlaybackProfileManager.MODE_CRONET.equals(transportMode) && !preferCronet) {
+            transportMode = PlaybackProfileManager.MODE_COMPAT;
+        }
+        int compatibilityProfile = PlaybackProfileManager.MODE_LEGACY.equals(transportMode) ? 0 : 1;
+        DataSource.Factory source = PlaybackTransportFactory.create(
+                this, preferCronet, network,
+                compatibilityProfile == 0 ? (ultraHd() ? 5_000 : 3_500) : 3_500,
+                compatibilityProfile == 0 ? (ultraHd() ? 12_000 : 8_000) : 8_000,
+                compatibilityProfile, playbackReferer);
+''', "honor exact Media3 transport")
+replace_once(vod,
+'''        engineView.setText(attempt == 1 && PlaybackTransportFactory.isCronetReady()
+                ? "Media3 • Cronet" : "Media3");
+''',
+'''        engineView.setText(preferCronet
+                ? "Media3 • Cronet" : "Media3");
+''', "accurate engine label")
+replace_once(vod,
+'''            releaseAllEngines();
+            usingVlc = true;
+''',
+'''            releaseAllEngines();
+            transportMode = PlaybackProfileManager.MODE_VLC;
+            attempt = 2;
+            usingVlc = true;
+''', "VLC transport state")
+replace_once(vod,
+'''            case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
+            case org.videolan.libvlc.MediaPlayer.Event.PositionChanged:
+                updateVlcTrackButtons();
+                markVlcFirstFrame();
+                break;
+''',
+'''            case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
+            case org.videolan.libvlc.MediaPlayer.Event.PositionChanged:
+                updateVlcTrackButtons();
+                break;
+''', "VOD VLC success requires Vout")
+replace_once(vod,
+'''            attempt = 2;
+            openVlc(reason);
+            return;
+        }
+
+        boolean networkFailure = failureType == PlaybackPolicy.RecoveryClass.DNS
+''',
+'''            attempt = 2;
+            transportMode = PlaybackProfileManager.MODE_VLC;
+            openVlc(reason);
+            return;
+        }
+
+        boolean networkFailure = failureType == PlaybackPolicy.RecoveryClass.DNS
+''', "decoder route to VLC")
+replace_once(vod,
+'''            alternateSourceAttempted = true;
+            sourceVariant = "direct";
+            attempt = 1;
+''',
+'''            alternateSourceAttempted = true;
+            sourceVariant = "direct";
+            transportMode = PlaybackTransportFactory.isCronetReady()
+                    ? PlaybackProfileManager.MODE_CRONET
+                    : PlaybackProfileManager.MODE_COMPAT;
+            attempt = 1;
+''', "network transport selection")
+replace_once(vod,
+'''            attempt = 2;
+            openVlc(reason);
+            return;
+        }
+
+        // Startup, parser, codec or a failed direct source gets one neutral
+''',
+'''            attempt = 2;
+            transportMode = PlaybackProfileManager.MODE_VLC;
+            openVlc(reason);
+            return;
+        }
+
+        // Startup, parser, codec or a failed direct source gets one neutral
+''', "second network failure to VLC")
+replace_once(vod,
+'''            sourceVariant = "no-extension";
+            attempt = 1;
+''',
+'''            sourceVariant = "no-extension";
+            transportMode = PlaybackProfileManager.MODE_COMPAT;
+            attempt = 1;
+''', "neutral container transport")
+replace_once(vod,
+'''        attempt = 2;
+        openVlc(reason);
+    }
+
+    private void showFinalPlaybackError(String reason) {
+''',
+'''        attempt = 2;
+        transportMode = PlaybackProfileManager.MODE_VLC;
+        openVlc(reason);
+    }
+
+    private void showFinalPlaybackError(String reason) {
+''', "final VOD fallback route")
+replace_once(vod,
+'''        attempt = 0;
+        usingVlc = false;
+''',
+'''        attempt = 0;
+        transportMode = PlaybackProfileManager.MODE_LEGACY;
+        usingVlc = false;
+''', "manual VOD reset")
+replace_once(vod,
+'''        PlaybackRouteMemory.recordSuccess(this, kind, id, extension,
+                attempt == 1 && PlaybackTransportFactory.isCronetReady() ? "cronet" : "default-http");
+        PlaybackProfileManager.recordSuccess(this, kind, extension,
+                attempt == 1 && PlaybackTransportFactory.isCronetReady() ? "cronet" : "legacy7max");
+''',
+'''        PlaybackRouteMemory.recordSuccess(this, kind, id, extension,
+                transportMode);
+        PlaybackProfileManager.recordSuccess(this, kind, extension,
+                transportMode);
+''', "record exact VOD route")
+replace_once(vod,
+'''            if (usingVlc || attempt >= 2) openVlc("استئناف المشاهدة");
+            else openMedia3();
+''',
+'''            if (usingVlc || PlaybackProfileManager.MODE_VLC.equals(transportMode)) {
+                openVlc("استئناف المشاهدة");
+            }
+            else openMedia3();
+''', "resume exact VOD route")
 
 server_profile = JAVA / "ServerPlaybackProfile.java"
 replace_once(server_profile,
