@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player"
@@ -37,10 +38,6 @@ patch(PLAYER,
 '''                    if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n''',
 "player resolve canonical fallback")
 
-# Depending on live_guard/error_guard ordering this exact playback line may have
-# already been replaced by a bounded live-specific fallback. Resolver failure is
-# still guaranteed to restore canonical, so treat this extra playback fallback as
-# compatible/optional rather than failing the whole release build.
 optional_patch(PLAYER,
 '''            if ("direct".equals(sourceVariant)) restoreCanonicalSource();\n''',
 '''            if (learnedAlternateVariant(sourceVariant)) restoreCanonicalSource();\n''',
@@ -57,16 +54,29 @@ patch(VOD,
 '''                    if ("canonical".equals(requestedVariant)) {\n                        canonicalUrl = resolvedUrl;\n                        canonicalExtension = extension;\n                        canonicalReferer = playbackReferer;\n                        ServerPlaybackProfile.Profile learned = ServerPlaybackProfile.load(this, canonicalUrl);\n                        if (learned.fresh() && learnedAlternateVariant(learned.preferredRoute)) {\n                            sourceVariant = learned.preferredRoute;\n                            alternateSourceAttempted = "direct".equals(sourceVariant);\n                            containerRouteAttempted = "no-extension".equals(sourceVariant);\n                            attempt = 1;\n                            resolvedUrl = "";\n                            resolving = false;\n                            PlaybackDiagnostics.marker(this, "learned-vod-route-retry", kind, id, extension,\n                                    sourceVariant, "canonical-ready");\n                            resolve();\n                            return;\n                        }\n                    }\n                    resolving = false;\n                    if (!lifecycleStopped) openMedia3();\n''',
 "apply learned VOD route")
 
+# Normalize the resolver-error branch regardless of whether v337 left the direct-only
+# form, the direct/no-extension form, or another whitespace-equivalent layout.
 vod_text = VOD.read_text(encoding="utf-8")
-old_broad = '''                    if (("direct".equals(requestedVariant) || "no-extension".equals(requestedVariant))\n                            && restoreCanonicalSource()) {\n                        if (!lifecycleStopped) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n'''
-old_direct = '''                    if ("direct".equals(requestedVariant) && restoreCanonicalSource()) {\n                        if (!lifecycleStopped) openVlc(PlaybackPolicy.resolveErrorMessage(error));\n                        return;\n                    }\n'''
-new_catch = '''                    if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n                        attempt = 0;\n                        if (!lifecycleStopped) openMedia3();\n                        return;\n                    }\n'''
-if old_broad in vod_text:
-    VOD.write_text(vod_text.replace(old_broad, new_catch, 1), encoding="utf-8")
-elif old_direct in vod_text:
-    VOD.write_text(vod_text.replace(old_direct, new_catch, 1), encoding="utf-8")
-else:
+resolver_pattern = re.compile(
+    r'(?P<indent>\s*)if\s*\(\s*(?:\(\s*)?"direct"\.equals\(requestedVariant\)'
+    r'(?:\s*\|\|\s*"no-extension"\.equals\(requestedVariant\)\s*\))?\s*'
+    r'&&\s*restoreCanonicalSource\(\)\s*\)\s*\{\s*'
+    r'if\s*\(!lifecycleStopped\)\s*openVlc\(PlaybackPolicy\.resolveErrorMessage\(error\)\);\s*'
+    r'return;\s*\}',
+    re.MULTILINE)
+match = resolver_pattern.search(vod_text)
+if not match:
     raise SystemExit("v340 route-learning patch mismatch in VodPlayerActivity.java: VOD resolve canonical fallback")
+indent = match.group('indent')
+replacement = (
+    indent + 'if (learnedAlternateVariant(requestedVariant) && restoreCanonicalSource()) {\n'
+    + indent + '    attempt = 0;\n'
+    + indent + '    if (!lifecycleStopped) openMedia3();\n'
+    + indent + '    return;\n'
+    + indent + '}'
+)
+vod_text = vod_text[:match.start()] + replacement + vod_text[match.end():]
+VOD.write_text(vod_text, encoding="utf-8")
 
 patch(VOD,
 '''        boolean networkFailure = PlaybackPolicy.isNetworkFailure(reason)\n                && !PlaybackPolicy.isStartupTimeout(reason);\n\n''',
