@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "BLOFY-ANDROID-2026/app"
@@ -40,12 +41,21 @@ if "private int beginPlaybackTransaction(" not in p:
 '''
     p = p.replace(anchor, helper + anchor, 1)
 
+# Capture the active playback transaction when a resolve starts. Older reconstruction
+# layers may format/extend the token guard differently, so inject transaction checks
+# structurally instead of relying on one exact source string.
 if "int transactionToken = playbackTransaction;" not in p:
     sig = "    private void resolvePlaybackLink() {\n        int token = ++resolveGeneration;\n"
     if sig not in p: raise SystemExit("R11E2: resolve method anchor missing")
     p = p.replace(sig, sig + "        int transactionToken = playbackTransaction;\n", 1)
-    p = p.replace("if (token != resolveGeneration || isFinishing() || isDestroyed()) return;",
-                  "if (token != resolveGeneration || transactionToken != playbackTransaction || isFinishing() || isDestroyed()) return;")
+
+if "transactionToken != playbackTransaction" not in p:
+    p, guard_count = re.subn(
+        r'token\s*!=\s*resolveGeneration\s*\|\|\s*',
+        'token != resolveGeneration || transactionToken != playbackTransaction || ',
+        p)
+    if guard_count < 1:
+        raise SystemExit("R11E2: resolve callback guard anchor missing")
 
 if "r11e2-live-warm-boundary" not in p:
     sig = "    private void switchLiveChannel(BlofyModels.Media media) {\n        if (!isLive() || media == null || media.id.equals(id)) return;\n"
