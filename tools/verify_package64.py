@@ -88,7 +88,8 @@ checks = [
 ("upgrade-safe COMPLETE target",
     file_has("build.gradle.kts", "versionCode = 1000355", 'versionName = "v340-full-stability-r11e-complete"')
     or file_has("build.gradle.kts", "versionCode = 1000356", 'versionName = "v340-playback-core-hotfix"')
-    or file_has("build.gradle.kts", "versionCode = 1000357", 'versionName = "v340-playback-hotfix-stage4"')),
+    or file_has("build.gradle.kts", "versionCode = 1000357", 'versionName = "v340-playback-hotfix-stage4"')
+    or file_has("build.gradle.kts", "versionCode = 1000358", 'versionName = "v340-playback-hotfix-stage5"')),
 ]
 
 assert len(checks) == 64, len(checks)
