@@ -184,7 +184,31 @@ jobs:
           done
           unzip -t "$FINAL_APK" >/tmp/unzip.txt
           grep -q 'No errors detected' /tmp/unzip.txt
-          python3 -c 'import collections,pathlib,sys,zipfile; p=pathlib.Path(sys.argv[1]); z=zipfile.ZipFile(p); assert z.testzip() is None; ns=z.namelist(); assert not [n for n,c in collections.Counter(ns).items() if c>1]; dex=[n for n in ns if n.startswith("classes") and n.endswith(".dex")]; assert dex; [(lambda d: (len(d)>112 and d[:4]==b"dex\\n"))(z.read(n)) or (_ for _ in ()).throw(AssertionError(n)) for n in dex]; req=["lib/arm64-v8a/libffmpegJNI.so","lib/arm64-v8a/libvlc.so","lib/arm64-v8a/libvlcjni.so","lib/arm64-v8a/libc++_shared.so","lib/armeabi-v7a/libffmpegJNI.so","lib/armeabi-v7a/libvlc.so","lib/armeabi-v7a/libvlcjni.so","lib/armeabi-v7a/libc++_shared.so"]; assert not [n for n in req if n not in ns]; abis={n.split("/")[1] for n in ns if n.startswith("lib/") and n.count("/")>=2}; assert abis=={"arm64-v8a","armeabi-v7a"}; print("deep zip/dex/native QA OK")' "$FINAL_APK"
+          python3 - "$FINAL_APK" <<'PY'
+import collections, pathlib, sys, zipfile
+p = pathlib.Path(sys.argv[1])
+with zipfile.ZipFile(p) as z:
+    assert z.testzip() is None
+    names = z.namelist()
+    assert not [n for n,c in collections.Counter(names).items() if c > 1]
+    dex = [n for n in names if n.startswith('classes') and n.endswith('.dex')]
+    assert dex
+    for n in dex:
+        d = z.read(n)
+        assert len(d) > 112, n
+        assert d[:4] in (b'dex\n', b'cdex'), (n, d[:8])
+    required = ['lib/arm64-v8a/libffmpegJNI.so','lib/arm64-v8a/libvlc.so','lib/arm64-v8a/libvlcjni.so','lib/arm64-v8a/libc++_shared.so','lib/armeabi-v7a/libffmpegJNI.so','lib/armeabi-v7a/libvlc.so','lib/armeabi-v7a/libvlcjni.so','lib/armeabi-v7a/libc++_shared.so']
+    assert not [n for n in required if n not in names]
+    abis = {n.split('/')[1] for n in names if n.startswith('lib/') and n.count('/') >= 2}
+    assert abis == {'arm64-v8a','armeabi-v7a'}, abis
+    print('deep zip/dex/native QA OK', dex)
+PY
+          APKANALYZER="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          if [ -x "$APKANALYZER" ]; then
+            "$APKANALYZER" apk summary "$FINAL_APK" | tee /tmp/apk-summary.txt
+            "$APKANALYZER" dex list "$FINAL_APK" | tee /tmp/dex-list.txt
+            test -s /tmp/dex-list.txt
+          fi
           TMP="$RUNNER_TEMP/native-r9"
           mkdir -p "$TMP"
           unzip -q "$FINAL_APK" 'lib/*' -d "$TMP"
