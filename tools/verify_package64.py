@@ -85,7 +85,7 @@ checks = [
 ("device-adaptive performance", any_text("DeviceCapabilityProfile", "lowRam", "usesReducedPerformance")),
 ("diagnostic breadcrumbs", any_text("PlaybackDiagnostics", "diagnostic", "breadcrumb")),
 ("release QA contract", any_text("testDebugUnitTest", "lintRelease", "zipalign", "apksigner") or file_has("BLOFY_PACKAGE64.md", "Release passes unit tests")),
-("upgrade-safe COMPLETE target", any_text("versionCode = 1000355", "v340-full-stability-r11e-complete")),
+("upgrade-safe COMPLETE target", file_has("build.gradle.kts", "versionCode = 1000355", 'versionName = "v340-full-stability-r11e-complete"') or file_has("build.gradle.kts", "versionCode = 1000356", 'versionName = "v340-playback-core-hotfix"')),
 ]
 
 assert len(checks) == 64, len(checks)
