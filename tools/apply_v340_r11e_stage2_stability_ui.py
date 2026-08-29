@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
+import runpy
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "BLOFY-ANDROID-2026/app"
@@ -150,3 +151,6 @@ for path, markers in checks.items():
         if marker not in text: raise SystemExit(f"R11E2 invariant missing {path.name}: {marker}")
 
 print("R11E stage2 applied: hard playback transaction + persistent live overlay + hot drawer rows + reduced-motion TV focus path")
+
+# Chain stage 3 into the same proven signed build pipeline.
+runpy.run_path(str(ROOT / "tools/apply_v340_r11e_stage3_catalog_focus.py"), run_name="__main__")
