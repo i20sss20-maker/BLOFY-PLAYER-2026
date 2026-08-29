@@ -7,6 +7,7 @@ JAVA = ROOT / "BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player"
 PLAYER = JAVA / "PlayerActivity.java"
 VOD = JAVA / "VodPlayerActivity.java"
 GRADLE = ROOT / "BLOFY-ANDROID-2026/app/build.gradle.kts"
+POLICY_TEST = ROOT / "BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPolicyTest.java"
 
 p = PLAYER.read_text(encoding="utf-8")
 if "private int postStartRecoveryCount;" not in p:
@@ -98,7 +99,6 @@ v = v.replace('sourceVariant = ServerPlaybackProfile.load(this, reference, kind)
               'sourceVariant = "canonical";')
 v = v.replace('sourceVariant = profile.route;', 'sourceVariant = "canonical";')
 
-# Add a single helper so Media3 and VLC first-frame paths share identical proven-learning logic.
 if "private void markR11VodFirstFrame" not in v:
     helper = '''
     private void markR11VodFirstFrame(String engine) {
@@ -114,15 +114,13 @@ if "private void markR11VodFirstFrame" not in v:
     if pos >= 0:
         v = v[:pos] + helper + v[pos:]
 
-# Media3 callback.
 if 'markR11VodFirstFrame("media3")' not in v:
     pattern = re.compile(r'(@Override public void onRenderedFirstFrame\(\) \{.*?main\.removeCallbacks\(startupTimeout\);)', re.S)
-    v, n = pattern.subn(r'\1\n        markR11VodFirstFrame("media3");', v, count=1)
+    v, _ = pattern.subn(r'\1\n        markR11VodFirstFrame("media3");', v, count=1)
 
-# VLC first-frame is established on TimeChanged/PositionChanged.
 if 'markR11VodFirstFrame("vlc")' not in v:
     pattern = re.compile(r'(if \(!firstFrame\) \{\s*firstFrame = true;\s*spinner\.setVisibility\(View\.GONE\);\s*main\.removeCallbacks\(startupTimeout\);)', re.S)
-    v, n = pattern.subn(r'\1\n                    markR11VodFirstFrame("vlc");', v, count=1)
+    v, _ = pattern.subn(r'\1\n                    markR11VodFirstFrame("vlc");', v, count=1)
 
 if "r11-vod-recover" not in v:
     m = re.search(r'(\n    private void recover\(String reason\) \{\n)', v)
@@ -142,14 +140,39 @@ if 'media3-exoplayer-rtsp' not in g:
         g = g.replace(dash, dash + '    implementation("androidx.media3:media3-exoplayer-rtsp:$media3Version")\n', 1)
 GRADLE.write_text(g, encoding="utf-8")
 
+# R11 intentionally shortens the bounded startup budgets. Keep the unit test
+# synchronized with the policy so CI catches real regressions instead of the
+# historical R10 numbers.
+t = POLICY_TEST.read_text(encoding="utf-8")
+replacements = {
+    'assertEquals(5_000, PlaybackPolicy.startupTimeoutMs(0));': 'assertEquals(4_000, PlaybackPolicy.startupTimeoutMs(0));',
+    'assertEquals(2_500, PlaybackPolicy.startupTimeoutMs(1));': 'assertEquals(2_250, PlaybackPolicy.startupTimeoutMs(1));',
+    'assertEquals(6_500, PlaybackPolicy.vodStartupTimeoutMs(false));': 'assertEquals(5_000, PlaybackPolicy.vodStartupTimeoutMs(false));',
+    'assertEquals(9_000, PlaybackPolicy.vodStartupTimeoutMs(true));': 'assertEquals(7_500, PlaybackPolicy.vodStartupTimeoutMs(true));',
+    'assertEquals(5_500, PlaybackPolicy.vlcStartupTimeoutMs(false));': 'assertEquals(4_500, PlaybackPolicy.vlcStartupTimeoutMs(false));',
+    'assertEquals(8_000, PlaybackPolicy.vlcStartupTimeoutMs(true));': 'assertEquals(7_000, PlaybackPolicy.vlcStartupTimeoutMs(true));',
+}
+for old, new in replacements.items():
+    if old in t:
+        t = t.replace(old, new, 1)
+POLICY_TEST.write_text(t, encoding="utf-8")
+
 checks = {
     PLAYER: ["r11-live-format-fallback", "r11-live-post-start-recovery", "PlaybackNegotiator.proven"],
     VOD: ["r11-vod-resolve-start", "r11-vod-first-frame", 'markR11VodFirstFrame("media3")', 'markR11VodFirstFrame("vlc")', 'sourceVariant = "canonical"'],
     GRADLE: ["media3-exoplayer-rtsp", "versionCode = 1000344", "v340-full-stability-r11"],
+    POLICY_TEST: [
+        "assertEquals(4_000, PlaybackPolicy.startupTimeoutMs(0));",
+        "assertEquals(2_250, PlaybackPolicy.startupTimeoutMs(1));",
+        "assertEquals(5_000, PlaybackPolicy.vodStartupTimeoutMs(false));",
+        "assertEquals(7_500, PlaybackPolicy.vodStartupTimeoutMs(true));",
+        "assertEquals(4_500, PlaybackPolicy.vlcStartupTimeoutMs(false));",
+        "assertEquals(7_000, PlaybackPolicy.vlcStartupTimeoutMs(true));",
+    ],
 }
 for path, markers in checks.items():
     text = path.read_text(encoding="utf-8")
     for marker in markers:
         if marker not in text:
             raise SystemExit(f"R11B invariant missing {path.name}: {marker}")
-print("R11B compatibility layer applied: adaptive Live + canonical-first VOD + Media3/VLC proven first-frame diagnostics")
+print("R11B compatibility layer applied: adaptive Live + canonical-first VOD + proven first-frame diagnostics + R11 timeout tests")
