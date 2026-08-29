@@ -10,10 +10,9 @@ GRADLE = APP / "build.gradle.kts"
 
 n = NEG.read_text(encoding="utf-8")
 
-# Stage 10 expands only to genuinely different URL shapes/extensions. It does not
-# repeat a dead URL through another engine after Stage 9 has circuit-broken it.
-# This specifically covers providers whose API advertises the wrong VOD container
-# or whose live endpoint works only with the alternate extension on direct/no-extension routes.
+# Stage 10 expands only to genuinely different URL/container shapes.
+# Stage 9 already blocks hard 403/404 routes across engines, so this matrix
+# explores new URLs instead of pointlessly retrying the same dead URL in VLC.
 
 if "r11e10-live-route-matrix" not in n:
     old = '''        add(out, seen, "canonical", base, "media3");
@@ -35,37 +34,42 @@ if "r11e10-live-route-matrix" not in n:
     n = n.replace(old, new, 1)
 
 if "r11e10-vod-route-matrix" not in n:
-    old = '''        String base = normalize(itemExtension, "mp4");
-        LinkedHashSet<String> seen = new LinkedHashSet<>();
-        ArrayList<Candidate> out = new ArrayList<>();
-        if (profile.fresh()) add(out, seen, profile.route, base, profile.engine);
-        // Canonical is intentionally first. R10 field tests proved that learned
-        // direct/no-extension retries could add 10-15 seconds before canonical.
-        add(out, seen, "canonical", base, ultraHd ? "vlc" : "media3");
-        add(out, seen, "canonical", base, ultraHd ? "media3" : "vlc");
-        add(out, seen, "direct", base, "media3");
-        add(out, seen, "no-extension", base, "media3");
-        return out;'''
-    if old not in n:
-        raise SystemExit("R11E10: VOD candidate anchor missing")
-    new = '''        String base = normalize(itemExtension, "mp4");
-        String alternate = "mkv".equals(base) ? "mp4" : "mkv";
-        LinkedHashSet<String> seen = new LinkedHashSet<>();
-        ArrayList<Candidate> out = new ArrayList<>();
-        if (profile.fresh()) add(out, seen, profile.route, profile.extension, profile.engine);
-        // Keep the provider-declared canonical shape first, then explore only distinct
-        // URL/container shapes. Stage 9 prevents engine-only retries on a dead 403/404 URL.
-        add(out, seen, "canonical", base, ultraHd ? "vlc" : "media3");
-        add(out, seen, "canonical", base, ultraHd ? "media3" : "vlc");
-        add(out, seen, "direct", base, "media3");
-        add(out, seen, "no-extension", base, "media3");
-        add(out, seen, "canonical", alternate, "media3");
+    start = n.find("    static List<Candidate> vodCandidates(")
+    if start < 0:
+        raise SystemExit("R11E10: vodCandidates missing")
+    next_method = n.find("\n    static ", start + 20)
+    end = next_method if next_method > 0 else len(n)
+    block = n[start:end]
+
+    base_line = '        String base = normalize(itemExtension, "mp4");\n'
+    if base_line not in block:
+        raise SystemExit("R11E10: VOD base anchor missing")
+    block = block.replace(base_line,
+            base_line + '        String alternate = "mkv".equals(base) ? "mp4" : "mkv";\n', 1)
+
+    # Preserve the exact proven extension, not merely the current item's extension.
+    block = block.replace(
+        'if (profile.fresh()) add(out, seen, profile.route, base, profile.engine);',
+        'if (profile.fresh()) add(out, seen, profile.route, profile.extension, profile.engine);', 1)
+
+    # Insert alternate-container candidates immediately before whichever return shape
+    # previous stages installed (raw return or filterFailures return).
+    return_candidates = [
+        '        return filterFailures(context, providerUrl, "vod", out);',
+        '        return out;'
+    ]
+    ret = next((r for r in return_candidates if r in block), None)
+    if ret is None:
+        raise SystemExit("R11E10: VOD return anchor missing")
+
+    inject = '''        add(out, seen, "canonical", alternate, "media3");
         add(out, seen, "direct", alternate, "media3");
         add(out, seen, "no-extension", alternate, "media3");
         PlaybackDiagnostics.marker(context, "r11e10-vod-route-matrix", "vod", "", base,
                 "matrix", "base=" + base + " alternate=" + alternate + " uhd=" + ultraHd);
-        return out;'''
-    n = n.replace(old, new, 1)
+'''
+    block = block.replace(ret, inject + ret, 1)
+    n = n[:start] + block + n[end:]
 
 NEG.write_text(n, encoding="utf-8")
 
