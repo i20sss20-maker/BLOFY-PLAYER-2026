@@ -1,0 +1,1 @@
+All R11E stage scripts are source-of-truth patches and must be chained by v340-full-stability-r11.yml before final release acceptance.
