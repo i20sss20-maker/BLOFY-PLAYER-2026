@@ -13,18 +13,30 @@ s = SEVEN.read_text(encoding="utf-8")
 if "private View r11e3CachedHomePage;" not in s:
     m = re.search(r'(?m)^\s*private\s+volatile\s+boolean\s+destroyed\s*;\s*$', s)
     if not m:
-        raise SystemExit("R11E3: state anchor missing")
+        # Reconstruction layers can reorder fields. Fall back to the class body.
+        m = re.search(r'public\s+final\s+class\s+SevenMaxActivity\s+extends\s+Activity\s*\{', s)
+        if not m:
+            raise SystemExit("R11E3: class/state anchor missing")
     insert_at = m.end()
     s = s[:insert_at] + "\n    private View r11e3CachedHomePage;\n    private View r11e3CachedHomeFocus;" + s[insert_at:]
 
-# Brace-balanced Java method locator. This is deliberately independent of
-# neighboring method names because earlier reconstruction layers can move them.
+# Brace-balanced Java method locator. First try a strict declaration pattern,
+# then a deliberately tolerant name lookup because earlier reconstruction
+# layers can add annotations/modifiers or reformat the method declaration.
 def method_bounds(text, method_name):
-    pattern = re.compile(
-        r'(?m)^\s*(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?[\w<>\[\].?]+\s+'
-        + re.escape(method_name) + r'\s*\([^\n]*\)\s*\{'
-    )
-    m = pattern.search(text)
+    patterns = [
+        re.compile(
+            r'(?m)^\s*(?:@[\w.]+(?:\([^\n]*\))?\s*)*'
+            r'(?:(?:private|protected|public|static|final|synchronized)\s+)*'
+            r'[\w<>\[\].?, ]+\s+' + re.escape(method_name) + r'\s*\([^)]*\)\s*\{'
+        ),
+        re.compile(r'\b' + re.escape(method_name) + r'\s*\([^)]*\)\s*\{', re.S),
+    ]
+    m = None
+    for pattern in patterns:
+        m = pattern.search(text)
+        if m:
+            break
     if not m:
         return -1, -1
     brace = text.find('{', m.start(), m.end())
@@ -34,10 +46,19 @@ def method_bounds(text, method_name):
     in_string = False
     quote = ''
     escape = False
+    line_comment = False
+    block_comment = False
     i = brace
     while i < len(text):
         ch = text[i]
-        if in_string:
+        nxt = text[i + 1] if i + 1 < len(text) else ''
+        if line_comment:
+            if ch == '\n': line_comment = False
+        elif block_comment:
+            if ch == '*' and nxt == '/':
+                block_comment = False
+                i += 1
+        elif in_string:
             if escape:
                 escape = False
             elif ch == '\\':
@@ -45,7 +66,13 @@ def method_bounds(text, method_name):
             elif ch == quote:
                 in_string = False
         else:
-            if ch in ('"', "'"):
+            if ch == '/' and nxt == '/':
+                line_comment = True
+                i += 1
+            elif ch == '/' and nxt == '*':
+                block_comment = True
+                i += 1
+            elif ch in ('"', "'"):
                 in_string = True
                 quote = ch
             elif ch == '{':
@@ -53,14 +80,16 @@ def method_bounds(text, method_name):
             elif ch == '}':
                 depth -= 1
                 if depth == 0:
-                    return m.start(), i + 1
+                    # Return from the start of the declaration line when possible.
+                    line_start = text.rfind('\n', 0, m.start()) + 1
+                    return line_start, i + 1
         i += 1
     return -1, -1
 
 if "r11e3-home-cache-hit" not in s:
     start, end = method_bounds(s, "showHome")
     if start < 0:
-        raise SystemExit("R11E3: showHome method missing")
+        raise SystemExit("R11E3: showHome anchor missing")
     block = s[start:end]
     reset = re.search(r'root\s*\.\s*removeAllViews\s*\(\s*\)\s*;', block)
     if not reset:
@@ -94,8 +123,6 @@ if "r11e3CachedHomePage = root.getChildAt(0);" not in s:
     s = s[:insert_at] + "\n        r11e3CachedHomePage = root.getChildAt(0);" + s[insert_at:]
 
 if "r11e3CachedHomeFocus = tile;" not in s:
-    # Capture focus at the source of the transition. This is safer than trying
-    # to intercept every root.clear/remove path reconstructed by earlier layers.
     start, end = method_bounds(s, "homeTile")
     if start < 0:
         raise SystemExit("R11E3: homeTile method missing")
@@ -164,8 +191,6 @@ if "r11e3-catalog-window" not in s:
 '''
     s = s[:insert_at] + helper + s[insert_at:]
 
-    # Tune all RecyclerViews created in this shell. Grid lists get a larger
-    # poster window, linear lists stay conservative for low-memory TV boxes.
     rv_pattern = re.compile(r'RecyclerView\s+(\w+)\s*=\s*new RecyclerView\(this\);')
     matches = list(rv_pattern.finditer(s))
     offset = 0
