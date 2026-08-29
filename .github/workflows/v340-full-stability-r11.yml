@@ -8,6 +8,7 @@ on:
       - "tools/apply_v340_r11_negotiator.py"
       - "tools/apply_v340_r11b_compat_fix.py"
       - "tools/apply_v340_r11c_field_fixes.py"
+      - "tools/apply_v340_r11d_full_features.py"
       - ".github/workflows/v340-full-stability-r11.yml"
 
 permissions:
@@ -34,7 +35,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Recreate R10 base and apply R11 adaptive layer
+      - name: Recreate R10 base and apply R11 full adaptive layer
         shell: bash
         run: |
           set -euo pipefail
@@ -66,26 +67,29 @@ jobs:
             apply_v340_r10_warning_hardening.py; do
               python3 "tools/$f"
           done
-          # The primary R11 patch writes all new classes/features before its final
-          # invariant check. Older reconstructed PlayerActivity shapes can make that
-          # check exit non-zero; the compatibility passes complete/validate it.
           python3 tools/apply_v340_r11_negotiator.py || true
           python3 tools/apply_v340_r11b_compat_fix.py
-          # R11C is intentionally anchor-tolerant because R11B reconstructs the
-          # resolve path differently from the older R10 source shape.
           python3 tools/apply_v340_r11c_field_fixes.py
+          python3 tools/apply_v340_r11d_full_features.py
           grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11-live-post-start-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11c-live-silent-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'attemptedLiveCandidates' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'r11d-preload-scheduled' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'PlaybackSmartCache.wrap' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'CmcdConfiguration.Factory.DEFAULT' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'setAllowChunklessPreparation(true)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'class PlaybackPreloadManager' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPreloadManager.java
+          grep -q 'class PlaybackSmartCache' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackSmartCache.java
           grep -q 'r11-vod-resolve-start' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'r11-vod-first-frame' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'class PlaybackNegotiator' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
           grep -q 'media3-exoplayer-rtsp' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'media3-datasource' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'media3-database' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'PREVIEW_STARTUP_TIMEOUT_MS = 3_500' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
           grep -q 'اعتماد الباقة كاملة' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q 'versionCode = 1000344' BLOFY-ANDROID-2026/app/build.gradle.kts
-          grep -q 'v340-full-stability-r11' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'versionCode = 1000345' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'v340-full-stability-r11d-full' BLOFY-ANDROID-2026/app/build.gradle.kts
           test -s BLOFY-ANDROID-2026/app/src/main/baseline-prof.txt
 
       - name: Java 17
@@ -157,7 +161,7 @@ jobs:
           unzip -q "$RUNNER_TEMP/key.zip" -d "$RUNNER_TEMP/key"
           test -s "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks"
 
-      - name: Sign R11
+      - name: Sign R11D
         shell: bash
         run: |
           set -euo pipefail
@@ -168,9 +172,9 @@ jobs:
             --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy \
             --ks-pass pass:"$PASS" --key-pass pass:"$PASS" \
             --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk "$APK"
+            --out BLOFY-PLAYER-v340-R11D-FULL-SIGNED.apk "$APK"
           echo "BT=$BT" >> "$GITHUB_ENV"
-          echo "FINAL_APK=$GITHUB_WORKSPACE/BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk" >> "$GITHUB_ENV"
+          echo "FINAL_APK=$GITHUB_WORKSPACE/BLOFY-PLAYER-v340-R11D-FULL-SIGNED.apk" >> "$GITHUB_ENV"
 
       - name: Deep final QA
         shell: bash
@@ -186,7 +190,7 @@ jobs:
           grep -Eq 'Verification success(fu|u)l' /tmp/align.txt
           "$BT/aapt" dump badging "$FINAL_APK" >/tmp/badging.txt
           "$BT/aapt" dump permissions "$FINAL_APK" >/tmp/permissions.txt
-          grep -q "package: name='tv.blofy.player' versionCode='1000344' versionName='v340-full-stability-r11'" /tmp/badging.txt
+          grep -q "package: name='tv.blofy.player' versionCode='1000345' versionName='v340-full-stability-r11d-full'" /tmp/badging.txt
           grep -q "native-code:.*'arm64-v8a'" /tmp/badging.txt
           grep -q "native-code:.*'armeabi-v7a'" /tmp/badging.txt
           unzip -t "$FINAL_APK" >/tmp/unzip.txt
@@ -198,15 +202,15 @@ jobs:
           dex=[n for n in ns if n.startswith('classes') and n.endswith('.dex')]; assert dex
           req=['lib/arm64-v8a/libffmpegJNI.so','lib/arm64-v8a/libvlcjni.so','lib/armeabi-v7a/libffmpegJNI.so','lib/armeabi-v7a/libvlcjni.so']
           assert not [n for n in req if n not in ns]
-          print('R11 APK integrity OK', dex)
+          print('R11D APK integrity OK', dex)
           PY
-          sha256sum "$FINAL_APK" | tee BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk.sha256
+          sha256sum "$FINAL_APK" | tee BLOFY-PLAYER-v340-R11D-FULL-SIGNED.apk.sha256
 
-      - name: Upload R11
+      - name: Upload R11D
         uses: actions/upload-artifact@v6
         with:
-          name: BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED
+          name: BLOFY-PLAYER-v340-R11D-FULL-SIGNED
           path: |
-            BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk
-            BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk.sha256
+            BLOFY-PLAYER-v340-R11D-FULL-SIGNED.apk
+            BLOFY-PLAYER-v340-R11D-FULL-SIGNED.apk.sha256
           if-no-files-found: error
