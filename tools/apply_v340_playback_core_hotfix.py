@@ -10,7 +10,8 @@ GRADLE=ROOT/'BLOFY-ANDROID-2026/app/build.gradle.kts'
 # disconnects immediately when the user changes content, so this does not make zapping wait 10s.
 api=JAVA/'BlofyApi.java'
 s=api.read_text()
-s=s.replace('private static final int PLAYBACK_LINK_TIMEOUT_MS = 4_000;', 'private static final int PLAYBACK_LINK_TIMEOUT_MS = 10_000;')
+s=re.sub(r'private static final int PLAYBACK_LINK_TIMEOUT_MS\s*=\s*[0-9_]+;',
+         'private static final int PLAYBACK_LINK_TIMEOUT_MS = 10_000;', s, count=1)
 api.write_text(s)
 
 # 2) Soft/transient failures must never poison a provider route. Preserve negative memory
@@ -23,19 +24,22 @@ new='''    static void failed(Context c, String provider, String family, String 
 s=s[:start]+new+s[end:]
 fail.write_text(s)
 
-# 3) Startup watchdogs are a guard, not a route verdict. Give Media3 time to perform its
-# own load retries. VOD/4K need longer first-keyframe windows than Live.
+# 3) Startup watchdogs are a guard, not a route verdict. Set by symbol name instead of
+# assuming a prior value because the COMPLETE reconstruction changes these constants.
 pol=JAVA/'PlaybackPolicy.java'
 s=pol.read_text()
-for old,newv in {
-'INITIAL_STARTUP_TIMEOUT_MS = 7_000':'INITIAL_STARTUP_TIMEOUT_MS = 12_000',
-'RETRY_STARTUP_TIMEOUT_MS = 5_000':'RETRY_STARTUP_TIMEOUT_MS = 9_000',
-'VOD_STARTUP_TIMEOUT_MS = 8_000':'VOD_STARTUP_TIMEOUT_MS = 15_000',
-'UHD_VOD_STARTUP_TIMEOUT_MS = 11_000':'UHD_VOD_STARTUP_TIMEOUT_MS = 22_000',
-'VLC_STARTUP_TIMEOUT_MS = 7_000':'VLC_STARTUP_TIMEOUT_MS = 12_000',
-'UHD_VLC_STARTUP_TIMEOUT_MS = 10_000':'UHD_VLC_STARTUP_TIMEOUT_MS = 20_000',
-'PREVIEW_STARTUP_TIMEOUT_MS = 5_000':'PREVIEW_STARTUP_TIMEOUT_MS = 8_000',
-}.items(): s=s.replace(old,newv)
+values={
+ 'INITIAL_STARTUP_TIMEOUT_MS':'12_000',
+ 'RETRY_STARTUP_TIMEOUT_MS':'9_000',
+ 'VOD_STARTUP_TIMEOUT_MS':'15_000',
+ 'UHD_VOD_STARTUP_TIMEOUT_MS':'22_000',
+ 'VLC_STARTUP_TIMEOUT_MS':'12_000',
+ 'UHD_VLC_STARTUP_TIMEOUT_MS':'20_000',
+ 'PREVIEW_STARTUP_TIMEOUT_MS':'8_000',
+}
+for name,value in values.items():
+    s,n=re.subn(rf'({name}\s*=\s*)[0-9_]+', rf'\g<1>{value}', s, count=1)
+    if n != 1: raise SystemExit(f'hotfix constant missing PlaybackPolicy.java: {name}')
 pol.write_text(s)
 
 # 4) Stamp an upgrade-safe hotfix build above COMPLETE.
@@ -47,10 +51,18 @@ GRADLE.write_text(g)
 for p,need in {
  api:['PLAYBACK_LINK_TIMEOUT_MS = 10_000'],
  fail:['playback-soft-failure','playback-hard-route-failure','if (!(is403(reason) || is404(reason)))'],
- pol:['INITIAL_STARTUP_TIMEOUT_MS = 12_000','VOD_STARTUP_TIMEOUT_MS = 15_000','UHD_VOD_STARTUP_TIMEOUT_MS = 22_000'],
+ pol:['INITIAL_STARTUP_TIMEOUT_MS = 12_000','RETRY_STARTUP_TIMEOUT_MS = 9_000','VOD_STARTUP_TIMEOUT_MS = 15_000','UHD_VOD_STARTUP_TIMEOUT_MS = 22_000'],
  GRADLE:['versionCode = 1000356','v340-playback-core-hotfix'],
 }.items():
  t=p.read_text()
  for n in need:
   if n not in t: raise SystemExit(f'hotfix invariant missing {p.name}: {n}')
-print('v340 playback-core hotfix applied: resolver budget + soft timeout policy + realistic startup windows')
+
+# Regression assertions for the exact field failures: generic timeout must not create
+# persistent negative-route evidence, while 403/404 still can.
+f=fail.read_text()
+failed_body=f[f.index('static void failed('):f.index('static boolean routeBlocked(')]
+if 'isTimeout(reason)' in failed_body or 'is429(reason)' in failed_body or 'is5xx(reason)' in failed_body:
+    raise SystemExit('soft/transient failure still poisons negative route')
+
+print('v340 playback-core hotfix applied: resolver budget + hard-only route memory + realistic startup windows')
