@@ -12,11 +12,25 @@ s = IMPORTER.read_text(encoding="utf-8")
 
 # Stable source identity: cosmetic playlist/session name changes must not force
 # a complete catalog download when server/account identity is unchanged.
-s = s.replace(
-    'String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;',
-    'String raw = session.kind + "|" + session.serverName + "|" + username;',
-    1,
-)
+# Earlier reconstruction layers can rewrite the exact expression, so patch the
+# raw identity assignment inside sourceIdentity() rather than matching one old
+# literal string.
+stable_raw = 'String raw = session.kind + "|" + session.serverName + "|" + username;'
+if stable_raw not in s:
+    method = re.search(
+        r'private\s+static\s+String\s+sourceIdentity\s*\([^)]*\)\s*\{(?P<body>.*?)\n\s*\}',
+        s,
+        re.S,
+    )
+    if not method:
+        raise SystemExit("R11E4: sourceIdentity method missing")
+    body = method.group("body")
+    raw = re.search(r'String\s+raw\s*=\s*[^;]+;', body, re.S)
+    if not raw:
+        raise SystemExit("R11E4: sourceIdentity raw assignment missing")
+    abs_start = method.start("body") + raw.start()
+    abs_end = method.start("body") + raw.end()
+    s = s[:abs_start] + stable_raw + s[abs_end:]
 
 # Strict complete-cache gate. Some reconstruction layers remove the older R9
 # shortcut entirely, so replace it when present or insert it after cached counts.
@@ -40,10 +54,11 @@ if 'boolean cacheComplete = "complete".equals(syncState)' not in s:
         end += len(end_marker)
         s = s[:start] + replacement.rstrip() + s[end:]
     else:
-        anchor = '        int cachedSeries = database.count("series");\n'
-        if anchor not in s:
+        # Reconstructed importers can rename whitespace but keep the count calls.
+        match = re.search(r'(?m)^\s*int\s+cachedSeries\s*=\s*database\.count\("series"\)\s*;\s*$', s)
+        if not match:
             raise SystemExit("R11E4: cached-series insertion anchor missing")
-        s = s.replace(anchor, anchor + replacement, 1)
+        s = s[:match.end()] + "\n" + replacement + s[match.end():]
 
 # Saved playlists get the same instant-local path before any health/session
 # request. Only an atomic import whose sync_state reached complete is eligible.
@@ -55,16 +70,16 @@ if "فتح فوري من الحفظ المحلي" not in s:
     inject = '''
         if (!playlistId.isEmpty() && !"current-session".equals(playlistId)) {
             String scopedSource = CatalogScope.forPlaylist(playlistId);
-            String activeSource = database.metadata("active_source_id", "");
-            String state = database.metadata("sync_state", "");
-            int live = database.count("live");
-            int movies = database.count("movies");
-            int series = database.count("series");
-            if (scopedSource.equals(activeSource) && (live + movies + series) > 0
-                    && "complete".equals(state)) {
-                String profile = database.metadata("playback_profile", "Media3 مباشر");
+            String cachedSource = database.metadata("active_source_id", "");
+            String cachedState = database.metadata("sync_state", "");
+            int localLive = database.count("live");
+            int localMovies = database.count("movies");
+            int localSeries = database.count("series");
+            if (scopedSource.equals(cachedSource) && (localLive + localMovies + localSeries) > 0
+                    && "complete".equals(cachedState)) {
+                String cachedProfile = database.metadata("playback_profile", "Media3 مباشر");
                 emit(100, "البيانات جاهزة", "فتح فوري من الحفظ المحلي");
-                return new Result(live, movies, series, profile);
+                return new Result(localLive, localMovies, localSeries, cachedProfile);
             }
         }'''
     s = s[:insert_at] + inject + s[insert_at:]
@@ -78,11 +93,11 @@ GRADLE.write_text(g, encoding="utf-8")
 
 checks = {
     IMPORTER: [
-        'String raw = session.kind + "|" + session.serverName + "|" + username;',
+        stable_raw,
         'boolean cacheComplete = "complete".equals(syncState)',
         'String scopedSource = CatalogScope.forPlaylist(playlistId);',
         'فتح فوري من الحفظ المحلي',
-        '&& "complete".equals(state)',
+        '&& "complete".equals(cachedState)',
     ],
     GRADLE: ['versionCode = 1000349', 'v340-full-stability-r11e-stage4'],
 }
