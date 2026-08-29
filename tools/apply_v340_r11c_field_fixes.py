@@ -11,9 +11,6 @@ TEST = ROOT / "BLOFY-ANDROID-2026/app/src/test/java/tv/blofy/player/PlaybackPoli
 
 p = PLAYER.read_text(encoding="utf-8")
 
-# Field-test guard: once a Live stream produced video, later runtime failures are
-# recovery events, not startup failures. Keep a candidate set marker as well so
-# CI can verify this layer is present without depending on older source shapes.
 if "private boolean livePlaybackProven;" not in p:
     anchor = "    private boolean lifecycleStarted;\n"
     addition = (
@@ -26,15 +23,12 @@ if "private boolean livePlaybackProven;" not in p:
         raise SystemExit("R11C: lifecycle field missing")
     p = p.replace(anchor, addition, 1)
 
-# Record the current Live candidate when resolving. This is intentionally
-# best-effort because R11B/R10 reconstructed shapes differ slightly.
 if "attemptedLiveCandidates.add(" not in p:
     marker = "        String requestedVariant = sourceVariant;\n"
     if marker in p:
         p = p.replace(marker, marker +
             "        if (isLive()) attemptedLiveCandidates.add(requestedVariant + \"|\" + requestedExtension);\n", 1)
 
-# Proven Live streams get one invisible fresh-link recovery before any fatal UI.
 if "private boolean recoverProvenLiveSilently(String reason)" not in p:
     helper = r'''
     private boolean recoverProvenLiveSilently(String reason) {
@@ -61,9 +55,6 @@ if "private boolean recoverProvenLiveSilently(String reason)" not in p:
         raise SystemExit("R11C: schedule timeout method missing")
     p = p.replace(anchor, helper + anchor, 1)
 
-# Media3 first frame: permanently close the startup phase until a real source
-# change/manual retry. The old watchdog already checks firstFrameRendered; this
-# extra flag survives runtime callbacks that temporarily clear that field.
 ff_sig = "    @Override public void onRenderedFirstFrame() {\n"
 if ff_sig in p and "liveSilentRecoveryCount = 0;" not in p[p.find(ff_sig):p.find(ff_sig)+900]:
     target = "        firstFrameRendered = true;\n"
@@ -78,7 +69,6 @@ if ff_sig in p and "liveSilentRecoveryCount = 0;" not in p[p.find(ff_sig):p.find
             "        }\n"
         ) + p[pos:]
 
-# VLC first frame is equally proven.
 vlc_sig = "    private void markVlcFirstFrame() {\n"
 if vlc_sig in p:
     section = p[p.find(vlc_sig):p.find(vlc_sig)+1000]
@@ -95,8 +85,6 @@ if vlc_sig in p:
                 "        }\n"
             ) + p[pos:]
 
-# Runtime Media3 errors after proven playback recover silently first. Insert this
-# immediately after logging so it works with both R11B callback shapes.
 err_sig = "    @Override public void onPlayerError(PlaybackException error) {\n"
 if err_sig in p:
     section_start = p.find(err_sig)
@@ -115,7 +103,6 @@ if err_sig in p:
             )
             p = p[:log_end+1] + insertion + p[log_end+1:]
 
-# STATE_ENDED/VLC runtime failures also pass through recoverFromFailure.
 recover_sig = "    private void recoverFromFailure(String reason) {\n"
 if recover_sig in p:
     start = p.find(recover_sig)
@@ -127,7 +114,6 @@ if recover_sig in p:
             pos += len(anchor)
             p = p[:pos] + "\n        if (isLive() && livePlaybackProven && recoverProvenLiveSilently(reason)) return;\n" + p[pos:]
 
-# New channel and manual retry are new playback sessions.
 switch_sig = "    private void switchLiveChannel(BlofyModels.Media media) {\n"
 if switch_sig in p:
     start = p.find(switch_sig)
@@ -157,7 +143,6 @@ if manual_sig in p:
 
 PLAYER.write_text(p, encoding="utf-8")
 
-# Preview should fail fast without changing fullscreen budgets.
 pol = POLICY.read_text(encoding="utf-8")
 pol = re.sub(r'PREVIEW_STARTUP_TIMEOUT_MS\s*=\s*[0-9_]+',
              'PREVIEW_STARTUP_TIMEOUT_MS = 3_500', pol, count=1)
@@ -168,17 +153,21 @@ t = re.sub(r'assertEquals\([0-9_]+, PlaybackPolicy\.PREVIEW_STARTUP_TIMEOUT_MS\)
            'assertEquals(3_500, PlaybackPolicy.PREVIEW_STARTUP_TIMEOUT_MS);', t, count=1)
 TEST.write_text(t, encoding="utf-8")
 
-# Large-package import remains all-or-nothing. Increase only transient retry
-# tolerance and make the final atomic stage explicit to the user.
 i = IMPORTER.read_text(encoding="utf-8")
 i = i.replace('final long[] httpDelays = {600L, 1_500L, 4_000L, 8_000L};',
               'final long[] httpDelays = {500L, 1_000L, 2_000L, 4_000L, 8_000L, 12_000L};')
 i = i.replace('final long[] networkDelays = {250L, 650L, 1_500L, 3_500L};',
               'final long[] networkDelays = {250L, 500L, 1_000L, 2_000L, 4_000L, 8_000L};')
-i = i.replace('emit(95, "اعتماد بيانات الباقة", "تثبيت البيانات المحفوظة على الجهاز");',
-              'emit(95, "اعتماد الباقة كاملة", "تم تنزيل القنوات والأفلام والمسلسلات بالكامل • جاري التثبيت الذري");')
-i = i.replace('emit(99, "فتح BLOFY PLAYER", "تم الحفظ بنجاح");',
-              'emit(99, "التحقق النهائي", "تم تثبيت الباقة كاملة وحفظها محليًا");')
+if 'اعتماد الباقة كاملة' not in i:
+    i, n95 = re.subn(r'emit\(95,\s*"[^"]*",\s*"[^"]*"\);',
+                     'emit(95, "اعتماد الباقة كاملة", "تم تنزيل القنوات والأفلام والمسلسلات بالكامل • جاري التثبيت الذري");',
+                     i, count=1)
+    if n95 != 1:
+        raise SystemExit("R11C: importer 95% stage missing")
+if 'تم تثبيت الباقة كاملة وحفظها محليًا' not in i:
+    i = re.sub(r'emit\(99,\s*"[^"]*",\s*"[^"]*"\);',
+               'emit(99, "التحقق النهائي", "تم تثبيت الباقة كاملة وحفظها محليًا");',
+               i, count=1)
 IMPORTER.write_text(i, encoding="utf-8")
 
 checks = {
