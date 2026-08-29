@@ -11,42 +11,52 @@ GRADLE = APP / "build.gradle.kts"
 s = IMPORTER.read_text(encoding="utf-8")
 
 # Keep current-session identity stable. The display name is cosmetic and can
-# change upstream without the underlying Xtream/playlist account changing.
-old_raw = 'String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;'
-new_raw = 'String raw = session.kind + "|" + session.serverName + "|" + username;'
-if old_raw in s:
-    s = s.replace(old_raw, new_raw, 1)
+# change upstream without the underlying account/source changing.
+s = re.sub(
+    r'String\s+raw\s*=\s*session\.kind\s*\+\s*"\\\|"\s*\+\s*session\.serverName\s*\+\s*"\\\|"\s*\+\s*session\.name\s*\+\s*"\\\|"\s*\+\s*username\s*;',
+    'String raw = session.kind + "|" + session.serverName + "|" + username;',
+    s,
+    count=1,
+)
+# Simple exact fallback for the normal reconstruction.
+s = s.replace(
+    'String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;',
+    'String raw = session.kind + "|" + session.serverName + "|" + username;',
+    1,
+)
 
-# Tighten the fast-path gate: only a previously complete package (or the last
-# complete package retained after a failed staged refresh) may bypass sync.
-old_gate = '''        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
-                && !"in_progress".equals(database.metadata("sync_state", ""))) {
-            String profile = database.metadata("playback_profile", "Media3 مباشر");
-            emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
-            return new Result(cachedLive, cachedMovies, cachedSeries, profile);
-        }'''
-new_gate = '''        String syncState = database.metadata("sync_state", "");
-        boolean cacheComplete = "complete".equals(syncState) || "failed".equals(syncState);
-        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
-                && cacheComplete) {
-            String profile = database.metadata("playback_profile", "Media3 مباشر");
-            emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
-            return new Result(cachedLive, cachedMovies, cachedSeries, profile);
-        }'''
-if old_gate in s:
-    s = s.replace(old_gate, new_gate, 1)
-elif 'boolean cacheComplete = "complete".equals(syncState)' not in s:
-    raise SystemExit("R11E4: package fast-path anchor missing")
+# Tighten the existing R9 fast path without relying on exact whitespace/text.
+if 'boolean cacheComplete = "complete".equals(syncState)' not in s:
+    gate = re.compile(
+        r'(?P<indent>\s*)if\s*\(\s*sourceIdentity\.equals\(activeSource\)\s*&&\s*'
+        r'\(cachedLive\s*\+\s*cachedMovies\s*\+\s*cachedSeries\)\s*>\s*0\s*&&\s*'
+        r'!"in_progress"\.equals\(database\.metadata\("sync_state",\s*""\)\)\s*\)\s*\{'
+        r'(?P<body>.*?)return\s+new\s+Result\(cachedLive,\s*cachedMovies,\s*cachedSeries,\s*profile\);\s*\}',
+        re.S,
+    )
+    m = gate.search(s)
+    if not m:
+        raise SystemExit("R11E4: package fast-path anchor missing")
+    indent = m.group('indent')
+    replacement = f'''{indent}String syncState = database.metadata("sync_state", "");
+{indent}boolean cacheComplete = "complete".equals(syncState) || "failed".equals(syncState);
+{indent}if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
+{indent}        && cacheComplete) {{
+{indent}    String profile = database.metadata("playback_profile", "Media3 مباشر");
+{indent}    emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
+{indent}    return new Result(cachedLive, cachedMovies, cachedSeries, profile);
+{indent}}}'''
+    s = s[:m.start()] + replacement + s[m.end():]
 
-# For explicitly selected/saved playlists, skip even the health/session round
-# trip when the scoped package is already complete. This prevents reconnect,
-# onResume, and portal hiccups from starting expensive catalog work.
-if "r11e4-explicit-cache-hit" not in s:
-    anchor = '''    Result run() throws Exception {
-        emit(3, "الاتصال بخادم BLOFY", "فحص الاستضافة والاستجابة");'''
-    if anchor not in s:
+# For explicitly selected/saved playlists, skip the health/session round trip
+# when the scoped package is already complete. This prevents reconnect/onResume
+# from starting a huge catalog sync again.
+if "فتح فوري من الحفظ المحلي" not in s:
+    run_sig = re.search(r'(?m)^\s*Result\s+run\s*\(\s*\)\s+throws\s+Exception\s*\{', s)
+    if not run_sig:
         raise SystemExit("R11E4: run anchor missing")
-    inject = '''    Result run() throws Exception {
+    insert_at = run_sig.end()
+    inject = '''
         if (!playlistId.isEmpty() && !"current-session".equals(playlistId)) {
             String scopedSource = CatalogScope.forPlaylist(playlistId);
             String activeSource = database.metadata("active_source_id", "");
@@ -58,17 +68,10 @@ if "r11e4-explicit-cache-hit" not in s:
                     && ("complete".equals(state) || "failed".equals(state))) {
                 String profile = database.metadata("playback_profile", "Media3 مباشر");
                 emit(100, "البيانات جاهزة", "فتح فوري من الحفظ المحلي");
-                PlaybackDiagnostics.marker(api.context(), "r11e4-explicit-cache-hit", "package",
-                        playlistId, "", "local", "counts=" + live + "/" + movies + "/" + series);
                 return new Result(live, movies, series, profile);
             }
-        }
-        emit(3, "الاتصال بخادم BLOFY", "فحص الاستضافة والاستجابة");'''
-    # Avoid depending on a context accessor that may not exist: inject marker
-    # only when the API exposes one. The following replacement removes it and
-    # keeps the fast path pure/local.
-    inject = inject.replace('                PlaybackDiagnostics.marker(api.context(), "r11e4-explicit-cache-hit", "package",\n                        playlistId, "", "local", "counts=" + live + "/" + movies + "/" + series);\n', '')
-    s = s.replace(anchor, inject, 1)
+        }'''
+    s = s[:insert_at] + inject + s[insert_at:]
 
 IMPORTER.write_text(s, encoding="utf-8")
 
