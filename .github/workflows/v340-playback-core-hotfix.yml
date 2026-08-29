@@ -13,6 +13,7 @@ on:
       - "tools/apply_v340_playback_hotfix_stage7_visual_ux.py"
       - "tools/apply_v340_playback_v2_stage8.py"
       - "tools/apply_v340_premium_app_stage9.py"
+      - "tools/apply_v340_premium_app_stage9_replacement.py"
       - "tools/verify_package64.py"
       - "tools/verify_playback_v2_12.py"
       - ".github/workflows/v340-playback-core-hotfix.yml"
