@@ -108,13 +108,14 @@ if "PlaybackHealthMemory.failure(context" not in n:
 
 # Stable score sort after the negative-memory filter. Equal scores preserve the
 # existing canonical/profile order, so fresh installs behave exactly like R11E4.
+# Collections.sort is used instead of List.sort to preserve Android API 23 support.
 old = '''        return out.isEmpty() ? input : out;
     }
 
     static void failed(Context context'''
 if "r11e5-health-ranking" not in n:
     new = '''        List<Candidate> ranked = out.isEmpty() ? new ArrayList<>(input) : out;
-        ranked.sort((a, b) -> Integer.compare(
+        java.util.Collections.sort(ranked, (a, b) -> Integer.compare(
                 PlaybackHealthMemory.score(context, providerUrl, family, b.route, b.extension, b.engine),
                 PlaybackHealthMemory.score(context, providerUrl, family, a.route, a.extension, a.engine)));
         if (ranked.size() > 1) {
@@ -141,7 +142,7 @@ GRADLE.write_text(g, encoding="utf-8")
 
 checks = {
     HEALTH: ["r11e5-health-success", "r11e5-health-failure", "static int score"],
-    NEG: ["PlaybackHealthMemory.success(context", "PlaybackHealthMemory.failure(context", "r11e5-health-ranking"],
+    NEG: ["PlaybackHealthMemory.success(context", "PlaybackHealthMemory.failure(context", "r11e5-health-ranking", "java.util.Collections.sort"],
     GRADLE: ["versionCode = 1000350", "v340-full-stability-r11e-stage5"],
 }
 for path, markers in checks.items():
@@ -150,4 +151,4 @@ for path, markers in checks.items():
         if marker not in text:
             raise SystemExit(f"R11E5 invariant missing {path.name}: {marker}")
 
-print("R11E stage5 applied: persistent playback health + first-frame scoring + route ranking")
+print("R11E stage5 applied: persistent playback health + first-frame scoring + API23-safe route ranking")
