@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
-import runpy
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "BLOFY-ANDROID-2026/app"
@@ -42,9 +41,6 @@ if "private int beginPlaybackTransaction(" not in p:
 '''
     p = p.replace(anchor, helper + anchor, 1)
 
-# Capture the active playback transaction when a resolve starts. Older reconstruction
-# layers may format/extend the token guard differently, so inject transaction checks
-# structurally instead of relying on one exact source string.
 if "int transactionToken = playbackTransaction;" not in p:
     sig = "    private void resolvePlaybackLink() {\n        int token = ++resolveGeneration;\n"
     if sig not in p: raise SystemExit("R11E2: resolve method anchor missing")
@@ -151,6 +147,3 @@ for path, markers in checks.items():
         if marker not in text: raise SystemExit(f"R11E2 invariant missing {path.name}: {marker}")
 
 print("R11E stage2 applied: hard playback transaction + persistent live overlay + hot drawer rows + reduced-motion TV focus path")
-
-# Chain stage 3 into the same proven signed build pipeline.
-runpy.run_path(str(ROOT / "tools/apply_v340_r11e_stage3_catalog_focus.py"), run_name="__main__")
