@@ -13,6 +13,7 @@ on:
       - "tools/apply_v340_r11e_stage2_stability_ui.py"
       - "tools/apply_v340_r11e_stage3_catalog_focus.py"
       - "tools/apply_v340_r11e_stage4_package_cache.py"
+      - "tools/apply_v340_r11e_stage5_playback_health.py"
       - ".github/workflows/v340-full-stability-r11.yml"
 
 permissions:
@@ -39,7 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Recreate R10 base and apply R11E stage4
+      - name: Recreate R10 base and apply R11E stage5
         shell: bash
         run: |
           set -euo pipefail
@@ -76,9 +77,9 @@ jobs:
           python3 tools/apply_v340_r11c_field_fixes.py
           python3 tools/apply_v340_r11d_full_features.py
           python3 tools/apply_v340_r11e_stage1_stability.py
-          # Stage 1 chains Stage 2 internally; do not apply Stage 2 twice.
           python3 tools/apply_v340_r11e_stage3_catalog_focus.py
           python3 tools/apply_v340_r11e_stage4_package_cache.py
+          python3 tools/apply_v340_r11e_stage5_playback_health.py
           grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11c-live-silent-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11d-preload-scheduled' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
@@ -88,8 +89,10 @@ jobs:
           grep -q 'r11e3-catalog-window' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'boolean cacheComplete = "complete".equals(syncState)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           grep -q 'فتح فوري من الحفظ المحلي' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q 'class PlaybackFailureMemory' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackFailureMemory.java
-          grep -q 'TTL_404_MS' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackFailureMemory.java
+          grep -q 'class PlaybackHealthMemory' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackHealthMemory.java
+          grep -q 'r11e5-health-ranking' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
+          grep -q 'PlaybackHealthMemory.success' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
+          grep -q 'PlaybackHealthMemory.failure' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
           grep -q 'PlaybackFailureMemory.blocked' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
           grep -q 'PlaybackSmartCache.wrap' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'CmcdConfiguration.Factory.DEFAULT' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
@@ -97,8 +100,8 @@ jobs:
           grep -q 'r11-vod-first-frame' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'media3-exoplayer-rtsp' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'اعتماد الباقة كاملة' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q 'versionCode = 1000349' BLOFY-ANDROID-2026/app/build.gradle.kts
-          grep -q 'v340-full-stability-r11e-stage4' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'versionCode = 1000350' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'v340-full-stability-r11e-stage5' BLOFY-ANDROID-2026/app/build.gradle.kts
           test -s BLOFY-ANDROID-2026/app/src/main/baseline-prof.txt
 
       - name: Java 17
@@ -170,7 +173,7 @@ jobs:
           unzip -q "$RUNNER_TEMP/key.zip" -d "$RUNNER_TEMP/key"
           test -s "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks"
 
-      - name: Sign R11E stage4
+      - name: Sign R11E stage5
         shell: bash
         run: |
           set -euo pipefail
@@ -181,9 +184,9 @@ jobs:
             --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy \
             --ks-pass pass:"$PASS" --key-pass pass:"$PASS" \
             --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out BLOFY-PLAYER-v340-R11E-STAGE4-SIGNED.apk "$APK"
+            --out BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk "$APK"
           echo "BT=$BT" >> "$GITHUB_ENV"
-          echo "FINAL_APK=$GITHUB_WORKSPACE/BLOFY-PLAYER-v340-R11E-STAGE4-SIGNED.apk" >> "$GITHUB_ENV"
+          echo "FINAL_APK=$GITHUB_WORKSPACE/BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk" >> "$GITHUB_ENV"
 
       - name: Deep final QA
         shell: bash
@@ -198,7 +201,7 @@ jobs:
           "$BT/zipalign" -c -v 4 "$FINAL_APK" >/tmp/align.txt
           grep -Eq 'Verification success(fu|u)l' /tmp/align.txt
           "$BT/aapt" dump badging "$FINAL_APK" >/tmp/badging.txt
-          grep -q "package: name='tv.blofy.player' versionCode='1000349' versionName='v340-full-stability-r11e-stage4'" /tmp/badging.txt
+          grep -q "package: name='tv.blofy.player' versionCode='1000350' versionName='v340-full-stability-r11e-stage5'" /tmp/badging.txt
           grep -q "native-code:.*'arm64-v8a'" /tmp/badging.txt
           grep -q "native-code:.*'armeabi-v7a'" /tmp/badging.txt
           unzip -t "$FINAL_APK" >/tmp/unzip.txt
@@ -210,15 +213,15 @@ jobs:
           dex=[n for n in ns if n.startswith('classes') and n.endswith('.dex')]; assert dex
           req=['lib/arm64-v8a/libffmpegJNI.so','lib/arm64-v8a/libvlcjni.so','lib/armeabi-v7a/libffmpegJNI.so','lib/armeabi-v7a/libvlcjni.so']
           assert not [n for n in req if n not in ns]
-          print('R11E stage4 APK integrity OK', dex)
+          print('R11E stage5 APK integrity OK', dex)
           PY
-          sha256sum "$FINAL_APK" | tee BLOFY-PLAYER-v340-R11E-STAGE4-SIGNED.apk.sha256
+          sha256sum "$FINAL_APK" | tee BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk.sha256
 
-      - name: Upload R11E stage4
+      - name: Upload R11E stage5
         uses: actions/upload-artifact@v6
         with:
-          name: BLOFY-PLAYER-v340-R11E-STAGE4-SIGNED
+          name: BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED
           path: |
-            BLOFY-PLAYER-v340-R11E-STAGE4-SIGNED.apk
-            BLOFY-PLAYER-v340-R11E-STAGE4-SIGNED.apk.sha256
+            BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk
+            BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk.sha256
           if-no-files-found: error
