@@ -5,6 +5,7 @@ on:
     branches: [v340-playback-core-hotfix]
     paths:
       - "tools/apply_v340_playback_core_hotfix.py"
+      - "tools/verify_package64.py"
       - ".github/workflows/v340-playback-core-hotfix.yml"
 permissions:
   contents: read
