@@ -76,6 +76,7 @@ jobs:
           python3 tools/apply_v340_r11d_full_features.py
           python3 tools/apply_v340_r11e_stage1_stability.py
           python3 tools/apply_v340_r11e_stage2_stability_ui.py
+          python3 tools/apply_v340_r11e_stage3_catalog_focus.py
           grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11c-live-silent-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11d-preload-scheduled' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
