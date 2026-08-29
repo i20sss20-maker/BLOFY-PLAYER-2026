@@ -1,0 +1,50 @@
+name: Build BLOFY v340 Playback Core Hotfix
+on:
+  workflow_dispatch:
+  push:
+    branches: [v340-playback-core-hotfix]
+    paths:
+      - "tools/apply_v340_playback_core_hotfix.py"
+      - ".github/workflows/v340-playback-core-hotfix.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Recreate COMPLETE and apply playback hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in apply_v329_hotfix.py apply_v330_hotfix.py apply_v330_vod_fix.py apply_v330_compile_fix.py apply_v331_precompat.py apply_v331_transport_manager.py apply_v331_compile_fix.py apply_v333_full_engines.py apply_v334_compat_engine.py apply_v336_diagnostics_reset.py apply_v337_vod_compat.py apply_v339_stability.py apply_v340_full2.py apply_v340_perf.py apply_v340_live_guard.py apply_v340_compile_fix.py apply_v340_session_guard.py apply_v340_route_learning.py apply_v340_final_foundation.py apply_v340_final_core.py apply_v340_source_probe.py apply_v340_verified_gate_runner2.py apply_v340_final_safety_r8.py apply_v340_r9_deep_logic_fix.py apply_v340_r10_warning_hardening.py; do python3 tools/$f; done
+          python3 tools/apply_v340_r11_negotiator.py || true
+          python3 tools/apply_v340_r11b_compat_fix.py
+          python3 tools/apply_v340_r11c_field_fixes.py
+          python3 tools/apply_v340_r11d_full_features.py
+          python3 tools/apply_v340_r11e_stage1_stability.py
+          python3 tools/apply_v340_r11e_stage2_stability_ui.py
+          python3 tools/apply_v340_r11e_stage3_catalog_focus.py
+          python3 tools/apply_v340_r11e_stage4_package_cache.py
+          python3 tools/apply_v340_r11e_stage5_playback_health.py
+          python3 tools/apply_v340_r11e_stage6_adaptive_runtime.py
+          python3 tools/apply_v340_r11e_stage7_ui_watchdog.py
+          python3 tools/apply_v340_r11e_stage8_catalog_query_cache.py
+          python3 tools/apply_v340_r11e_stage9_http_route_breaker.py
+          python3 tools/apply_v340_r11e_stage10_route_matrix.py
+          python3 tools/apply_v340_r11e_complete_stamp.py
+          python3 tools/apply_v340_playback_core_hotfix.py
+          python3 tools/verify_package64.py
+          grep -q 'PLAYBACK_LINK_TIMEOUT_MS = 10_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/BlofyApi.java
+          grep -q 'playback-soft-failure' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackFailureMemory.java
+          grep -q 'versionCode = 1000356' BLOFY-ANDROID-2026/app/build.gradle.kts
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '17'}
+      - uses: gradle/actions/setup-gradle@v6
+        with: {gradle-version: '8.13'}
+      - name: Compile tests lint
+        working-directory: BLOFY-ANDROID-2026
+        run: |
+          gradle wrapper --gradle-version 8.13
+          ./gradlew --no-daemon testDebugUnitTest lintRelease assembleRelease -PBLOFY_BASE_URL=https://blofy-player-2026-production.up.railway.app
