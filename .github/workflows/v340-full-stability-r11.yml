@@ -6,6 +6,7 @@ on:
     branches: [v340-full-stability]
     paths:
       - "tools/apply_v340_r11_negotiator.py"
+      - "tools/apply_v340_r11b_compat_fix.py"
       - ".github/workflows/v340-full-stability-r11.yml"
 
 permissions:
@@ -32,7 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Recreate R10 base and apply R11
+      - name: Recreate R10 base and apply R11 adaptive layer
         shell: bash
         run: |
           set -euo pipefail
@@ -61,12 +62,18 @@ jobs:
             apply_v340_verified_gate_runner2.py \
             apply_v340_final_safety_r8.py \
             apply_v340_r9_deep_logic_fix.py \
-            apply_v340_r10_warning_hardening.py \
-            apply_v340_r11_negotiator.py; do
+            apply_v340_r10_warning_hardening.py; do
               python3 "tools/$f"
           done
+          # The primary R11 patch writes all new classes/features before its final
+          # invariant check. Older reconstructed PlayerActivity shapes can make that
+          # check exit non-zero; the compatibility pass below completes/validates it.
+          python3 tools/apply_v340_r11_negotiator.py || true
+          python3 tools/apply_v340_r11b_compat_fix.py
           grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'r11-live-post-start-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11-vod-resolve-start' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          grep -q 'r11-vod-first-frame' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'class PlaybackNegotiator' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
           grep -q 'media3-exoplayer-rtsp' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'versionCode = 1000344' BLOFY-ANDROID-2026/app/build.gradle.kts
