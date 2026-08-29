@@ -21,8 +21,6 @@ if "private View r11e3CachedHomePage;" not in s:
         "    private View r11e3CachedHomeFocus;\n", 1)
 
 if "r11e3-home-cache-hit" not in s:
-    # Stage2/older reconstruction layers may insert lines around screen assignment,
-    # so patch showHome structurally instead of depending on one exact block.
     pat = re.compile(r'(private void showHome\(\) \{.*?screen\s*=\s*"home";\s*\n\s*root\.removeAllViews\(\);)', re.S)
     m = pat.search(s)
     if not m:
@@ -41,27 +39,39 @@ if "r11e3-home-cache-hit" not in s:
         }'''
     s = s[:m.start()] + inject + s[m.end():]
 
-if "r11e3CachedHomePage = page;" not in s:
-    pat = re.compile(r'(private void showHome\(\) \{.*?root\.addView\(page, match\(\)\);\s*\n)(\s*live\.requestFocus\(\);)', re.S)
-    m = pat.search(s)
-    if not m:
-        raise SystemExit("R11E3: home cache store anchor missing")
-    s = s[:m.start()] + m.group(1) + "        r11e3CachedHomePage = page;\n" + m.group(2) + s[m.end():]
+if "r11e3CachedHomePage = root.getChildAt(0);" not in s:
+    # Do not depend on local variable names or the exact focus call after addView.
+    # Locate showHome as a bounded method section and cache the final child attached to root.
+    start = s.find("    private void showHome() {")
+    end = s.find("\n    private TextView homeTile(", start)
+    if start < 0 or end < 0:
+        raise SystemExit("R11E3: showHome bounds missing")
+    block = s[start:end]
+    matches = list(re.finditer(r'root\.addView\([^;]+;\s*\n', block))
+    if not matches:
+        raise SystemExit("R11E3: home root attach missing")
+    attach = matches[-1]
+    insert_at = start + attach.end()
+    s = s[:insert_at] + "        r11e3CachedHomePage = root.getChildAt(0);\n" + s[insert_at:]
 
-# Save the exact focused launcher before another screen detaches the cached home.
+# Save the focused launcher before another screen detaches the cached home.
 if "r11e3CachedHomeFocus = getCurrentFocus();" not in s:
-    # Insert on the first non-home shell transition pattern after stopHeroRotation.
-    pat = re.compile(r'(stopHeroRotation\(\);\s*\n\s*screenGeneration\+\+;\s*\n)(\s*root\.removeAllViews\(\);)')
-    m = pat.search(s)
-    if m:
-        repl = m.group(1) + '''        if ("home".equals(screen) && getCurrentFocus() != null) {
+    pat = re.compile(r'(stopHeroRotation\(\);\s*\n\s*screenGeneration\+\+;\s*\n)(\s*(?:screen\s*=\s*"[^"]+";\s*\n)?\s*root\.removeAllViews\(\);)')
+    matches = list(pat.finditer(s))
+    chosen = None
+    for candidate in matches:
+        prefix = s[max(0, candidate.start()-120):candidate.start()]
+        if "showHome" not in prefix:
+            chosen = candidate
+            break
+    if chosen:
+        repl = chosen.group(1) + '''        if (r11e3CachedHomePage != null && getCurrentFocus() != null) {
             r11e3CachedHomeFocus = getCurrentFocus();
         }
-''' + m.group(2)
-        s = s[:m.start()] + repl + s[m.end():]
+''' + chosen.group(2)
+        s = s[:chosen.start()] + repl + s[chosen.end():]
     else:
-        # Safe fallback: focus still restores to default launcher if no structural shell anchor exists.
-        print("R11E3: shell cache-focus anchor absent; continuing with default launcher restore")
+        print("R11E3: shell cache-focus anchor absent; default home focus remains safe")
 
 # Reduce focus animation work on weak TV boxes; retain the existing visual design
 # on stronger devices.
