@@ -10,44 +10,64 @@ GRADLE = APP / "build.gradle.kts"
 
 s = SEVEN.read_text(encoding="utf-8")
 
-# State fields: tolerate reconstruction layers reordering members.
+# R11E3 deliberately changes only UI state/rendering. No DB schema/version changes here.
 if "private View r11e3CachedHomePage;" not in s:
-    m = re.search(r'(?m)^\s*private\s+volatile\s+boolean\s+destroyed\s*;\s*$', s)
-    if not m:
-        m = re.search(r'public\s+final\s+class\s+SevenMaxActivity\s+extends\s+Activity\s*\{', s)
-        if not m:
-            raise SystemExit("R11E3: class/state anchor missing")
-    insert_at = m.end()
-    s = s[:insert_at] + "\n    private View r11e3CachedHomePage;\n    private View r11e3CachedHomeFocus;" + s[insert_at:]
+    class_anchor = re.search(r'public\s+final\s+class\s+SevenMaxActivity\s+extends\s+Activity\s*\{', s)
+    if not class_anchor:
+        raise SystemExit("R11E3: SevenMaxActivity class anchor missing")
+    pos = class_anchor.end()
+    s = s[:pos] + "\n    private View r11e3CachedHomePage;\n    private View r11e3CachedHomeFocus;\n" + s[pos:]
 
-# Locate Home by semantic statements instead of a fragile Java declaration parser.
-def home_region(text):
-    home = re.search(r'screen\s*=\s*"home"\s*;', text)
-    if not home:
-        # Fallback: the first root reset followed by construction of the home page.
-        home = re.search(r'root\s*\.\s*removeAllViews\s*\(\s*\)\s*;(?=[\s\S]{0,900}LinearLayout\s+page\s*=)', text)
-    if not home:
+
+def method_region(text: str, method_name: str):
+    # Find the method signature, then match braces so reconstruction formatting cannot break us.
+    m = re.search(r'(?m)^\s*private\s+void\s+' + re.escape(method_name) + r'\s*\([^)]*\)\s*\{', text)
+    if not m:
         return -1, -1
-    start = max(0, text.rfind('\n', 0, home.start()))
-    next_method = re.search(r'(?m)^\s*private\s+(?:[\w<>\[\].?, ]+)\s+(?:homeTile|addHomeGridTile|showSports)\s*\(', text[home.end():])
-    end = home.end() + (next_method.start() if next_method else min(len(text) - home.end(), 12000))
-    return start, end
+    brace = text.find('{', m.start(), m.end())
+    depth = 0
+    in_string = False
+    quote = ''
+    escaped = False
+    i = brace
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == quote:
+                in_string = False
+        else:
+            if ch in ('"', "'"):
+                in_string = True
+                quote = ch
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    return m.start(), i + 1
+        i += 1
+    return -1, -1
+
 
 if "r11e3-home-cache-hit" not in s:
-    start, end = home_region(s)
+    start, end = method_region(s, "showHome")
     if start < 0:
-        raise SystemExit("R11E3: home semantic anchor missing")
+        raise SystemExit("R11E3: showHome method missing")
     block = s[start:end]
     reset = re.search(r'root\s*\.\s*removeAllViews\s*\(\s*\)\s*;', block)
     if not reset:
-        raise SystemExit("R11E3: home root reset missing")
-    insert_at = start + reset.end()
+        raise SystemExit("R11E3: showHome root reset missing")
+    pos = start + reset.end()
     inject = '''
         if (r11e3CachedHomePage != null) {
-            ViewGroup parent = (ViewGroup) r11e3CachedHomePage.getParent();
-            if (parent != null) parent.removeView(r11e3CachedHomePage);
+            android.view.ViewParent oldParent = r11e3CachedHomePage.getParent();
+            if (oldParent instanceof ViewGroup) ((ViewGroup) oldParent).removeView(r11e3CachedHomePage);
             root.addView(r11e3CachedHomePage, match());
-            View restore = r11e3CachedHomeFocus;
+            final View restore = r11e3CachedHomeFocus;
             main.post(() -> {
                 if (!destroyed && "home".equals(screen) && restore != null && restore.isFocusable()) {
                     restore.requestFocus();
@@ -56,24 +76,20 @@ if "r11e3-home-cache-hit" not in s:
             PlaybackDiagnostics.marker(this, "r11e3-home-cache-hit", "ui", "home", "", "cache", "instant-restore");
             return;
         }'''
-    s = s[:insert_at] + inject + s[insert_at:]
+    s = s[:pos] + inject + s[pos:]
 
-if "r11e3CachedHomePage = root.getChildAt(0);" not in s:
-    start, end = home_region(s)
+if "r11e3CachedHomePage = page;" not in s:
+    start, end = method_region(s, "showHome")
     if start < 0:
-        raise SystemExit("R11E3: home region missing after cache injection")
+        raise SystemExit("R11E3: showHome region missing after cache injection")
     block = s[start:end]
-    # Prefer the explicit home page attach. Fall back to the final root add in Home.
     attach = re.search(r'root\s*\.\s*addView\s*\(\s*page\s*,\s*match\s*\(\s*\)\s*\)\s*;', block)
     if not attach:
-        all_attach = list(re.finditer(r'root\s*\.\s*addView\s*\([^;]+\)\s*;', block))
-        attach = all_attach[-1] if all_attach else None
-    if not attach:
-        raise SystemExit("R11E3: home root attach missing")
-    insert_at = start + attach.end()
-    s = s[:insert_at] + "\n        r11e3CachedHomePage = root.getChildAt(0);" + s[insert_at:]
+        raise SystemExit("R11E3: home page attach missing")
+    pos = start + attach.end()
+    s = s[:pos] + "\n        r11e3CachedHomePage = page;" + s[pos:]
 
-# Persist the last launcher selected so returning Home restores focus instantly.
+# Remember which launcher opened the child screen so Back restores exactly that focus.
 if "r11e3CachedHomeFocus = tile;" not in s:
     click = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*action\s*\.\s*run\s*\(\s*\)\s*\)\s*;', s)
     if click:
@@ -88,7 +104,7 @@ if "r11e3CachedHomeFocus = tile;" not in s:
             raise SystemExit("R11E3: homeTile click anchor missing")
         s = s[:click2.end()] + "\n            r11e3CachedHomeFocus = tile;" + s[click2.end():]
 
-# Reduce focus animation work on weaker TV boxes while preserving polish on strong devices.
+# Keep focus responsive on weak receivers; avoid queued scale animations on rapid D-pad input.
 if "r11e3ReducedFocusMotion" not in s:
     pattern = re.compile(
         r'tile\.setOnFocusChangeListener\(\(view,\s*focusedNow\)\s*->\s*view\.animate\(\)\s*'
@@ -113,10 +129,10 @@ if "r11e3ReducedFocusMotion" not in s:
         });'''
     s = s[:m.start()] + new + s[m.end():]
 
-# Recycler tuning is deliberately UI-only: no DB schema bump, so it cannot trigger a package reload.
-if "r11e3-catalog-window" not in s:
-    insert_at = s.rfind("\n}")
-    if insert_at < 0:
+# Recycler tuning: rendering-window optimization only; all catalog rows remain in SQLite.
+if "private void r11e3TuneCatalogRecycler(" not in s:
+    pos = s.rfind("\n}")
+    if pos < 0:
         raise SystemExit("R11E3: class end missing")
     helper = r'''
 
@@ -125,26 +141,26 @@ if "r11e3-catalog-window" not in s:
         list.setItemAnimator(null);
         list.setHasFixedSize(true);
         list.setItemViewCacheSize(posters ? 18 : 12);
-        list.setDrawingCacheEnabled(false);
         PlaybackDiagnostics.marker(this, "r11e3-catalog-window", "ui", screen, "",
                 posters ? "poster" : "list", "cache=" + (posters ? 18 : 12));
     }
 '''
-    s = s[:insert_at] + helper + s[insert_at:]
+    s = s[:pos] + helper + s[pos:]
 
-    rv_pattern = re.compile(r'RecyclerView\s+(\w+)\s*=\s*new RecyclerView\(this\);')
-    matches = list(rv_pattern.finditer(s))
-    offset = 0
-    for m in matches:
-        name = m.group(1)
-        pos = m.end() + offset
-        tail = s[pos:pos + 650]
-        if f'r11e3TuneCatalogRecycler({name},' in tail:
-            continue
-        posters = bool(re.search(rf'{re.escape(name)}\.setLayoutManager\(new\s+GridLayoutManager\(', tail))
-        inject = f'\n        r11e3TuneCatalogRecycler({name}, {str(posters).lower()});'
-        s = s[:pos] + inject + s[pos:]
-        offset += len(inject)
+if "r11e3-catalog-window" not in s:
+    raise SystemExit("R11E3: recycler helper marker missing")
+
+# Wire each RecyclerView once. Determine grid/list from nearby layout manager assignment.
+rv_pattern = re.compile(r'RecyclerView\s+(\w+)\s*=\s*new RecyclerView\(this\);')
+matches = list(rv_pattern.finditer(s))
+for m in reversed(matches):
+    name = m.group(1)
+    tail = s[m.end():m.end() + 900]
+    if f'r11e3TuneCatalogRecycler({name},' in tail:
+        continue
+    posters = bool(re.search(rf'{re.escape(name)}\.setLayoutManager\(new\s+GridLayoutManager\(', tail))
+    inject = f'\n        r11e3TuneCatalogRecycler({name}, {str(posters).lower()});'
+    s = s[:m.end()] + inject + s[m.end():]
 
 SEVEN.write_text(s, encoding="utf-8")
 
@@ -164,4 +180,4 @@ for path, markers in checks.items():
         if marker not in text:
             raise SystemExit(f"R11E3 invariant missing {path.name}: {marker}")
 
-print("R11E stage3 applied: instant home restore + focus-state retention + reduced TV focus motion + catalog RecyclerView tuning")
+print("R11E stage3 applied: instant home restore + focus retention + reduced TV focus motion + catalog RecyclerView tuning")
