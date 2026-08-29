@@ -71,6 +71,8 @@ jobs:
           # check exit non-zero; the compatibility passes complete/validate it.
           python3 tools/apply_v340_r11_negotiator.py || true
           python3 tools/apply_v340_r11b_compat_fix.py
+          # R11C is intentionally anchor-tolerant because R11B reconstructs the
+          # resolve path differently from the older R10 source shape.
           python3 tools/apply_v340_r11c_field_fixes.py
           grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11-live-post-start-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
