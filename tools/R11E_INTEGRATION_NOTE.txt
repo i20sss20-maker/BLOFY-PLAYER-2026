@@ -1,1 +1,1 @@
-All R11E stage scripts are source-of-truth patches and must be chained by v340-full-stability-r11.yml before final release acceptance.
+All R11E source-of-truth patches must be chained by v340-full-stability-r11.yml before final release acceptance. The complete chain is R11/R11B/R11C/R11D, R11E stages 1-9, Stage10 route matrix + Stage11 package-integrity guard, then the COMPLETE release stamp. The visual theme must remain unchanged.
