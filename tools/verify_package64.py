@@ -10,15 +10,11 @@ CONTRACT = ROOT / "tools/BLOFY_PACKAGE64.md"
 
 texts = {}
 for p in list(SRC.glob("*.java")) + [GRADLE, CONTRACT]:
-    if p.exists():
-        texts[p.name] = p.read_text(encoding="utf-8", errors="ignore")
+    if p.exists(): texts[p.name] = p.read_text(encoding="utf-8", errors="ignore")
 ALL = "\n".join(texts.values())
-
-def any_text(*needles):
-    return any(n in ALL for n in needles)
-
-def file_has(name, *needles):
-    t = texts.get(name, "")
+def any_text(*needles): return any(n in ALL for n in needles)
+def file_has(name,*needles):
+    t=texts.get(name,"")
     return bool(t) and all(n in t for n in needles)
 
 checks = [
@@ -86,23 +82,21 @@ checks = [
 ("diagnostic breadcrumbs", any_text("PlaybackDiagnostics", "diagnostic", "breadcrumb")),
 ("release QA contract", any_text("testDebugUnitTest", "lintRelease", "zipalign", "apksigner") or file_has("BLOFY_PACKAGE64.md", "Release passes unit tests")),
 ("upgrade-safe COMPLETE target",
-    file_has("build.gradle.kts", "versionCode = 1000355", 'versionName = "v340-full-stability-r11e-complete"')
-    or file_has("build.gradle.kts", "versionCode = 1000356", 'versionName = "v340-playback-core-hotfix"')
-    or file_has("build.gradle.kts", "versionCode = 1000357", 'versionName = "v340-playback-hotfix-stage4"')
-    or file_has("build.gradle.kts", "versionCode = 1000358", 'versionName = "v340-playback-hotfix-stage5"')
-    or file_has("build.gradle.kts", "versionCode = 1000359", 'versionName = "v340-playback-hotfix-stage6-visual"')
-    or file_has("build.gradle.kts", "versionCode = 1000360", 'versionName = "v340-playback-hotfix-stage7-premium"')),
+ file_has("build.gradle.kts", "versionCode = 1000355", 'versionName = "v340-full-stability-r11e-complete"')
+ or file_has("build.gradle.kts", "versionCode = 1000356", 'versionName = "v340-playback-core-hotfix"')
+ or file_has("build.gradle.kts", "versionCode = 1000357", 'versionName = "v340-playback-hotfix-stage4"')
+ or file_has("build.gradle.kts", "versionCode = 1000358", 'versionName = "v340-playback-hotfix-stage5"')
+ or file_has("build.gradle.kts", "versionCode = 1000359", 'versionName = "v340-playback-hotfix-stage6-visual"')
+ or file_has("build.gradle.kts", "versionCode = 1000360", 'versionName = "v340-playback-hotfix-stage7-premium"')
+ or file_has("build.gradle.kts", "versionCode = 1000361", 'versionName = "v340-playback-v2-stage8"')
+ or file_has("build.gradle.kts", "versionCode = 1000362", 'versionName = "v340-premium-app-stage9"')),
 ]
-
-assert len(checks) == 64, len(checks)
-failed = []
-for i, (name, ok) in enumerate(checks, 1):
-    print(f"{i:02d} {'PASS' if ok else 'FAIL'} {name}")
-    if not ok:
-        failed.append((i, name))
+assert len(checks)==64,len(checks)
+failed=[]
+for i,(name,ok) in enumerate(checks,1):
+ print(f"{i:02d} {'PASS' if ok else 'FAIL'} {name}")
+ if not ok: failed.append((i,name))
 print(f"PACKAGE64: {64-len(failed)}/64 source-contract checks passed")
 if failed:
-    print("Missing/undetected:")
-    for i, name in failed:
-        print(f" - {i:02d} {name}")
-    sys.exit(1)
+ for i,name in failed: print(f" - {i:02d} {name}")
+ sys.exit(1)
