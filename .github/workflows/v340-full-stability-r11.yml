@@ -7,6 +7,7 @@ on:
     paths:
       - "tools/apply_v340_r11_negotiator.py"
       - "tools/apply_v340_r11b_compat_fix.py"
+      - "tools/apply_v340_r11c_field_fixes.py"
       - ".github/workflows/v340-full-stability-r11.yml"
 
 permissions:
@@ -67,15 +68,20 @@ jobs:
           done
           # The primary R11 patch writes all new classes/features before its final
           # invariant check. Older reconstructed PlayerActivity shapes can make that
-          # check exit non-zero; the compatibility pass below completes/validates it.
+          # check exit non-zero; the compatibility passes complete/validate it.
           python3 tools/apply_v340_r11_negotiator.py || true
           python3 tools/apply_v340_r11b_compat_fix.py
+          python3 tools/apply_v340_r11c_field_fixes.py
           grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11-live-post-start-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'r11c-live-silent-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'attemptedLiveCandidates' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11-vod-resolve-start' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'r11-vod-first-frame' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'class PlaybackNegotiator' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
           grep -q 'media3-exoplayer-rtsp' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'PREVIEW_STARTUP_TIMEOUT_MS = 3_500' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPolicy.java
+          grep -q 'اعتماد الباقة كاملة' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           grep -q 'versionCode = 1000344' BLOFY-ANDROID-2026/app/build.gradle.kts
           grep -q 'v340-full-stability-r11' BLOFY-ANDROID-2026/app/build.gradle.kts
           test -s BLOFY-ANDROID-2026/app/src/main/baseline-prof.txt
