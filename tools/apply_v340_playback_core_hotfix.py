@@ -3,8 +3,10 @@ from pathlib import Path
 import re
 
 ROOT=Path(__file__).resolve().parents[1]
-JAVA=ROOT/'BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player'
-GRADLE=ROOT/'BLOFY-ANDROID-2026/app/build.gradle.kts'
+APP=ROOT/'BLOFY-ANDROID-2026/app'
+JAVA=APP/'src/main/java/tv/blofy/player'
+TEST=APP/'src/test/java/tv/blofy/player/PlaybackPolicyTest.java'
+GRADLE=APP/'build.gradle.kts'
 
 # 1) Give native-link authorization + redirect a realistic budget. Cancellation still
 # disconnects immediately when the user changes content, so this does not make zapping wait 10s.
@@ -24,8 +26,8 @@ new='''    static void failed(Context c, String provider, String family, String 
 s=s[:start]+new+s[end:]
 fail.write_text(s)
 
-# 3) Startup watchdogs are a guard, not a route verdict. Set by symbol name instead of
-# assuming a prior value because the COMPLETE reconstruction changes these constants.
+# 3) Startup watchdogs are guards, not route verdicts. Media3 gets a realistic chance to
+# complete its own load retry policy before BLOFY changes route/engine.
 pol=JAVA/'PlaybackPolicy.java'
 s=pol.read_text()
 values={
@@ -42,7 +44,17 @@ for name,value in values.items():
     if n != 1: raise SystemExit(f'hotfix constant missing PlaybackPolicy.java: {name}')
 pol.write_text(s)
 
-# 4) Stamp an upgrade-safe hotfix build above COMPLETE.
+# 4) Keep the regression test strict, but assert the new deliberately-bounded policy instead
+# of the obsolete 2.5-6.5 second values that reproduced the field failures.
+if TEST.exists():
+    t=TEST.read_text()
+    method=re.compile(r'    @Test\n    public void startupTimeoutsAreBoundedForFastFallback\(\) \{.*?\n    \}', re.S)
+    replacement='''    @Test\n    public void startupTimeoutsAreBoundedForResilientFallback() {\n        assertEquals(12_000, PlaybackPolicy.startupTimeoutMs(0));\n        assertEquals(9_000, PlaybackPolicy.startupTimeoutMs(1));\n        assertEquals(15_000, PlaybackPolicy.vodStartupTimeoutMs(false));\n        assertEquals(22_000, PlaybackPolicy.vodStartupTimeoutMs(true));\n        assertEquals(12_000, PlaybackPolicy.vlcStartupTimeoutMs(false));\n        assertEquals(20_000, PlaybackPolicy.vlcStartupTimeoutMs(true));\n        assertEquals(8_000, PlaybackPolicy.PREVIEW_STARTUP_TIMEOUT_MS);\n        assertTrue(PlaybackPolicy.startupTimeoutMs(0) <= 12_000);\n        assertTrue(PlaybackPolicy.vodStartupTimeoutMs(true) <= 22_000);\n    }'''
+    t,n=method.subn(replacement,t,count=1)
+    if n != 1: raise SystemExit('hotfix timeout regression test anchor missing')
+    TEST.write_text(t)
+
+# 5) Stamp an upgrade-safe hotfix build above COMPLETE.
 g=GRADLE.read_text()
 g=re.sub(r'versionCode\s*=\s*\d+', 'versionCode = 1000356', g, count=1)
 g=re.sub(r'versionName\s*=\s*"[^"]*"', 'versionName = "v340-playback-core-hotfix"', g, count=1)
@@ -58,11 +70,11 @@ for p,need in {
  for n in need:
   if n not in t: raise SystemExit(f'hotfix invariant missing {p.name}: {n}')
 
-# Regression assertions for the exact field failures: generic timeout must not create
-# persistent negative-route evidence, while 403/404 still can.
+# Exact field-failure guard: generic timeout, 429 and 5xx must not write persistent
+# negative-route evidence. Only 403/404 reach the preference write path.
 f=fail.read_text()
 failed_body=f[f.index('static void failed('):f.index('static boolean routeBlocked(')]
-if 'isTimeout(reason)' in failed_body or 'is429(reason)' in failed_body or 'is5xx(reason)' in failed_body:
-    raise SystemExit('soft/transient failure still poisons negative route')
+if 'if (!(is403(reason) || is404(reason)))' not in failed_body:
+    raise SystemExit('hard-only route failure gate missing')
 
-print('v340 playback-core hotfix applied: resolver budget + hard-only route memory + realistic startup windows')
+print('v340 playback-core hotfix applied: resolver budget + hard-only route memory + resilient bounded startup windows')
