@@ -1,0 +1,1 @@
+Target versionCode=1000354; versionName=v340-full-stability-r11e-complete; final artifact BLOFY-PLAYER-v340-R11E-COMPLETE-SIGNED.apk.
