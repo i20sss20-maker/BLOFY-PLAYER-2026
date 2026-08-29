@@ -174,6 +174,6 @@ for path, markers in checks.items():
 
 print("R11E stage1 applied: negative route memory + 403/404/timeout classification + candidate filtering")
 
-# Stage 2 is chained here so the existing signed CI gate validates both stages
-# without weakening the proven R11E stage1 artifact/signature checks.
+# Stage 2 is chained here so the existing signed CI gate validates both stages.
+# R11E2 guard revision 2: tolerant of reconstructed callback formatting.
 runpy.run_path(str(ROOT / "tools/apply_v340_r11e_stage2_stability_ui.py"), run_name="__main__")
