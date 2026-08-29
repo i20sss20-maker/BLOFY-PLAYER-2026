@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
+import runpy
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "BLOFY-ANDROID-2026/app"
@@ -91,8 +92,6 @@ final class PlaybackFailureMemory {
 ''', encoding="utf-8")
 
 n = NEG.read_text(encoding="utf-8")
-
-# Filter learned candidates through negative route memory before returning them.
 if "filterFailures(Context context" not in n:
     anchor = "    static void proven(Context context, String providerUrl, String family,\n"
     helper = r'''    private static List<Candidate> filterFailures(Context context, String providerUrl,
@@ -102,7 +101,6 @@ if "filterFailures(Context context" not in n:
             if (!PlaybackFailureMemory.blocked(context, providerUrl, family,
                     c.route, c.extension, c.engine)) out.add(c);
         }
-        // Never return an empty plan; expired/temporary failures must not brick playback.
         return out.isEmpty() ? input : out;
     }
 
@@ -117,11 +115,9 @@ if "filterFailures(Context context" not in n:
     static boolean timeoutFailure(String reason) { return PlaybackFailureMemory.isTimeout(reason); }
 
 '''
-    if anchor not in n:
-        raise SystemExit("R11E1: negotiator proven anchor missing")
+    if anchor not in n: raise SystemExit("R11E1: negotiator proven anchor missing")
     n = n.replace(anchor, helper + anchor, 1)
 
-# Replace only method-local final returns in candidate builders.
 for method, family in (("liveCandidates", "live"), ("vodCandidates", "vod")):
     start = n.find("static List<Candidate> " + method)
     if start < 0: raise SystemExit("R11E1: missing " + method)
@@ -133,29 +129,22 @@ for method, family in (("liveCandidates", "live"), ("vodCandidates", "vod")):
         if idx < 0: raise SystemExit("R11E1: return out missing in " + method)
         block = block[:idx] + f'        return filterFailures(context, providerUrl, "{family}", out);' + block[idx+len("        return out;"):]
         n = n[:start] + block + n[end:]
-
 NEG.write_text(n, encoding="utf-8")
 
-# Record startup failures against the exact route candidate. This is intentionally
-# conservative: proven-live runtime recovery is not negatively cached here.
 p = PLAYER.read_text(encoding="utf-8")
 recover = "    private void recoverFromFailure(String reason) {\n"
 if recover in p and "r11e-failure-recorded" not in p[p.find(recover):p.find(recover)+1400]:
     pos = p.find(recover) + len(recover)
     inject = '''        if (isLive() && !livePlaybackProven) {\n            PlaybackNegotiator.failed(this, url, "live", sourceVariant, extension,\n                    usingVlc ? "vlc" : "media3", reason);\n            PlaybackDiagnostics.marker(this, "r11e-failure-recorded", "live", id, extension,\n                    sourceVariant, "reason=" + valueOr(reason, ""));\n        }\n'''
     p = p[:pos] + inject + p[pos:]
-
-# Reset all transient negative/attempt state when the user explicitly retries or changes channel.
 manual = "    private void manualRetry() {\n"
 if manual in p:
     pos = p.find(manual) + len(manual)
     if "r11e-manual-retry" not in p[pos:pos+800]:
         p = p[:pos] + '        PlaybackDiagnostics.marker(this, "r11e-manual-retry", kind, id, extension, sourceVariant, "reset-session");\n' + p[pos:]
-
 PLAYER.write_text(p, encoding="utf-8")
 
 v = VOD.read_text(encoding="utf-8")
-# VOD recovery method names differ across reconstructed bases. Patch the common one when present.
 for sig in ("    private void recover(String reason) {\n", "    private void recoverFromFailure(String reason) {\n"):
     if sig in v:
         start = v.find(sig)
@@ -184,3 +173,7 @@ for path, markers in checks.items():
         if marker not in text: raise SystemExit(f"R11E1 invariant missing {path.name}: {marker}")
 
 print("R11E stage1 applied: negative route memory + 403/404/timeout classification + candidate filtering")
+
+# Stage 2 is chained here so the existing signed CI gate validates both stages
+# without weakening the proven R11E stage1 artifact/signature checks.
+runpy.run_path(str(ROOT / "tools/apply_v340_r11e_stage2_stability_ui.py"), run_name="__main__")
