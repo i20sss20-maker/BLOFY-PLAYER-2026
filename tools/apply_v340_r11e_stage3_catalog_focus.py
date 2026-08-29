@@ -21,14 +21,13 @@ if "private View r11e3CachedHomePage;" not in s:
         "    private View r11e3CachedHomeFocus;\n", 1)
 
 if "r11e3-home-cache-hit" not in s:
-    old = '''        screenGeneration++;
-        screen = "home";
-        root.removeAllViews();
-
-        LinearLayout page = new LinearLayout(this);'''
-    new = '''        screenGeneration++;
-        screen = "home";
-        root.removeAllViews();
+    # Stage2/older reconstruction layers may insert lines around screen assignment,
+    # so patch showHome structurally instead of depending on one exact block.
+    pat = re.compile(r'(private void showHome\(\) \{.*?screen\s*=\s*"home";\s*\n\s*root\.removeAllViews\(\);)', re.S)
+    m = pat.search(s)
+    if not m:
+        raise SystemExit("R11E3: showHome anchor missing")
+    inject = m.group(1) + '''
         if (r11e3CachedHomePage != null) {
             root.addView(r11e3CachedHomePage, match());
             View restore = r11e3CachedHomeFocus;
@@ -39,47 +38,30 @@ if "r11e3-home-cache-hit" not in s:
             });
             PlaybackDiagnostics.marker(this, "r11e3-home-cache-hit", "ui", "home", "", "cache", "instant-restore");
             return;
-        }
-
-        LinearLayout page = new LinearLayout(this);'''
-    if old not in s:
-        raise SystemExit("R11E3: showHome anchor missing")
-    s = s.replace(old, new, 1)
+        }'''
+    s = s[:m.start()] + inject + s[m.end():]
 
 if "r11e3CachedHomePage = page;" not in s:
-    old = '''        root.addView(page, match());
-        live.requestFocus();
-    }
-
-    private TextView homeTile'''
-    new = '''        root.addView(page, match());
-        r11e3CachedHomePage = page;
-        live.requestFocus();
-    }
-
-    private TextView homeTile'''
-    if old not in s:
+    pat = re.compile(r'(private void showHome\(\) \{.*?root\.addView\(page, match\(\)\);\s*\n)(\s*live\.requestFocus\(\);)', re.S)
+    m = pat.search(s)
+    if not m:
         raise SystemExit("R11E3: home cache store anchor missing")
-    s = s.replace(old, new, 1)
+    s = s[:m.start()] + m.group(1) + "        r11e3CachedHomePage = page;\n" + m.group(2) + s[m.end():]
 
 # Save the exact focused launcher before another screen detaches the cached home.
 if "r11e3CachedHomeFocus = getCurrentFocus();" not in s:
-    old = '''        stopHeroRotation();
-        screenGeneration++;
-        root.removeAllViews();
-
-        LinearLayout page = new LinearLayout(this);'''
-    new = '''        stopHeroRotation();
-        screenGeneration++;
-        if ("home".equals(screen) && getCurrentFocus() != null) {
+    # Insert on the first non-home shell transition pattern after stopHeroRotation.
+    pat = re.compile(r'(stopHeroRotation\(\);\s*\n\s*screenGeneration\+\+;\s*\n)(\s*root\.removeAllViews\(\);)')
+    m = pat.search(s)
+    if m:
+        repl = m.group(1) + '''        if ("home".equals(screen) && getCurrentFocus() != null) {
             r11e3CachedHomeFocus = getCurrentFocus();
         }
-        root.removeAllViews();
-
-        LinearLayout page = new LinearLayout(this);'''
-    if old not in s:
-        raise SystemExit("R11E3: shell cache-focus anchor missing")
-    s = s.replace(old, new, 1)
+''' + m.group(2)
+        s = s[:m.start()] + repl + s[m.end():]
+    else:
+        # Safe fallback: focus still restores to default launcher if no structural shell anchor exists.
+        print("R11E3: shell cache-focus anchor absent; continuing with default launcher restore")
 
 # Reduce focus animation work on weak TV boxes; retain the existing visual design
 # on stronger devices.
@@ -108,7 +90,6 @@ if "r11e3ReducedFocusMotion" not in s:
 # Reuse RecyclerView child holders more aggressively for very large catalogs.
 # This changes only the visible window; the full package remains stored locally.
 if "r11e3-catalog-window" not in s:
-    # Add a helper next to dp()/layout helpers near end of class without relying on exact line numbers.
     insert_at = s.rfind("\n}")
     if insert_at < 0:
         raise SystemExit("R11E3: class end missing")
@@ -126,11 +107,9 @@ if "r11e3-catalog-window" not in s:
 '''
     s = s[:insert_at] + helper + s[insert_at:]
 
-    # Apply to common RecyclerViews after their layout manager is assigned.
     s = re.sub(r'(RecyclerView\s+(\w+)\s*=\s*new RecyclerView\(this\);\n\s*\2\.setLayoutManager\([^\n]+\);)',
                lambda m: m.group(1) + '\n        r11e3TuneCatalogRecycler(' + m.group(2) + ', false);',
                s)
-    # Poster grids benefit from a larger holder cache. Replace list tuning where GridLayoutManager follows.
     s = re.sub(r'(RecyclerView\s+(\w+)\s*=\s*new RecyclerView\(this\);\n\s*\2\.setLayoutManager\(new GridLayoutManager\([^\n]+\);\n\s*)r11e3TuneCatalogRecycler\(\2, false\);',
                lambda m: m.group(1) + 'r11e3TuneCatalogRecycler(' + m.group(2) + ', true);',
                s)
