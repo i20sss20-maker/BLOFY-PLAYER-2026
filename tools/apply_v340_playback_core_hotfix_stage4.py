@@ -15,7 +15,6 @@ p = PLAYER.read_text(encoding="utf-8")
 # 3) Repeated stalls escalate into the existing bounded route/engine recovery ladder.
 # 4) Apply identical protection to Media3 and LibVLC without creating retry loops.
 
-# Constants + state.
 if "STEADY_STATE_LIVE_STALL_MS" not in p:
     anchor = "    private static final long LIVE_STABLE_WINDOW_MS = 4_000L;\n"
     if anchor not in p:
@@ -32,17 +31,14 @@ if "private boolean playbackBuffering;" not in p:
         "    private boolean playbackBuffering;\n"
         "    private long bufferingStartedAtMs;\n", 1)
 
-# Add a steady-state watchdog next to the startup watchdog. It never fires before
-# the first frame and therefore cannot race the startup timeout/retry ladder.
 if "private final Runnable steadyStateStallWatchdog" not in p:
     anchor = "    private final Runnable markPlaybackStable = () -> {\n"
     idx = p.find(anchor)
     if idx < 0:
         raise SystemExit("stage4: markPlaybackStable anchor missing")
-    watchdog = '''    private final Runnable steadyStateStallWatchdog = () -> {\n        if (!firstFrameRendered || !playbackBuffering || isFinishing() || isDestroyed()) return;\n        long stalledFor = bufferingStartedAtMs <= 0 ? 0L\n                : SystemClock.elapsedRealtime() - bufferingStartedAtMs;\n        long threshold = isLive() ? STEADY_STATE_LIVE_STALL_MS : STEADY_STATE_VOD_STALL_MS;\n        if (stalledFor < threshold) {\n            playbackHandler.postDelayed(steadyStateStallWatchdog, threshold - stalledFor);\n            return;\n        }\n        playbackBuffering = false;\n        bufferingStartedAtMs = 0L;\n        PlaybackDiagnostics.marker(this, "hotfix-steady-state-stall", kind, id, extension,\n                sourceVariant, "engine=" + activeTransportName() + " ms=" + stalledFor);\n        Log.w(TAG, "steady-state-stall kind=" + kind + " ext=" + extension\n                + " ms=" + stalledFor + " engine=" + activeTransportName());\n\n        // A live URL that has already rendered video is worth one exact reconnect.\n        // If that was already consumed, the existing bounded recovery ladder takes over.\n        if (isLive() && recoverProvenLiveSilently("steady-state-stall")) return;\n        recoverFromFailure(isLive() ? "توقف البث بعد بدء التشغيل" : "توقف تشغيل الفيديو");\n    };\n\n'''
+    watchdog = '''    private final Runnable steadyStateStallWatchdog = () -> {\n        if (!firstFrameRendered || !playbackBuffering || isFinishing() || isDestroyed()) return;\n        long stalledFor = bufferingStartedAtMs <= 0 ? 0L\n                : SystemClock.elapsedRealtime() - bufferingStartedAtMs;\n        playbackBuffering = false;\n        bufferingStartedAtMs = 0L;\n        PlaybackDiagnostics.marker(this, "hotfix-steady-state-stall", kind, id, extension,\n                sourceVariant, "engine=" + activeTransportName() + " ms=" + stalledFor);\n        Log.w(TAG, "steady-state-stall kind=" + kind + " ext=" + extension\n                + " ms=" + stalledFor + " engine=" + activeTransportName());\n\n        // A live URL that has already rendered video is worth one exact reconnect.\n        // If that was already consumed, the existing bounded recovery ladder takes over.\n        if (isLive() && recoverProvenLiveSilently("steady-state-stall")) return;\n        recoverFromFailure(isLive() ? "توقف البث بعد بدء التشغيل" : "توقف تشغيل الفيديو");\n    };\n\n'''
     p = p[:idx] + watchdog + p[idx:]
 
-# Helper methods centralize hysteresis/cancellation for both engines.
 if "private void noteSteadyStateBuffering()" not in p:
     anchor = "    private void schedulePlaybackTimeout() {\n"
     if anchor not in p:
@@ -50,7 +46,6 @@ if "private void noteSteadyStateBuffering()" not in p:
     helpers = '''    private void noteSteadyStateBuffering() {\n        if (!firstFrameRendered) return;\n        if (!playbackBuffering) {\n            playbackBuffering = true;\n            bufferingStartedAtMs = SystemClock.elapsedRealtime();\n        }\n        playbackHandler.removeCallbacks(steadyStateStallWatchdog);\n        playbackHandler.postDelayed(steadyStateStallWatchdog,\n                isLive() ? STEADY_STATE_LIVE_STALL_MS : STEADY_STATE_VOD_STALL_MS);\n    }\n\n    private void clearSteadyStateBuffering() {\n        playbackBuffering = false;\n        bufferingStartedAtMs = 0L;\n        playbackHandler.removeCallbacks(steadyStateStallWatchdog);\n    }\n\n'''
     p = p.replace(anchor, helpers + anchor, 1)
 
-# Media3: BUFFERING after first frame arms the watchdog; READY cancels it.
 state_start = p.find("    @Override public void onPlaybackStateChanged(int playbackState) {")
 state_end = p.find("\n    @Override public void onRenderedFirstFrame()", state_start)
 if state_start < 0 or state_end < 0:
@@ -71,8 +66,6 @@ if ended_anchor in state and "clearSteadyStateBuffering();\n            progress
     state = state.replace(ended_anchor, ended_anchor + "            clearSteadyStateBuffering();\n", 1)
 p = p[:state_start] + state + p[state_end:]
 
-# LibVLC: Buffering arms it only after video has really started. Time/position/Vout
-# activity proves forward progress and cancels the stall timer.
 vlc_start = p.find("    private void onVlcEvent(org.videolan.libvlc.MediaPlayer.Event event) {")
 vlc_end = p.find("\n    private void markVlcFirstFrame()", vlc_start)
 if vlc_start < 0 or vlc_end < 0:
@@ -90,7 +83,6 @@ vlc = vlc.replace(
 )
 p = p[:vlc_start] + vlc + p[vlc_end:]
 
-# First-frame callbacks are progress, not buffering.
 for marker in [
     "    @Override public void onRenderedFirstFrame() {\n",
     "    private void markVlcFirstFrame() {\n",
@@ -98,8 +90,6 @@ for marker in [
     start = p.find(marker)
     if start < 0:
         raise SystemExit(f"stage4: first-frame marker missing: {marker.strip()}")
-    # Insert after guards, before setting first-frame flags when possible.
-    next_nl = p.find("\n", start + len(marker))
     block_end = p.find("\n    }", start)
     block = p[start:block_end]
     if "clearSteadyStateBuffering();" not in block:
@@ -113,8 +103,6 @@ for marker in [
             insert_at = guard_at + len(guard) if guard_at >= 0 else start + len(marker)
         p = p[:insert_at] + "        clearSteadyStateBuffering();\n" + p[insert_at:]
 
-# Every source/transaction teardown cancels the post-start watchdog so stale callbacks
-# can never recover a channel the user has already left.
 for signature in [
     "    private void switchLiveChannel(BlofyModels.Media media) {\n",
     "    private void recoverFromFailure(String reason) {\n",
@@ -137,7 +125,6 @@ for signature in [
 
 PLAYER.write_text(p, encoding="utf-8")
 
-# Release identity for an installable test build newer than Stage3.
 g = GRADLE.read_text(encoding="utf-8")
 g = re.sub(r'versionCode\s*=\s*\d+', 'versionCode = 1000357', g, count=1)
 g = re.sub(r'versionName\s*=\s*"[^"]*"', 'versionName = "v340-playback-hotfix-stage4"', g, count=1)
@@ -165,11 +152,12 @@ for path, markers in checks.items():
         if marker not in text:
             raise SystemExit(f"stage4 invariant missing {path.name}: {marker}")
 
-# Safety: watchdog must never recover before a first frame.
 p = PLAYER.read_text(encoding="utf-8")
 wd_start = p.find("    private final Runnable steadyStateStallWatchdog")
 wd_end = p.find("\n    };", wd_start)
 if wd_start < 0 or wd_end < 0 or "!firstFrameRendered" not in p[wd_start:wd_end]:
     raise SystemExit("stage4: steady-state watchdog lost first-frame safety gate")
+if "postDelayed(steadyStateStallWatchdog" in p[wd_start:wd_end]:
+    raise SystemExit("stage4: watchdog must remain one-shot and non-recursive")
 
 print("v340 playback-core hotfix stage4 applied: post-first-frame stall hysteresis + same-URL self-heal + bounded engine escalation")
