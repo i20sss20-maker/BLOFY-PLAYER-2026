@@ -18,18 +18,9 @@ s = s.replace(
     1,
 )
 
-# Replace the R9 cache gate using a structural boundary instead of a fragile
-# whitespace regex. This preserves the full-download-first rule while opening
-# a previously committed catalog instantly on later launches.
+# Strict complete-cache gate. Some reconstruction layers remove the older R9
+# shortcut entirely, so replace it when present or insert it after cached counts.
 if 'boolean cacheComplete = "complete".equals(syncState)' not in s:
-    start = s.find('        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0')
-    if start < 0:
-        raise SystemExit("R11E4: package fast-path start missing")
-    end_marker = '            return new Result(cachedLive, cachedMovies, cachedSeries, profile);\n        }'
-    end = s.find(end_marker, start)
-    if end < 0:
-        raise SystemExit("R11E4: package fast-path end missing")
-    end += len(end_marker)
     replacement = '''        String syncState = database.metadata("sync_state", "");
         boolean cacheComplete = "complete".equals(syncState);
         if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
@@ -37,12 +28,25 @@ if 'boolean cacheComplete = "complete".equals(syncState)' not in s:
             String profile = database.metadata("playback_profile", "Media3 مباشر");
             emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
             return new Result(cachedLive, cachedMovies, cachedSeries, profile);
-        }'''
-    s = s[:start] + replacement + s[end:]
+        }
+
+'''
+    start = s.find('        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0')
+    if start >= 0:
+        end_marker = '            return new Result(cachedLive, cachedMovies, cachedSeries, profile);\n        }'
+        end = s.find(end_marker, start)
+        if end < 0:
+            raise SystemExit("R11E4: package fast-path end missing")
+        end += len(end_marker)
+        s = s[:start] + replacement.rstrip() + s[end:]
+    else:
+        anchor = '        int cachedSeries = database.count("series");\n'
+        if anchor not in s:
+            raise SystemExit("R11E4: cached-series insertion anchor missing")
+        s = s.replace(anchor, anchor + replacement, 1)
 
 # Saved playlists get the same instant-local path before any health/session
-# request. Only a catalog whose atomic import reached sync_state=complete is
-# eligible; interrupted/failed imports keep the previous committed package.
+# request. Only an atomic import whose sync_state reached complete is eligible.
 if "فتح فوري من الحفظ المحلي" not in s:
     run_sig = re.search(r'(?m)^\s*Result\s+run\s*\(\s*\)\s+throws\s+Exception\s*\{', s)
     if not run_sig:
