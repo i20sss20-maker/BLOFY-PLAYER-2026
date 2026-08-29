@@ -10,90 +10,37 @@ GRADLE = APP / "build.gradle.kts"
 
 s = SEVEN.read_text(encoding="utf-8")
 
+# State fields: tolerate reconstruction layers reordering members.
 if "private View r11e3CachedHomePage;" not in s:
     m = re.search(r'(?m)^\s*private\s+volatile\s+boolean\s+destroyed\s*;\s*$', s)
     if not m:
-        # Reconstruction layers can reorder fields. Fall back to the class body.
         m = re.search(r'public\s+final\s+class\s+SevenMaxActivity\s+extends\s+Activity\s*\{', s)
         if not m:
             raise SystemExit("R11E3: class/state anchor missing")
     insert_at = m.end()
     s = s[:insert_at] + "\n    private View r11e3CachedHomePage;\n    private View r11e3CachedHomeFocus;" + s[insert_at:]
 
-# Brace-balanced Java method locator. First try a strict declaration pattern,
-# then a deliberately tolerant name lookup because earlier reconstruction
-# layers can add annotations/modifiers or reformat the method declaration.
-def method_bounds(text, method_name):
-    patterns = [
-        re.compile(
-            r'(?m)^\s*(?:@[\w.]+(?:\([^\n]*\))?\s*)*'
-            r'(?:(?:private|protected|public|static|final|synchronized)\s+)*'
-            r'[\w<>\[\].?, ]+\s+' + re.escape(method_name) + r'\s*\([^)]*\)\s*\{'
-        ),
-        re.compile(r'\b' + re.escape(method_name) + r'\s*\([^)]*\)\s*\{', re.S),
-    ]
-    m = None
-    for pattern in patterns:
-        m = pattern.search(text)
-        if m:
-            break
-    if not m:
+# Locate Home by semantic statements instead of a fragile Java declaration parser.
+def home_region(text):
+    home = re.search(r'screen\s*=\s*"home"\s*;', text)
+    if not home:
+        # Fallback: the first root reset followed by construction of the home page.
+        home = re.search(r'root\s*\.\s*removeAllViews\s*\(\s*\)\s*;(?=[\s\S]{0,900}LinearLayout\s+page\s*=)', text)
+    if not home:
         return -1, -1
-    brace = text.find('{', m.start(), m.end())
-    if brace < 0:
-        return -1, -1
-    depth = 0
-    in_string = False
-    quote = ''
-    escape = False
-    line_comment = False
-    block_comment = False
-    i = brace
-    while i < len(text):
-        ch = text[i]
-        nxt = text[i + 1] if i + 1 < len(text) else ''
-        if line_comment:
-            if ch == '\n': line_comment = False
-        elif block_comment:
-            if ch == '*' and nxt == '/':
-                block_comment = False
-                i += 1
-        elif in_string:
-            if escape:
-                escape = False
-            elif ch == '\\':
-                escape = True
-            elif ch == quote:
-                in_string = False
-        else:
-            if ch == '/' and nxt == '/':
-                line_comment = True
-                i += 1
-            elif ch == '/' and nxt == '*':
-                block_comment = True
-                i += 1
-            elif ch in ('"', "'"):
-                in_string = True
-                quote = ch
-            elif ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0:
-                    # Return from the start of the declaration line when possible.
-                    line_start = text.rfind('\n', 0, m.start()) + 1
-                    return line_start, i + 1
-        i += 1
-    return -1, -1
+    start = max(0, text.rfind('\n', 0, home.start()))
+    next_method = re.search(r'(?m)^\s*private\s+(?:[\w<>\[\].?, ]+)\s+(?:homeTile|addHomeGridTile|showSports)\s*\(', text[home.end():])
+    end = home.end() + (next_method.start() if next_method else min(len(text) - home.end(), 12000))
+    return start, end
 
 if "r11e3-home-cache-hit" not in s:
-    start, end = method_bounds(s, "showHome")
+    start, end = home_region(s)
     if start < 0:
-        raise SystemExit("R11E3: showHome anchor missing")
+        raise SystemExit("R11E3: home semantic anchor missing")
     block = s[start:end]
     reset = re.search(r'root\s*\.\s*removeAllViews\s*\(\s*\)\s*;', block)
     if not reset:
-        raise SystemExit("R11E3: showHome root reset missing")
+        raise SystemExit("R11E3: home root reset missing")
     insert_at = start + reset.end()
     inject = '''
         if (r11e3CachedHomePage != null) {
@@ -112,48 +59,43 @@ if "r11e3-home-cache-hit" not in s:
     s = s[:insert_at] + inject + s[insert_at:]
 
 if "r11e3CachedHomePage = root.getChildAt(0);" not in s:
-    start, end = method_bounds(s, "showHome")
+    start, end = home_region(s)
     if start < 0:
-        raise SystemExit("R11E3: showHome method missing after cache injection")
+        raise SystemExit("R11E3: home region missing after cache injection")
     block = s[start:end]
-    attach = list(re.finditer(r'root\s*\.\s*addView\s*\([^;]+\)\s*;', block))
+    # Prefer the explicit home page attach. Fall back to the final root add in Home.
+    attach = re.search(r'root\s*\.\s*addView\s*\(\s*page\s*,\s*match\s*\(\s*\)\s*\)\s*;', block)
+    if not attach:
+        all_attach = list(re.finditer(r'root\s*\.\s*addView\s*\([^;]+\)\s*;', block))
+        attach = all_attach[-1] if all_attach else None
     if not attach:
         raise SystemExit("R11E3: home root attach missing")
-    insert_at = start + attach[-1].end()
+    insert_at = start + attach.end()
     s = s[:insert_at] + "\n        r11e3CachedHomePage = root.getChildAt(0);" + s[insert_at:]
 
+# Persist the last launcher selected so returning Home restores focus instantly.
 if "r11e3CachedHomeFocus = tile;" not in s:
-    start, end = method_bounds(s, "homeTile")
-    if start < 0:
-        raise SystemExit("R11E3: homeTile method missing")
-    block = s[start:end]
-    click = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*action\s*\.\s*run\s*\(\s*\)\s*\)\s*;', block)
+    click = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*action\s*\.\s*run\s*\(\s*\)\s*\)\s*;', s)
     if click:
         repl = '''tile.setOnClickListener(v -> {
             r11e3CachedHomeFocus = tile;
             action.run();
         });'''
-        abs_start = start + click.start()
-        abs_end = start + click.end()
-        s = s[:abs_start] + repl + s[abs_end:]
+        s = s[:click.start()] + repl + s[click.end():]
     else:
-        click2 = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*\{', block)
+        click2 = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*\{', s)
         if not click2:
             raise SystemExit("R11E3: homeTile click anchor missing")
-        insert_at = start + click2.end()
-        s = s[:insert_at] + "\n            r11e3CachedHomeFocus = tile;" + s[insert_at:]
+        s = s[:click2.end()] + "\n            r11e3CachedHomeFocus = tile;" + s[click2.end():]
 
+# Reduce focus animation work on weaker TV boxes while preserving polish on strong devices.
 if "r11e3ReducedFocusMotion" not in s:
-    start, end = method_bounds(s, "homeTile")
-    if start < 0:
-        raise SystemExit("R11E3: homeTile method missing for focus tuning")
-    block = s[start:end]
     pattern = re.compile(
         r'tile\.setOnFocusChangeListener\(\(view,\s*focusedNow\)\s*->\s*view\.animate\(\)\s*'
         r'\.scaleX\(focusedNow\s*\?\s*1\.025f\s*:\s*1f\)\s*'
         r'\.scaleY\(focusedNow\s*\?\s*1\.025f\s*:\s*1f\)\s*'
         r'\.setDuration\(110L\)\.start\(\)\);', re.S)
-    m = pattern.search(block)
+    m = pattern.search(s)
     if not m:
         raise SystemExit("R11E3: home focus animation anchor missing")
     new = '''final boolean r11e3ReducedFocusMotion = DeviceCapabilityProfile.detect(this).usesReducedPerformance();
@@ -169,10 +111,9 @@ if "r11e3ReducedFocusMotion" not in s:
                         .setDuration(75L).start();
             }
         });'''
-    abs_start = start + m.start()
-    abs_end = start + m.end()
-    s = s[:abs_start] + new + s[abs_end:]
+    s = s[:m.start()] + new + s[m.end():]
 
+# Recycler tuning is deliberately UI-only: no DB schema bump, so it cannot trigger a package reload.
 if "r11e3-catalog-window" not in s:
     insert_at = s.rfind("\n}")
     if insert_at < 0:
@@ -197,7 +138,7 @@ if "r11e3-catalog-window" not in s:
     for m in matches:
         name = m.group(1)
         pos = m.end() + offset
-        tail = s[pos:pos + 500]
+        tail = s[pos:pos + 650]
         if f'r11e3TuneCatalogRecycler({name},' in tail:
             continue
         posters = bool(re.search(rf'{re.escape(name)}\.setLayoutManager\(new\s+GridLayoutManager\(', tail))
