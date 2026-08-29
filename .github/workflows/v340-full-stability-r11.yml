@@ -77,6 +77,7 @@ jobs:
           python3 tools/apply_v340_r11c_field_fixes.py
           python3 tools/apply_v340_r11d_full_features.py
           python3 tools/apply_v340_r11e_stage1_stability.py
+          python3 tools/apply_v340_r11e_stage2_stability_ui.py
           python3 tools/apply_v340_r11e_stage3_catalog_focus.py
           python3 tools/apply_v340_r11e_stage4_package_cache.py
           python3 tools/apply_v340_r11e_stage5_playback_health.py
