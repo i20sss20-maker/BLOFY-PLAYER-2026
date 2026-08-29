@@ -1,0 +1,53 @@
+name: BLOFY v340 Package64 Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v340-full-stability]
+    paths:
+      - "tools/BLOFY_PACKAGE64.md"
+      - "tools/verify_package64.py"
+      - ".github/workflows/v340-package64-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Recreate full v340 R11E source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in \
+            apply_v329_hotfix.py apply_v330_hotfix.py apply_v330_vod_fix.py apply_v330_compile_fix.py \
+            apply_v331_precompat.py apply_v331_transport_manager.py apply_v331_compile_fix.py \
+            apply_v333_full_engines.py apply_v334_compat_engine.py apply_v336_diagnostics_reset.py \
+            apply_v337_vod_compat.py apply_v339_stability.py apply_v340_full2.py apply_v340_perf.py \
+            apply_v340_live_guard.py apply_v340_compile_fix.py apply_v340_session_guard.py \
+            apply_v340_route_learning.py apply_v340_final_foundation.py apply_v340_final_core.py \
+            apply_v340_source_probe.py apply_v340_verified_gate_runner2.py apply_v340_final_safety_r8.py \
+            apply_v340_r9_deep_logic_fix.py apply_v340_r10_warning_hardening.py; do
+              python3 "tools/$f"
+          done
+          python3 tools/apply_v340_r11_negotiator.py || true
+          python3 tools/apply_v340_r11b_compat_fix.py
+          python3 tools/apply_v340_r11c_field_fixes.py
+          python3 tools/apply_v340_r11d_full_features.py
+          python3 tools/apply_v340_r11e_stage1_stability.py
+          python3 tools/apply_v340_r11e_stage2_stability_ui.py
+          python3 tools/apply_v340_r11e_stage3_catalog_focus.py
+          python3 tools/apply_v340_r11e_stage4_package_cache.py
+          python3 tools/apply_v340_r11e_stage5_playback_health.py
+          python3 tools/apply_v340_r11e_stage6_adaptive_runtime.py
+          python3 tools/apply_v340_r11e_stage7_ui_watchdog.py
+          python3 tools/apply_v340_r11e_stage8_catalog_query_cache.py
+          python3 tools/apply_v340_r11e_stage9_http_route_breaker.py
+          python3 tools/apply_v340_r11e_stage10_route_matrix.py
+          python3 tools/apply_v340_r11e_complete_stamp.py
+      - name: Verify all 64 package contracts
+        run: python3 tools/verify_package64.py
