@@ -1,0 +1,1 @@
+R11E chain order: stage1 stability -> stage2 playback/ui -> stage3 catalog/focus -> stage4 persistence -> stage5 intelligence -> stage6 quality gate -> stage7 catalog hints -> stage8 recovery budget -> stage9 final marker.
