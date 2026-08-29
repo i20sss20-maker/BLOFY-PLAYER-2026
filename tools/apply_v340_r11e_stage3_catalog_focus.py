@@ -10,8 +10,6 @@ GRADLE = APP / "build.gradle.kts"
 
 s = SEVEN.read_text(encoding="utf-8")
 
-# Keep the home hierarchy hot in memory while opening Movies/Series/Live so
-# returning home is immediate instead of rebuilding the whole launcher tree.
 if "private View r11e3CachedHomePage;" not in s:
     anchor = "    private volatile boolean destroyed;\n"
     if anchor not in s:
@@ -20,27 +18,28 @@ if "private View r11e3CachedHomePage;" not in s:
         "    private View r11e3CachedHomePage;\n"
         "    private View r11e3CachedHomeFocus;\n", 1)
 
-# Locate showHome structurally. Earlier reconstruction layers can add statements
-# between screen assignment and root.removeAllViews(), so do not depend on one
-# exact multi-line sequence.
-def method_bounds(text, signature, next_signature):
-    start = text.find(signature)
-    if start < 0:
+# Reconstruction-safe method locator: prior layers may alter modifiers/spacing.
+def method_bounds(text, method_name, next_method_name=None):
+    m = re.search(r'(?m)^\s*(?:private|protected|public)?\s*(?:final\s+)?(?:void|TextView|View)\s+' + re.escape(method_name) + r'\s*\([^\n]*\)\s*\{', text)
+    if not m:
         return -1, -1
-    end = text.find(next_signature, start)
-    if end < 0:
-        end = text.find("\n    private ", start + len(signature))
-    return start, end
+    start = m.start()
+    if next_method_name:
+        n = re.search(r'(?m)^\s*(?:private|protected|public)?\s*(?:final\s+)?(?:void|TextView|View)\s+' + re.escape(next_method_name) + r'\s*\(', text[m.end():])
+        if n:
+            return start, m.end() + n.start()
+    n = re.search(r'(?m)^\s*(?:private|protected|public)\s+', text[m.end():])
+    return start, (m.end() + n.start()) if n else len(text)
 
 if "r11e3-home-cache-hit" not in s:
-    start, end = method_bounds(s, "    private void showHome() {", "\n    private TextView homeTile(")
+    start, end = method_bounds(s, "showHome", "homeTile")
     if start < 0 or end < 0:
         raise SystemExit("R11E3: showHome bounds missing")
     block = s[start:end]
-    remove_rel = block.find("root.removeAllViews();")
-    if remove_rel < 0:
+    reset = re.search(r'root\s*\.\s*removeAllViews\s*\(\s*\)\s*;', block)
+    if not reset:
         raise SystemExit("R11E3: showHome root reset missing")
-    insert_at = start + remove_rel + len("root.removeAllViews();")
+    insert_at = start + reset.end()
     inject = '''
         if (r11e3CachedHomePage != null) {
             root.addView(r11e3CachedHomePage, match());
@@ -56,58 +55,42 @@ if "r11e3-home-cache-hit" not in s:
     s = s[:insert_at] + inject + s[insert_at:]
 
 if "r11e3CachedHomePage = root.getChildAt(0);" not in s:
-    start, end = method_bounds(s, "    private void showHome() {", "\n    private TextView homeTile(")
+    start, end = method_bounds(s, "showHome", "homeTile")
     if start < 0 or end < 0:
         raise SystemExit("R11E3: showHome bounds missing")
     block = s[start:end]
-    # Prefer the launcher page attach. Fall back to the last root.addView in showHome.
-    exact = "root.addView(page, match());"
-    attach_rel = block.rfind(exact)
-    if attach_rel >= 0:
-        insert_at = start + attach_rel + len(exact)
-    else:
-        matches = list(re.finditer(r'root\.addView\([^;]+\);', block))
-        if not matches:
-            raise SystemExit("R11E3: home root attach missing")
-        insert_at = start + matches[-1].end()
+    attach = list(re.finditer(r'root\s*\.\s*addView\s*\([^;]+\)\s*;', block))
+    if not attach:
+        raise SystemExit("R11E3: home root attach missing")
+    insert_at = start + attach[-1].end()
     s = s[:insert_at] + "\n        r11e3CachedHomePage = root.getChildAt(0);" + s[insert_at:]
 
-# Save the focused launcher before another screen detaches the cached home.
 if "r11e3CachedHomeFocus = getCurrentFocus();" not in s:
-    # Inject into screen transitions that clear root, but never into showHome itself.
     cursor = 0
     injected = False
-    while True:
-        idx = s.find("root.removeAllViews();", cursor)
-        if idx < 0:
-            break
-        home_start = s.rfind("    private void showHome() {", 0, idx)
-        next_private = s.rfind("\n    private ", 0, idx)
-        inside_home = home_start >= 0 and home_start >= next_private
-        if not inside_home:
-            guard = '''if (r11e3CachedHomePage != null && getCurrentFocus() != null) {
+    home_start, home_end = method_bounds(s, "showHome", "homeTile")
+    for m in list(re.finditer(r'root\s*\.\s*removeAllViews\s*\(\s*\)\s*;', s)):
+        idx = m.start()
+        if home_start <= idx < home_end:
+            continue
+        guard = '''if (r11e3CachedHomePage != null && getCurrentFocus() != null) {
             r11e3CachedHomeFocus = getCurrentFocus();
         }
         '''
-            s = s[:idx] + guard + s[idx:]
-            injected = True
-            break
-        cursor = idx + 1
+        s = s[:idx] + guard + s[idx:]
+        injected = True
+        break
     if not injected:
-        # Safe fallback: remember focus at the moment a home tile is activated.
-        click_anchor = "        tile.setOnClickListener(v -> action.run());\n"
-        if click_anchor in s:
-            repl = '''        tile.setOnClickListener(v -> {
+        click = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*action\s*\.\s*run\s*\(\s*\)\s*\)\s*;', s)
+        if click:
+            repl = '''tile.setOnClickListener(v -> {
             r11e3CachedHomeFocus = tile;
             action.run();
-        });
-'''
-            s = s.replace(click_anchor, repl, 1)
+        });'''
+            s = s[:click.start()] + repl + s[click.end():]
         else:
             print("R11E3: no transition focus anchor; default home focus remains safe")
 
-# Reduce focus animation work on weak TV boxes; retain the existing visual design
-# on stronger devices.
 if "r11e3ReducedFocusMotion" not in s:
     old = '''        tile.setOnFocusChangeListener((view, focusedNow) -> view.animate()
                 .scaleX(focusedNow ? 1.025f : 1f)
@@ -127,11 +110,15 @@ if "r11e3ReducedFocusMotion" not in s:
             }
         });'''
     if old not in s:
-        raise SystemExit("R11E3: home focus animation anchor missing")
-    s = s.replace(old, new, 1)
+        # Flexible animation replacement for reconstructed formatting.
+        pattern = re.compile(r'\s*tile\.setOnFocusChangeListener\(\(view,\s*focusedNow\)\s*->\s*view\.animate\(\)\s*\.scaleX\(focusedNow\s*\?\s*1\.025f\s*:\s*1f\)\s*\.scaleY\(focusedNow\s*\?\s*1\.025f\s*:\s*1f\)\s*\.setDuration\(110L\)\.start\(\)\);', re.S)
+        m = pattern.search(s)
+        if not m:
+            raise SystemExit("R11E3: home focus animation anchor missing")
+        s = s[:m.start()] + "\n" + new + s[m.end():]
+    else:
+        s = s.replace(old, new, 1)
 
-# Reuse RecyclerView child holders more aggressively for very large catalogs.
-# This changes only the visible window; the full package remains stored locally.
 if "r11e3-catalog-window" not in s:
     insert_at = s.rfind("\n}")
     if insert_at < 0:
