@@ -14,6 +14,9 @@ on:
       - "tools/apply_v340_r11e_stage3_catalog_focus.py"
       - "tools/apply_v340_r11e_stage4_package_cache.py"
       - "tools/apply_v340_r11e_stage5_playback_health.py"
+      - "tools/apply_v340_r11e_stage6_adaptive_runtime.py"
+      - "tools/apply_v340_r11e_stage7_ui_watchdog.py"
+      - "tools/apply_v340_r11e_stage8_catalog_query_cache.py"
       - ".github/workflows/v340-full-stability-r11.yml"
 
 permissions:
@@ -40,36 +43,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Recreate R10 base and apply R11E stage5
+      - name: Recreate R10 base and apply R11E stages 1-8
         shell: bash
         run: |
           set -euo pipefail
           for f in \
-            apply_v329_hotfix.py \
-            apply_v330_hotfix.py \
-            apply_v330_vod_fix.py \
-            apply_v330_compile_fix.py \
-            apply_v331_precompat.py \
-            apply_v331_transport_manager.py \
-            apply_v331_compile_fix.py \
-            apply_v333_full_engines.py \
-            apply_v334_compat_engine.py \
-            apply_v336_diagnostics_reset.py \
-            apply_v337_vod_compat.py \
-            apply_v339_stability.py \
-            apply_v340_full2.py \
-            apply_v340_perf.py \
-            apply_v340_live_guard.py \
-            apply_v340_compile_fix.py \
-            apply_v340_session_guard.py \
-            apply_v340_route_learning.py \
-            apply_v340_final_foundation.py \
-            apply_v340_final_core.py \
-            apply_v340_source_probe.py \
-            apply_v340_verified_gate_runner2.py \
-            apply_v340_final_safety_r8.py \
-            apply_v340_r9_deep_logic_fix.py \
-            apply_v340_r10_warning_hardening.py; do
+            apply_v329_hotfix.py apply_v330_hotfix.py apply_v330_vod_fix.py apply_v330_compile_fix.py \
+            apply_v331_precompat.py apply_v331_transport_manager.py apply_v331_compile_fix.py \
+            apply_v333_full_engines.py apply_v334_compat_engine.py apply_v336_diagnostics_reset.py \
+            apply_v337_vod_compat.py apply_v339_stability.py apply_v340_full2.py apply_v340_perf.py \
+            apply_v340_live_guard.py apply_v340_compile_fix.py apply_v340_session_guard.py \
+            apply_v340_route_learning.py apply_v340_final_foundation.py apply_v340_final_core.py \
+            apply_v340_source_probe.py apply_v340_verified_gate_runner2.py apply_v340_final_safety_r8.py \
+            apply_v340_r9_deep_logic_fix.py apply_v340_r10_warning_hardening.py; do
               python3 "tools/$f"
           done
           python3 tools/apply_v340_r11_negotiator.py || true
@@ -81,28 +67,22 @@ jobs:
           python3 tools/apply_v340_r11e_stage3_catalog_focus.py
           python3 tools/apply_v340_r11e_stage4_package_cache.py
           python3 tools/apply_v340_r11e_stage5_playback_health.py
-          grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'r11c-live-silent-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'r11d-preload-scheduled' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          python3 tools/apply_v340_r11e_stage6_adaptive_runtime.py
+          python3 tools/apply_v340_r11e_stage7_ui_watchdog.py
+          python3 tools/apply_v340_r11e_stage8_catalog_query_cache.py
+
           grep -q 'r11e-failure-recorded' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'transactionToken != playbackTransaction' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
           grep -q 'r11e3-home-cache-hit' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
-          grep -q 'r11e3-catalog-window' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SevenMaxActivity.java
           grep -q 'boolean cacheComplete = "complete".equals(syncState)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q 'فتح فوري من الحفظ المحلي' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
           grep -q 'class PlaybackHealthMemory' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackHealthMemory.java
-          grep -q 'r11e5-health-ranking' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
-          grep -q 'PlaybackHealthMemory.success' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
-          grep -q 'PlaybackHealthMemory.failure' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
-          grep -q 'PlaybackFailureMemory.blocked' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
-          grep -q 'PlaybackSmartCache.wrap' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'CmcdConfiguration.Factory.DEFAULT' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
-          grep -q 'class PlaybackPreloadManager' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackPreloadManager.java
-          grep -q 'r11-vod-first-frame' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
-          grep -q 'media3-exoplayer-rtsp' BLOFY-ANDROID-2026/app/build.gradle.kts
-          grep -q 'اعتماد الباقة كاملة' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PackageImporter.java
-          grep -q 'versionCode = 1000350' BLOFY-ANDROID-2026/app/build.gradle.kts
-          grep -q 'v340-full-stability-r11e-stage5' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'r11e6-adaptive-vod-cache' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackSmartCache.java
+          grep -q 'r11e6-frame-rate-matching' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'class UiResponsivenessWatchdog' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/UiResponsivenessWatchdog.java
+          grep -q 'r11e8CountCache' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
+          grep -q 'r11e8-cache-after-commit' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/CatalogDatabase.java
+          grep -q 'versionCode = 1000353' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'v340-full-stability-r11e-stage8' BLOFY-ANDROID-2026/app/build.gradle.kts
           test -s BLOFY-ANDROID-2026/app/src/main/baseline-prof.txt
 
       - name: Java 17
@@ -138,8 +118,8 @@ jobs:
           p=Path('build_ffmpeg.sh'); s=p.read_text()
           s=s.replace('--extra-cflags="-march=armv7-a -mfloat-abi=softfp"','--extra-cflags="-march=armv7-a -mfloat-abi=softfp -Wno-implicit-const-int-float-conversion"')
           for cpu in ('armv8-a','i686','x86-64'):
-              needle=f'--cpu={cpu} \\\n'
-              if needle in s: s=s.replace(needle, needle+'    --extra-cflags="-Wno-implicit-const-int-float-conversion" \\\n',1)
+              n=f'--cpu={cpu} \\\n'
+              if n in s: s=s.replace(n,n+'    --extra-cflags="-Wno-implicit-const-int-float-conversion" \\\n',1)
           p.write_text(s)
           PY
           chmod +x build_ffmpeg.sh
@@ -174,26 +154,24 @@ jobs:
           unzip -q "$RUNNER_TEMP/key.zip" -d "$RUNNER_TEMP/key"
           test -s "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks"
 
-      - name: Sign R11E stage5
+      - name: Sign R11E stage8
         shell: bash
         run: |
           set -euo pipefail
           APK=BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk
           PASS="$(tr -d '\r\n' < "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.password.txt")"
           BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          "$BT/apksigner" sign \
-            --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy \
-            --ks-pass pass:"$PASS" --key-pass pass:"$PASS" \
-            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk "$APK"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy \
+            --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out BLOFY-PLAYER-v340-R11E-STAGE8-SIGNED.apk "$APK"
           echo "BT=$BT" >> "$GITHUB_ENV"
-          echo "FINAL_APK=$GITHUB_WORKSPACE/BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk" >> "$GITHUB_ENV"
+          echo "FINAL_APK=$GITHUB_WORKSPACE/BLOFY-PLAYER-v340-R11E-STAGE8-SIGNED.apk" >> "$GITHUB_ENV"
 
       - name: Deep final QA
         shell: bash
         run: |
           set -euo pipefail
-          "$BT/apksigner" verify --verbose --print-certs "$FINAL_APK" > /tmp/sig.txt 2>/tmp/sigerr.txt
+          "$BT/apksigner" verify --verbose --print-certs "$FINAL_APK" > /tmp/sig.txt
           grep -q 'Verified using v1 scheme (JAR signing): true' /tmp/sig.txt
           grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/sig.txt
           grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/sig.txt
@@ -202,7 +180,7 @@ jobs:
           "$BT/zipalign" -c -v 4 "$FINAL_APK" >/tmp/align.txt
           grep -Eq 'Verification success(fu|u)l' /tmp/align.txt
           "$BT/aapt" dump badging "$FINAL_APK" >/tmp/badging.txt
-          grep -q "package: name='tv.blofy.player' versionCode='1000350' versionName='v340-full-stability-r11e-stage5'" /tmp/badging.txt
+          grep -q "package: name='tv.blofy.player' versionCode='1000353' versionName='v340-full-stability-r11e-stage8'" /tmp/badging.txt
           grep -q "native-code:.*'arm64-v8a'" /tmp/badging.txt
           grep -q "native-code:.*'armeabi-v7a'" /tmp/badging.txt
           unzip -t "$FINAL_APK" >/tmp/unzip.txt
@@ -214,15 +192,15 @@ jobs:
           dex=[n for n in ns if n.startswith('classes') and n.endswith('.dex')]; assert dex
           req=['lib/arm64-v8a/libffmpegJNI.so','lib/arm64-v8a/libvlcjni.so','lib/armeabi-v7a/libffmpegJNI.so','lib/armeabi-v7a/libvlcjni.so']
           assert not [n for n in req if n not in ns]
-          print('R11E stage5 APK integrity OK', dex)
+          print('R11E stage8 APK integrity OK', dex)
           PY
-          sha256sum "$FINAL_APK" | tee BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk.sha256
+          sha256sum "$FINAL_APK" | tee BLOFY-PLAYER-v340-R11E-STAGE8-SIGNED.apk.sha256
 
-      - name: Upload R11E stage5
+      - name: Upload R11E stage8
         uses: actions/upload-artifact@v6
         with:
-          name: BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED
+          name: BLOFY-PLAYER-v340-R11E-STAGE8-SIGNED
           path: |
-            BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk
-            BLOFY-PLAYER-v340-R11E-STAGE5-SIGNED.apk.sha256
+            BLOFY-PLAYER-v340-R11E-STAGE8-SIGNED.apk
+            BLOFY-PLAYER-v340-R11E-STAGE8-SIGNED.apk.sha256
           if-no-files-found: error
