@@ -6,14 +6,19 @@ on:
     paths:
       - "tools/apply_v340_playback_core_hotfix.py"
       - "tools/apply_v340_playback_core_hotfix_stage2.py"
+      - "tools/apply_v340_playback_core_hotfix_stage3.py"
       - "tools/verify_package64.py"
       - ".github/workflows/v340-playback-core-hotfix.yml"
+concurrency:
+  group: v340-playback-core-hotfix-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   actions: read
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - name: Recreate COMPLETE and apply playback hotfix
@@ -38,10 +43,15 @@ jobs:
           python3 tools/apply_v340_r11e_complete_stamp.py
           python3 tools/apply_v340_playback_core_hotfix.py
           python3 tools/apply_v340_playback_core_hotfix_stage2.py
+          python3 tools/apply_v340_playback_core_hotfix_stage3.py
           python3 tools/verify_package64.py
           grep -q 'PLAYBACK_LINK_TIMEOUT_MS = 10_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/BlofyApi.java
           grep -q 'playback-soft-failure' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackFailureMemory.java
           grep -q 'hotfix-proven-live-same-url' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'LIVE_STABLE_WINDOW_MS = 4_000L' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'liveFirstFrameSeen' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'DefaultLoadErrorHandlingPolicy(isLive() ? 6 : 3)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'DefaultLoadErrorHandlingPolicy(3)' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'r11e5-health-soft-observation' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackHealthMemory.java
           grep -q 'if (usingVlc || firstFrame) return;' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'versionCode = 1000356' BLOFY-ANDROID-2026/app/build.gradle.kts
@@ -55,31 +65,46 @@ jobs:
           set -euo pipefail
           gradle wrapper --gradle-version 8.13
           ./gradlew --no-daemon testDebugUnitTest lintRelease assembleRelease assembleDebug -PBLOFY_BASE_URL=https://blofy-player-2026-production.up.railway.app
+      - name: APK structural QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          DBG=BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk
+          REL=BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -s "$DBG" && test -s "$REL"
+          "$BT/aapt" dump badging "$DBG" | tee /tmp/badging.txt
+          grep -q "package: name='tv.blofy.player'" /tmp/badging.txt
+          grep -q "sdkVersion:'23'" /tmp/badging.txt
+          grep -q "targetSdkVersion:'36'" /tmp/badging.txt
+          grep -q "native-code:.*'arm64-v8a'" /tmp/badging.txt
+          grep -q "native-code:.*'armeabi-v7a'" /tmp/badging.txt
+          "$BT/apksigner" verify --verbose "$DBG"
+          unzip -t "$DBG" | grep -q 'No errors detected'
+          unzip -t "$REL" | grep -q 'No errors detected'
       - name: Prepare APK artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE2-INSTALLABLE-TEST.apk
-          cp BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE2-UNSIGNED-RELEASE.apk
+          cp BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE3-INSTALLABLE-TEST.apk
+          cp BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE3-UNSIGNED-RELEASE.apk
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
-          test -s dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE2-INSTALLABLE-TEST.apk
-          test -s dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE2-UNSIGNED-RELEASE.apk
       - name: Upload installable test APK
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-v340-playback-hotfix-stage2-test
+          name: BLOFY-v340-playback-hotfix-stage3-test
           path: |
-            dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE2-INSTALLABLE-TEST.apk
+            dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE3-INSTALLABLE-TEST.apk
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
       - name: Upload unsigned release APK
         uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-v340-playback-hotfix-stage2-unsigned-release
+          name: BLOFY-v340-playback-hotfix-stage3-unsigned-release
           path: |
-            dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE2-UNSIGNED-RELEASE.apk
+            dist/BLOFY-PLAYER-v340-PLAYBACK-HOTFIX-STAGE3-UNSIGNED-RELEASE.apk
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
