@@ -1,0 +1,109 @@
+name: Build BLOFY v340 Full Stability R11B
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v340-full-stability]
+    paths:
+      - "tools/apply_v340_r11_negotiator2.py"
+      - ".github/workflows/v340-full-stability-r11b.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: blofy-v340-full-stability-r11b
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BLOFY_BASE_URL: https://blofy-player-2026-production.up.railway.app
+      ANDROID_NDK_VERSION: 26.1.10909125
+      ANDROID_ABI: 23
+      MEDIA3_COMMIT: e156aec119c304d3de70a2fa69e08dc585b9d92b
+      V339_KEY_ARTIFACT_ID: 9664972711
+      EXPECTED_CERT_SHA256: f54493426cd16e2fc67390c307937d5d2bb04f81201f4bad3355ae66ff4813a6
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Reconstruct R10 and apply R11B
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in apply_v329_hotfix.py apply_v330_hotfix.py apply_v330_vod_fix.py apply_v330_compile_fix.py apply_v331_precompat.py apply_v331_transport_manager.py apply_v331_compile_fix.py apply_v333_full_engines.py apply_v334_compat_engine.py apply_v336_diagnostics_reset.py apply_v337_vod_compat.py apply_v339_stability.py apply_v340_full2.py apply_v340_perf.py apply_v340_live_guard.py apply_v340_compile_fix.py apply_v340_session_guard.py apply_v340_route_learning.py apply_v340_final_foundation.py apply_v340_final_core.py apply_v340_source_probe.py apply_v340_verified_gate_runner2.py apply_v340_final_safety_r8.py apply_v340_r9_deep_logic_fix.py apply_v340_r10_warning_hardening.py; do python3 tools/$f; done
+          python3 tools/apply_v340_r11_negotiator2.py
+          grep -q 'r11-live-format-fallback' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'r11-live-post-start-recovery' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'r11-vod-resolve-start' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          grep -q 'class PlaybackNegotiator' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackNegotiator.java
+          grep -q 'media3-exoplayer-rtsp' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'versionCode = 1000344' BLOFY-ANDROID-2026/app/build.gradle.kts
+          test -s BLOFY-ANDROID-2026/app/src/main/baseline-prof.txt
+
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '17'}
+      - uses: gradle/actions/setup-gradle@v6
+        with: {gradle-version: '8.13'}
+      - name: Install NDK and CMake
+        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION" "cmake;3.31.4"
+      - name: Build Media3 FFmpeg decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/androidx/media.git .media3
+          git -C .media3 checkout "$MEDIA3_COMMIT"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > .media3/local.properties
+          P="$GITHUB_WORKSPACE/.media3/libraries/decoder_ffmpeg/src/main"; N="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          cd "$P/jni"; git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg --branch release/6.0 --depth=1
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('build_ffmpeg.sh'); s=p.read_text()
+          s=s.replace('--extra-cflags="-march=armv7-a -mfloat-abi=softfp"','--extra-cflags="-march=armv7-a -mfloat-abi=softfp -Wno-implicit-const-int-float-conversion"')
+          for cpu in ('armv8-a','i686','x86-64'):
+              n=f'--cpu={cpu} \\\n'
+              if n in s: s=s.replace(n,n+'    --extra-cflags="-Wno-implicit-const-int-float-conversion" \\\n',1)
+          p.write_text(s)
+          PY
+          chmod +x build_ffmpeg.sh
+          ./build_ffmpeg.sh "$P" "$N" linux-x86_64 "$ANDROID_ABI" vorbis opus flac alac mp3 amrnb amrwb aac ac3 eac3 dca
+          cd "$GITHUB_WORKSPACE/.media3"; ./gradlew --no-daemon :lib-decoder-ffmpeg:assembleRelease
+          mkdir -p "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs"
+          cp "$(find . -type f -name '*.aar' -path '*decoder_ffmpeg*' | head -1)" "$GITHUB_WORKSPACE/BLOFY-ANDROID-2026/app/libs/media3-decoder-ffmpeg-release.aar"
+      - name: Tests lint release
+        working-directory: BLOFY-ANDROID-2026
+        run: |
+          gradle wrapper --gradle-version 8.13
+          ./gradlew --no-daemon clean testDebugUnitTest lintRelease assembleRelease -PBLOFY_BASE_URL="$BLOFY_BASE_URL"
+      - name: Restore signing key
+        shell: bash
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${V339_KEY_ARTIFACT_ID}/zip" -o "$RUNNER_TEMP/key.zip"
+          mkdir -p "$RUNNER_TEMP/key"; unzip -q "$RUNNER_TEMP/key.zip" -d "$RUNNER_TEMP/key"
+      - name: Sign and QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk
+          PASS="$(tr -d '\r\n' < "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.password.txt")"
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk "$APK"
+          "$BT/apksigner" verify --verbose --print-certs BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk | tee /tmp/sig
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/sig
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/sig
+          grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" /tmp/sig
+          "$BT/zipalign" -c -v 4 BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk >/tmp/align
+          "$BT/aapt" dump badging BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk | tee /tmp/badging
+          grep -q "versionCode='1000344' versionName='v340-full-stability-r11'" /tmp/badging
+          unzip -t BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk >/tmp/ziptest; grep -q 'No errors detected' /tmp/ziptest
+          sha256sum BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk > BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk.sha256
+      - uses: actions/upload-artifact@v6
+        with:
+          name: BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED
+          path: |
+            BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk
+            BLOFY-PLAYER-v340-R11-ADAPTIVE-SIGNED.apk.sha256
