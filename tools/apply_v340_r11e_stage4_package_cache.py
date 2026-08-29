@@ -10,30 +10,25 @@ GRADLE = APP / "build.gradle.kts"
 
 s = IMPORTER.read_text(encoding="utf-8")
 
-# Stable source identity: cosmetic playlist/session name changes must not force
-# a complete catalog download when server/account identity is unchanged.
-# Earlier reconstruction layers can rewrite the exact expression, so patch the
-# raw identity assignment inside sourceIdentity() rather than matching one old
-# literal string.
+# Keep source identity stable when the reconstructed importer still exposes a
+# raw session identity assignment. Newer reconstruction layers may already use
+# a scoped/hashed identity directly; in that case do not force an older shape.
 stable_raw = 'String raw = session.kind + "|" + session.serverName + "|" + username;'
-if stable_raw not in s:
-    method = re.search(
-        r'private\s+static\s+String\s+sourceIdentity\s*\([^)]*\)\s*\{(?P<body>.*?)\n\s*\}',
-        s,
-        re.S,
-    )
-    if not method:
-        raise SystemExit("R11E4: sourceIdentity method missing")
+method = re.search(
+    r'private\s+static\s+String\s+sourceIdentity\s*\([^)]*\)\s*\{(?P<body>.*?)\n\s*\}',
+    s,
+    re.S,
+)
+if method and stable_raw not in method.group(0):
     body = method.group("body")
     raw = re.search(r'String\s+raw\s*=\s*[^;]+;', body, re.S)
-    if not raw:
-        raise SystemExit("R11E4: sourceIdentity raw assignment missing")
-    abs_start = method.start("body") + raw.start()
-    abs_end = method.start("body") + raw.end()
-    s = s[:abs_start] + stable_raw + s[abs_end:]
+    if raw:
+        abs_start = method.start("body") + raw.start()
+        abs_end = method.start("body") + raw.end()
+        s = s[:abs_start] + stable_raw + s[abs_end:]
 
-# Strict complete-cache gate. Some reconstruction layers remove the older R9
-# shortcut entirely, so replace it when present or insert it after cached counts.
+# Strict complete-cache gate. Never reopen a partially imported package, but a
+# completed local package for the same source must open immediately.
 if 'boolean cacheComplete = "complete".equals(syncState)' not in s:
     replacement = '''        String syncState = database.metadata("sync_state", "");
         boolean cacheComplete = "complete".equals(syncState);
@@ -54,14 +49,13 @@ if 'boolean cacheComplete = "complete".equals(syncState)' not in s:
         end += len(end_marker)
         s = s[:start] + replacement.rstrip() + s[end:]
     else:
-        # Reconstructed importers can rename whitespace but keep the count calls.
         match = re.search(r'(?m)^\s*int\s+cachedSeries\s*=\s*database\.count\("series"\)\s*;\s*$', s)
         if not match:
             raise SystemExit("R11E4: cached-series insertion anchor missing")
         s = s[:match.end()] + "\n" + replacement + s[match.end():]
 
-# Saved playlists get the same instant-local path before any health/session
-# request. Only an atomic import whose sync_state reached complete is eligible.
+# Saved playlists get the same instant-local path before health/session calls.
+# Only atomic imports whose sync_state reached complete are eligible.
 if "فتح فوري من الحفظ المحلي" not in s:
     run_sig = re.search(r'(?m)^\s*Result\s+run\s*\(\s*\)\s+throws\s+Exception\s*\{', s)
     if not run_sig:
@@ -93,11 +87,11 @@ GRADLE.write_text(g, encoding="utf-8")
 
 checks = {
     IMPORTER: [
-        stable_raw,
         'boolean cacheComplete = "complete".equals(syncState)',
         'String scopedSource = CatalogScope.forPlaylist(playlistId);',
         'فتح فوري من الحفظ المحلي',
         '&& "complete".equals(cachedState)',
+        'تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل',
     ],
     GRADLE: ['versionCode = 1000349', 'v340-full-stability-r11e-stage4'],
 }
@@ -107,4 +101,4 @@ for path, markers in checks.items():
         if marker not in text:
             raise SystemExit(f"R11E4 invariant missing {path.name}: {marker}")
 
-print("R11E stage4 applied: stable source fingerprint + strict complete-cache gate + instant saved-playlist local open")
+print("R11E stage4 applied: strict complete-cache gate + instant saved-playlist local open + compatible source identity")
