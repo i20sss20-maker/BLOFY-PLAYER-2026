@@ -10,7 +10,6 @@ GRADLE = APP / "build.gradle.kts"
 
 s = SEVEN.read_text(encoding="utf-8")
 
-# R11E3 deliberately changes only UI state/rendering. No DB schema/version changes here.
 if "private View r11e3CachedHomePage;" not in s:
     class_anchor = re.search(r'public\s+final\s+class\s+SevenMaxActivity\s+extends\s+Activity\s*\{', s)
     if not class_anchor:
@@ -20,7 +19,6 @@ if "private View r11e3CachedHomePage;" not in s:
 
 
 def method_region(text: str, method_name: str):
-    # Find the method signature, then match braces so reconstruction formatting cannot break us.
     m = re.search(r'(?m)^\s*private\s+void\s+' + re.escape(method_name) + r'\s*\([^)]*\)\s*\{', text)
     if not m:
         return -1, -1
@@ -29,8 +27,7 @@ def method_region(text: str, method_name: str):
     in_string = False
     quote = ''
     escaped = False
-    i = brace
-    while i < len(text):
+    for i in range(brace, len(text)):
         ch = text[i]
         if in_string:
             if escaped:
@@ -39,17 +36,16 @@ def method_region(text: str, method_name: str):
                 escaped = True
             elif ch == quote:
                 in_string = False
-        else:
-            if ch in ('"', "'"):
-                in_string = True
-                quote = ch
-            elif ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0:
-                    return m.start(), i + 1
-        i += 1
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            quote = ch
+        elif ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return m.start(), i + 1
     return -1, -1
 
 
@@ -83,28 +79,32 @@ if "r11e3CachedHomePage = page;" not in s:
     if start < 0:
         raise SystemExit("R11E3: showHome region missing after cache injection")
     block = s[start:end]
-    attach = re.search(r'root\s*\.\s*addView\s*\(\s*page\s*,\s*match\s*\(\s*\)\s*\)\s*;', block)
-    if not attach:
-        raise SystemExit("R11E3: home page attach missing")
-    pos = start + attach.end()
-    s = s[:pos] + "\n        r11e3CachedHomePage = page;" + s[pos:]
+    # Reconstructed layers may use match(), explicit LayoutParams, or a one-argument addView.
+    attach = re.search(r'root\s*\.\s*addView\s*\(\s*page\b[^;]*\)\s*;', block, re.S)
+    if attach:
+        pos = start + attach.end()
+        s = s[:pos] + "\n        r11e3CachedHomePage = page;" + s[pos:]
+    else:
+        # Last-resort but safe: cache the first child after showHome is fully rendered.
+        # Insert just before the method closes, where root has already received its home child.
+        close = end - 1
+        s = s[:close] + '''
+        if (root.getChildCount() > 0) r11e3CachedHomePage = root.getChildAt(0);
+''' + s[close:]
 
-# Remember which launcher opened the child screen so Back restores exactly that focus.
 if "r11e3CachedHomeFocus = tile;" not in s:
     click = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*action\s*\.\s*run\s*\(\s*\)\s*\)\s*;', s)
     if click:
-        repl = '''tile.setOnClickListener(v -> {
+        s = s[:click.start()] + '''tile.setOnClickListener(v -> {
             r11e3CachedHomeFocus = tile;
             action.run();
-        });'''
-        s = s[:click.start()] + repl + s[click.end():]
+        });''' + s[click.end():]
     else:
         click2 = re.search(r'tile\s*\.\s*setOnClickListener\s*\(v\s*->\s*\{', s)
         if not click2:
             raise SystemExit("R11E3: homeTile click anchor missing")
         s = s[:click2.end()] + "\n            r11e3CachedHomeFocus = tile;" + s[click2.end():]
 
-# Keep focus responsive on weak receivers; avoid queued scale animations on rapid D-pad input.
 if "r11e3ReducedFocusMotion" not in s:
     pattern = re.compile(
         r'tile\.setOnFocusChangeListener\(\(view,\s*focusedNow\)\s*->\s*view\.animate\(\)\s*'
@@ -129,7 +129,6 @@ if "r11e3ReducedFocusMotion" not in s:
         });'''
     s = s[:m.start()] + new + s[m.end():]
 
-# Recycler tuning: rendering-window optimization only; all catalog rows remain in SQLite.
 if "private void r11e3TuneCatalogRecycler(" not in s:
     pos = s.rfind("\n}")
     if pos < 0:
@@ -147,13 +146,8 @@ if "private void r11e3TuneCatalogRecycler(" not in s:
 '''
     s = s[:pos] + helper + s[pos:]
 
-if "r11e3-catalog-window" not in s:
-    raise SystemExit("R11E3: recycler helper marker missing")
-
-# Wire each RecyclerView once. Determine grid/list from nearby layout manager assignment.
 rv_pattern = re.compile(r'RecyclerView\s+(\w+)\s*=\s*new RecyclerView\(this\);')
-matches = list(rv_pattern.finditer(s))
-for m in reversed(matches):
+for m in reversed(list(rv_pattern.finditer(s))):
     name = m.group(1)
     tail = s[m.end():m.end() + 900]
     if f'r11e3TuneCatalogRecycler({name},' in tail:
