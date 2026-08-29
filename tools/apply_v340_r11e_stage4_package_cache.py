@@ -10,47 +10,39 @@ GRADLE = APP / "build.gradle.kts"
 
 s = IMPORTER.read_text(encoding="utf-8")
 
-# Keep current-session identity stable. The display name is cosmetic and can
-# change upstream without the underlying account/source changing.
-s = re.sub(
-    r'String\s+raw\s*=\s*session\.kind\s*\+\s*"\\\|"\s*\+\s*session\.serverName\s*\+\s*"\\\|"\s*\+\s*session\.name\s*\+\s*"\\\|"\s*\+\s*username\s*;',
-    'String raw = session.kind + "|" + session.serverName + "|" + username;',
-    s,
-    count=1,
-)
-# Simple exact fallback for the normal reconstruction.
+# Stable source identity: cosmetic playlist/session name changes must not force
+# a complete catalog download when server/account identity is unchanged.
 s = s.replace(
     'String raw = session.kind + "|" + session.serverName + "|" + session.name + "|" + username;',
     'String raw = session.kind + "|" + session.serverName + "|" + username;',
     1,
 )
 
-# Tighten the existing R9 fast path without relying on exact whitespace/text.
+# Replace the R9 cache gate using a structural boundary instead of a fragile
+# whitespace regex. This preserves the full-download-first rule while opening
+# a previously committed catalog instantly on later launches.
 if 'boolean cacheComplete = "complete".equals(syncState)' not in s:
-    gate = re.compile(
-        r'(?P<indent>\s*)if\s*\(\s*sourceIdentity\.equals\(activeSource\)\s*&&\s*'
-        r'\(cachedLive\s*\+\s*cachedMovies\s*\+\s*cachedSeries\)\s*>\s*0\s*&&\s*'
-        r'!"in_progress"\.equals\(database\.metadata\("sync_state",\s*""\)\)\s*\)\s*\{'
-        r'(?P<body>.*?)return\s+new\s+Result\(cachedLive,\s*cachedMovies,\s*cachedSeries,\s*profile\);\s*\}',
-        re.S,
-    )
-    m = gate.search(s)
-    if not m:
-        raise SystemExit("R11E4: package fast-path anchor missing")
-    indent = m.group('indent')
-    replacement = f'''{indent}String syncState = database.metadata("sync_state", "");
-{indent}boolean cacheComplete = "complete".equals(syncState) || "failed".equals(syncState);
-{indent}if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
-{indent}        && cacheComplete) {{
-{indent}    String profile = database.metadata("playback_profile", "Media3 مباشر");
-{indent}    emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
-{indent}    return new Result(cachedLive, cachedMovies, cachedSeries, profile);
-{indent}}}'''
-    s = s[:m.start()] + replacement + s[m.end():]
+    start = s.find('        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0')
+    if start < 0:
+        raise SystemExit("R11E4: package fast-path start missing")
+    end_marker = '            return new Result(cachedLive, cachedMovies, cachedSeries, profile);\n        }'
+    end = s.find(end_marker, start)
+    if end < 0:
+        raise SystemExit("R11E4: package fast-path end missing")
+    end += len(end_marker)
+    replacement = '''        String syncState = database.metadata("sync_state", "");
+        boolean cacheComplete = "complete".equals(syncState);
+        if (sourceIdentity.equals(activeSource) && (cachedLive + cachedMovies + cachedSeries) > 0
+                && cacheComplete) {
+            String profile = database.metadata("playback_profile", "Media3 مباشر");
+            emit(100, "البيانات جاهزة", "تم فتح النسخة المحفوظة على الجهاز بدون إعادة تحميل");
+            return new Result(cachedLive, cachedMovies, cachedSeries, profile);
+        }'''
+    s = s[:start] + replacement + s[end:]
 
-# For explicitly selected/saved playlists, skip the health/session round trip
-# when the scoped package is already complete. This prevents reconnect/onResume
-# from starting a huge catalog sync again.
+# Saved playlists get the same instant-local path before any health/session
+# request. Only a catalog whose atomic import reached sync_state=complete is
+# eligible; interrupted/failed imports keep the previous committed package.
 if "فتح فوري من الحفظ المحلي" not in s:
     run_sig = re.search(r'(?m)^\s*Result\s+run\s*\(\s*\)\s+throws\s+Exception\s*\{', s)
     if not run_sig:
@@ -65,7 +57,7 @@ if "فتح فوري من الحفظ المحلي" not in s:
             int movies = database.count("movies");
             int series = database.count("series");
             if (scopedSource.equals(activeSource) && (live + movies + series) > 0
-                    && ("complete".equals(state) || "failed".equals(state))) {
+                    && "complete".equals(state)) {
                 String profile = database.metadata("playback_profile", "Media3 مباشر");
                 emit(100, "البيانات جاهزة", "فتح فوري من الحفظ المحلي");
                 return new Result(live, movies, series, profile);
@@ -86,6 +78,7 @@ checks = {
         'boolean cacheComplete = "complete".equals(syncState)',
         'String scopedSource = CatalogScope.forPlaylist(playlistId);',
         'فتح فوري من الحفظ المحلي',
+        '&& "complete".equals(state)',
     ],
     GRADLE: ['versionCode = 1000349', 'v340-full-stability-r11e-stage4'],
 }
