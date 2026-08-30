@@ -94,16 +94,20 @@ jobs:
           DBG=BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk
           REL=BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk
           test -s "$DBG" && test -s "$REL"
-          "$BT/aapt" dump badging "$DBG" | tee /tmp/badging.txt
+          "$BT/aapt" dump badging "$DBG" > /tmp/badging.txt
+          cat /tmp/badging.txt
           grep -q "package: name='tv.blofy.player'" /tmp/badging.txt
+          grep -q "versionCode='1000362'" /tmp/badging.txt
+          grep -q "versionName='v340-premium-app-stage9-test'" /tmp/badging.txt
           grep -q "sdkVersion:'23'" /tmp/badging.txt
           grep -q "targetSdkVersion:'36'" /tmp/badging.txt
           grep -q "native-code:.*'arm64-v8a'" /tmp/badging.txt
           grep -q "native-code:.*'armeabi-v7a'" /tmp/badging.txt
           "$BT/apksigner" verify --verbose "$DBG"
-          unzip -t "$DBG" | grep -q 'No errors detected'
-          unzip -t "$REL" | grep -q 'No errors detected'
-          strings "$DBG" | grep -q 'v340-premium-app-stage9'
+          unzip -t "$DBG" > /tmp/unzip-debug.txt
+          unzip -t "$REL" > /tmp/unzip-release.txt
+          grep -q 'No errors detected' /tmp/unzip-debug.txt
+          grep -q 'No errors detected' /tmp/unzip-release.txt
       - name: Prepare APK artifacts
         shell: bash
         run: |
