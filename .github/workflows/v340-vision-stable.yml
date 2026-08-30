@@ -6,6 +6,7 @@ on:
     paths:
       - "tools/apply_v340_vision_ui_v1.py"
       - "tools/apply_v340_universal_compat_v1.py"
+      - "tools/apply_v340_vision_playback_v2.py"
       - ".github/workflows/v340-vision-stable.yml"
 concurrency:
   group: v340-vision-stable-${{ github.ref }}
@@ -23,7 +24,7 @@ jobs:
       EXPECTED_CERT_SHA256: f54493426cd16e2fc67390c307937d5d2bb04f81201f4bad3355ae66ff4813a6
     steps:
       - uses: actions/checkout@v6
-      - name: Recreate R11E COMPLETE stable baseline
+      - name: Recreate R11E COMPLETE stable baseline and apply Vision v2
         shell: bash
         run: |
           set -euo pipefail
@@ -45,6 +46,7 @@ jobs:
           python3 tools/apply_v340_r11e_complete_stamp.py
           python3 tools/apply_v340_vision_ui_v1.py
           python3 tools/apply_v340_universal_compat_v1.py
+          python3 tools/apply_v340_vision_playback_v2.py
           python3 - <<'PY'
           from pathlib import Path
           root=Path('BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player')
@@ -58,8 +60,11 @@ jobs:
           grep -q 'class VodPlayerActivity' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           grep -q 'class ProviderCompatibilityMemory' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/ProviderCompatibilityMemory.java
           grep -q 'transport=cronet-gms headers=parity' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlaybackTransportFactory.java
+          grep -q 'visionSteadyStateStall' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
+          grep -q 'visionVodSteadyStall' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
+          grep -q 'durationMs() < 1_000' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/VodPlayerActivity.java
           ! grep -R -q 'stage7-visible-playback-status\|playbackStatusChip' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player
-          grep -q 'versionCode = 1000364' BLOFY-ANDROID-2026/app/build.gradle.kts
+          grep -q 'versionCode = 1000365' BLOFY-ANDROID-2026/app/build.gradle.kts
       - uses: actions/setup-java@v5
         with: {distribution: temurin, java-version: '17'}
       - uses: gradle/actions/setup-gradle@v6
@@ -84,20 +89,20 @@ jobs:
           APK=BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk
           PASS="$(tr -d '\r\n' < "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.password.txt")"
           BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          "$BT/apksigner" sign --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk "$APK"
-          "$BT/apksigner" verify --verbose --print-certs BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk | tee /tmp/sig
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk "$APK"
+          "$BT/apksigner" verify --verbose --print-certs BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk | tee /tmp/sig
           grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" /tmp/sig
-          "$BT/aapt" dump badging BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk | tee /tmp/badging
+          "$BT/aapt" dump badging BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk | tee /tmp/badging
           grep -q "package: name='tv.blofy.player'" /tmp/badging
-          grep -q "versionCode='1000364'" /tmp/badging
-          unzip -t BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk >/tmp/ziptest
+          grep -q "versionCode='1000365'" /tmp/badging
+          unzip -t BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk >/tmp/ziptest
           grep -q 'No errors detected' /tmp/ziptest
-          sha256sum BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk > BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk.sha256
+          sha256sum BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk > BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: BLOFY-v340-VISION-STABLE-COMPAT-V1-SIGNED
+          name: BLOFY-v340-VISION-STABLE-PLAYBACK-V2-SIGNED
           path: |
-            BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk
-            BLOFY-PLAYER-v340-VISION-STABLE-COMPAT-V1-SIGNED.apk.sha256
+            BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk
+            BLOFY-PLAYER-v340-VISION-STABLE-PLAYBACK-V2-SIGNED.apk.sha256
           if-no-files-found: error
           retention-days: 14
