@@ -18,16 +18,13 @@ if 'private final Runnable visionSteadyStateStall' not in p:
     helper='''    private final Runnable visionSteadyStateStall = () -> {\n        if (!firstFrameRendered || usingVlc || player == null) return;\n        if (player.getPlaybackState() != Player.STATE_BUFFERING) return;\n        Log.w(TAG, "vision-steady-stall sameUrlAttempted=" + visionSameUrlRecoveryAttempted\n                + " kind=" + kind + " ext=" + extension);\n        if (!visionSameUrlRecoveryAttempted && validUrl(url)) {\n            visionSameUrlRecoveryAttempted = true;\n            long keepPosition = isLive() ? 0 : Math.max(0, player.getCurrentPosition());\n            releaseMedia3Player();\n            resumePosition = keepPosition;\n            firstFrameRendered = false;\n            initializePlayer();\n            return;\n        }\n        recoverFromFailure("توقف تدفق الفيديو بعد بدء التشغيل");\n    };\n\n'''
     p=p.replace(anchor,helper+anchor,1)
 
-# R11E reconstructs this condition differently across stages. Patch only inside recoverFromFailure.
-if '(isLive() && PlaybackPolicy.isStartupTimeout(reason))' not in p:
-    method=p.find('    private void recoverFromFailure(String reason)')
-    end=p.find('    private void showPlaybackFailure(', method)
-    if method < 0 or end < 0: raise SystemExit('vision-v2: player recover method missing')
-    chunk=p[method:end]
-    needle='PlaybackPolicy.isNetworkFailure(reason)'
-    if needle not in chunk: raise SystemExit('vision-v2: player network recovery predicate missing')
-    chunk=chunk.replace(needle, '(PlaybackPolicy.isNetworkFailure(reason) || (isLive() && PlaybackPolicy.isStartupTimeout(reason)))', 1)
-    p=p[:method]+chunk+p[end:]
+# Live startup timeout: resolve provider-direct once before decoder fallback.
+# Patch the timeout runnable itself so this survives R11E recovery-method rewrites.
+if 'vision-live-timeout-direct' not in p:
+    needle='''        recoverFromFailure(!usingVlc && player != null && player.getPlaybackState() == Player.STATE_READY\n                ? "لم تظهر صورة الفيديو"\n                : "انتهت مهلة بدء التشغيل");'''
+    replacement='''        String timeoutReason = !usingVlc && player != null && player.getPlaybackState() == Player.STATE_READY\n                ? "لم تظهر صورة الفيديو"\n                : "انتهت مهلة بدء التشغيل";\n        // vision-live-timeout-direct\n        if (!usingVlc && isLive() && "canonical".equals(sourceVariant) && !id.isEmpty()) {\n            Log.w(TAG, "vision-live-timeout-direct id=" + id + " ext=" + extension);\n            releasePlayer();\n            sourceVariant = "direct";\n            recoveryStep = 1;\n            url = null;\n            resolvePlaybackLink();\n            return;\n        }\n        recoverFromFailure(timeoutReason);'''
+    if needle not in p: raise SystemExit('vision-v2: startup timeout call anchor missing')
+    p=p.replace(needle,replacement,1)
 
 old='''        if (playbackState == Player.STATE_BUFFERING) {\n            if (!firstFrameRendered) progress.setVisibility(View.VISIBLE);\n            return;\n        }'''
 new='''        if (playbackState == Player.STATE_BUFFERING) {\n            if (!firstFrameRendered) progress.setVisibility(View.VISIBLE);\n            else {\n                playbackHandler.removeCallbacks(visionSteadyStateStall);\n                playbackHandler.postDelayed(visionSteadyStateStall, isLive() ? 6_500L : 12_000L);\n            }\n            return;\n        }'''
@@ -68,7 +65,6 @@ if 'PlaybackPolicy.isNetworkFailure(reason) || PlaybackPolicy.isStartupTimeout(r
     needle='PlaybackPolicy.isNetworkFailure(reason)'
     if needle not in chunk: raise SystemExit('vision-v2: vod network recovery predicate missing')
     chunk=chunk.replace(needle, '(PlaybackPolicy.isNetworkFailure(reason) || PlaybackPolicy.isStartupTimeout(reason))', 1)
-    # Remove a now-redundant !startup-timeout conjunct if present in reconstructed variants.
     chunk=chunk.replace('                && !PlaybackPolicy.isStartupTimeout(reason)\n', '')
     v=v[:method]+chunk+v[end:]
 
@@ -101,7 +97,7 @@ V.write_text(v,encoding='utf-8')
 g=G.read_text(encoding='utf-8'); g=re.sub(r'versionCode\s*=\s*\d+','versionCode = 1000365',g,count=1); g=re.sub(r'versionName\s*=\s*"[^"]*"','versionName = "v340-vision-stable-playback-v2"',g,count=1); G.write_text(g,encoding='utf-8')
 
 checks={
-P:['visionSteadyStateStall','visionSameUrlRecoveryAttempted','isLive() && PlaybackPolicy.isStartupTimeout(reason)','6_500L'],
+P:['visionSteadyStateStall','visionSameUrlRecoveryAttempted','vision-live-timeout-direct','6_500L'],
 V:['visionVodSteadyStall','durationMs() < 1_000','انتهى المصدر قبل بدء الفيديو','PlaybackPolicy.isNetworkFailure(reason) || PlaybackPolicy.isStartupTimeout(reason)'],
 G:['versionCode = 1000365','v340-vision-stable-playback-v2']}
 for path,marks in checks.items():
