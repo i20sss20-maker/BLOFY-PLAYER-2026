@@ -45,6 +45,13 @@ jobs:
           python3 tools/apply_v340_r11e_complete_stamp.py
           python3 tools/apply_v340_vision_ui_v1.py
           python3 tools/apply_v340_universal_compat_v1.py
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player')
+          for p in root.glob('*.java'):
+              s=p.read_text(encoding='utf-8')
+              p.write_text('\n'.join(line.rstrip() for line in s.splitlines())+'\n',encoding='utf-8')
+          PY
           git diff --check
           grep -q 'class SettingsActivity' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/SettingsActivity.java
           grep -q 'class PlayerActivity' BLOFY-ANDROID-2026/app/src/main/java/tv/blofy/player/PlayerActivity.java
