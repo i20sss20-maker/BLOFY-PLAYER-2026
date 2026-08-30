@@ -28,6 +28,9 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      V339_KEY_ARTIFACT_ID: 9664972711
+      EXPECTED_CERT_SHA256: f54493426cd16e2fc67390c307937d5d2bb04f81201f4bad3355ae66ff4813a6
     steps:
       - uses: actions/checkout@v6
       - name: Recreate COMPLETE and apply full premium Playback V2 package
@@ -112,6 +115,38 @@ jobs:
           unzip -t "$REL" > /tmp/unzip-release.txt
           grep -q 'No errors detected' /tmp/unzip-debug.txt
           grep -q 'No errors detected' /tmp/unzip-release.txt
+      - name: Restore stable BLOFY signing key
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${V339_KEY_ARTIFACT_ID}/zip" -o "$RUNNER_TEMP/key.zip"
+          mkdir -p "$RUNNER_TEMP/key"
+          unzip -q "$RUNNER_TEMP/key.zip" -d "$RUNNER_TEMP/key"
+          test -s "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks"
+          test -s "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.password.txt"
+      - name: Sign Stage9 with stable BLOFY certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk
+          OUT=BLOFY-PLAYER-v340-PREMIUM-PLAYBACK-V2-STAGE9-STABLE-SIGNED.apk
+          PASS="$(tr -d '\r\n' < "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.password.txt")"
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/key/BLOFY-PLAYER-STABLE-TEST.jks" --ks-key-alias blofy --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "$OUT" "$APK"
+          "$BT/apksigner" verify --verbose --print-certs "$OUT" | tee /tmp/stable-sig.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/stable-sig.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/stable-sig.txt
+          grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" /tmp/stable-sig.txt
+          "$BT/zipalign" -c -v 4 "$OUT" >/tmp/stable-align.txt
+          "$BT/aapt" dump badging "$OUT" | tee /tmp/stable-badging.txt
+          grep -q "package: name='tv.blofy.player'" /tmp/stable-badging.txt
+          grep -q "versionCode='1000362'" /tmp/stable-badging.txt
+          grep -q "versionName='v340-premium-app-stage9'" /tmp/stable-badging.txt
+          unzip -t "$OUT" >/tmp/stable-ziptest.txt
+          grep -q 'No errors detected' /tmp/stable-ziptest.txt
+          sha256sum "$OUT" > "$OUT.sha256"
       - name: Prepare APK artifacts
         shell: bash
         run: |
@@ -119,7 +154,18 @@ jobs:
           mkdir -p dist
           cp BLOFY-ANDROID-2026/app/build/outputs/apk/debug/app-debug.apk dist/BLOFY-PLAYER-v340-PREMIUM-PLAYBACK-V2-STAGE9-INSTALLABLE-TEST.apk
           cp BLOFY-ANDROID-2026/app/build/outputs/apk/release/app-release-unsigned.apk dist/BLOFY-PLAYER-v340-PREMIUM-PLAYBACK-V2-STAGE9-UNSIGNED-RELEASE.apk
+          cp BLOFY-PLAYER-v340-PREMIUM-PLAYBACK-V2-STAGE9-STABLE-SIGNED.apk dist/
+          cp BLOFY-PLAYER-v340-PREMIUM-PLAYBACK-V2-STAGE9-STABLE-SIGNED.apk.sha256 dist/
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
+      - name: Upload stable signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOFY-v340-premium-playback-v2-stage9-STABLE-SIGNED
+          path: |
+            dist/BLOFY-PLAYER-v340-PREMIUM-PLAYBACK-V2-STAGE9-STABLE-SIGNED.apk
+            dist/BLOFY-PLAYER-v340-PREMIUM-PLAYBACK-V2-STAGE9-STABLE-SIGNED.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload installable test APK
         uses: actions/upload-artifact@v4
         with:
