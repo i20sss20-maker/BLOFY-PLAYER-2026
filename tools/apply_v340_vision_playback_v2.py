@@ -57,16 +57,13 @@ if 'private final Runnable visionVodSteadyStall' not in v:
     helper='''    private final Runnable visionVodSteadyStall = () -> {\n        if (!firstFrame || usingVlc || player == null) return;\n        if (player.getPlaybackState() != Player.STATE_BUFFERING) return;\n        if (!visionSameUrlRecoveryAttempted && validUrl(resolvedUrl)) {\n            visionSameUrlRecoveryAttempted = true;\n            resumePosition = Math.max(0, player.getCurrentPosition());\n            releaseAllEngines();\n            firstFrame = false;\n            openMedia3();\n            return;\n        }\n        recover("توقف تدفق الفيديو بعد بدء التشغيل");\n    };\n\n'''
     v=v.replace(anchor,helper+anchor,1)
 
-if 'PlaybackPolicy.isNetworkFailure(reason) || PlaybackPolicy.isStartupTimeout(reason)' not in v:
-    method=v.find('    private void recover(String reason)')
-    end=v.find('    private void showFinalPlaybackError(', method)
-    if method < 0 or end < 0: raise SystemExit('vision-v2: vod recover method missing')
-    chunk=v[method:end]
-    needle='PlaybackPolicy.isNetworkFailure(reason)'
-    if needle not in chunk: raise SystemExit('vision-v2: vod network recovery predicate missing')
-    chunk=chunk.replace(needle, '(PlaybackPolicy.isNetworkFailure(reason) || PlaybackPolicy.isStartupTimeout(reason))', 1)
-    chunk=chunk.replace('                && !PlaybackPolicy.isStartupTimeout(reason)\n', '')
-    v=v[:method]+chunk+v[end:]
+# VOD/episode startup timeout: try the alternate/direct source before the normal
+# recover ladder. Patching the timeout runnable avoids depending on R11E's recover() shape.
+if 'vision-vod-timeout-direct' not in v:
+    needle='''    private final Runnable startupTimeout = () -> {\n        if (!firstFrame && hasActiveEngine()) recover("انتهت مهلة بدء الفيديو");\n    };'''
+    replacement='''    private final Runnable startupTimeout = () -> {\n        if (firstFrame || !hasActiveEngine()) return;\n        // vision-vod-timeout-direct\n        if (!usingVlc && !alternateSourceAttempted && !id.isEmpty()) {\n            alternateSourceAttempted = true;\n            releaseAllEngines();\n            sourceVariant = "direct";\n            resolvedUrl = null;\n            resolve();\n            return;\n        }\n        recover("انتهت مهلة بدء الفيديو");\n    };'''
+    if needle not in v: raise SystemExit('vision-v2: vod startup timeout anchor missing')
+    v=v.replace(needle,replacement,1)
 
 old='''            case org.videolan.libvlc.MediaPlayer.Event.EndReached:\n                onContentEnded();\n                break;'''
 new='''            case org.videolan.libvlc.MediaPlayer.Event.EndReached:\n                if (!firstFrame) recover("انتهى المصدر قبل بدء الفيديو");\n                else onContentEnded();\n                break;'''
@@ -98,7 +95,7 @@ g=G.read_text(encoding='utf-8'); g=re.sub(r'versionCode\s*=\s*\d+','versionCode 
 
 checks={
 P:['visionSteadyStateStall','visionSameUrlRecoveryAttempted','vision-live-timeout-direct','6_500L'],
-V:['visionVodSteadyStall','durationMs() < 1_000','انتهى المصدر قبل بدء الفيديو','PlaybackPolicy.isNetworkFailure(reason) || PlaybackPolicy.isStartupTimeout(reason)'],
+V:['visionVodSteadyStall','durationMs() < 1_000','انتهى المصدر قبل بدء الفيديو','vision-vod-timeout-direct'],
 G:['versionCode = 1000365','v340-vision-stable-playback-v2']}
 for path,marks in checks.items():
     s=path.read_text(encoding='utf-8')
