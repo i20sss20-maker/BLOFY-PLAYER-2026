@@ -70,8 +70,15 @@ if 'EpgNowNextCache.lookup' not in l:
 LIVE.write_text(l,encoding='utf-8')
 
 g=GRADLE.read_text(encoding='utf-8');g=re.sub(r'versionCode\s*=\s*\d+','versionCode = 1000362',g,count=1);g=re.sub(r'versionName\s*=\s*"[^"]*"','versionName = "v340-premium-app-stage9"',g,count=1);GRADLE.write_text(g,encoding='utf-8')
+
+# Hygiene normalization: Stage9 must never leave whitespace-only/trailing-space diffs.
+for target in (HOME, VOD, LIVE, PLAYER, GRADLE, JAVA/'EpgNowNextCache.java'):
+    text=target.read_text(encoding='utf-8')
+    clean='\n'.join(line.rstrip() for line in text.splitlines())+'\n'
+    target.write_text(clean,encoding='utf-8')
+
 for path,marks in {HOME:['showPremiumHomeStage9','stage9-premium-home','متابعة المشاهدة','وصل حديثاً'],VOD:['qualityButton','cycleQuality','stage9-track-manager'],PLAYER:['stage9-quick-diagnostics'],LIVE:['nowNext','EpgNowNextCache.lookup'],GRADLE:['versionCode = 1000362']}.items():
  t=path.read_text(encoding='utf-8');
  for m in marks:
   if m not in t: raise SystemExit(f'stage9r missing {path.name}: {m}')
-print('stage9 replacement applied: independent premium home + track manager + diagnostics + optional EPG')
+print('stage9 replacement applied: independent premium home + track manager + diagnostics + optional EPG + whitespace hygiene')
