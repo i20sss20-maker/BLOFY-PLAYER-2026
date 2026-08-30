@@ -16,15 +16,19 @@ workflow = WORKFLOW.read_text(encoding='utf-8', errors='ignore')
 checks=[]
 def add(name, ok): checks.append((name, bool(ok)))
 def count(token): return all_java.count(token)
+def has_conflict_marker(text):
+    # Match only real Git conflict marker lines. This intentionally does not
+    # flag commands/regexes that merely contain the marker strings as data.
+    return any(re.match(r'^\s*(<<<<<<<|=======|>>>>>>>)\s*.*$', line) for line in text.splitlines())
 
 add('single versionCode declaration', len(re.findall(r'\bversionCode\s*=\s*\d+', gradle)) == 1)
 add('premium versionCode current', 'versionCode = 1000362' in gradle)
 add('single versionName declaration', len(re.findall(r'\bversionName\s*=\s*"[^"]+"', gradle)) == 1)
 add('premium versionName current', 'v340-premium-app-stage9' in gradle)
-add('no merge conflict markers in Gradle', not any(x in gradle for x in ('<<<<<<<','=======','>>>>>>>')))
+add('no merge conflict markers in Gradle', not has_conflict_marker(gradle))
 
 for name,text in files.items():
-    add(f'{name}: no merge conflict markers', not any(x in text for x in ('<<<<<<<','=======','>>>>>>>')))
+    add(f'{name}: no merge conflict markers', not has_conflict_marker(text))
     imports=[ln.strip() for ln in text.splitlines() if ln.strip().startswith('import ')]
     add(f'{name}: no duplicate imports', len(imports)==len(set(imports)))
 
@@ -77,7 +81,7 @@ add('workflow package64 gate single', workflow.count('python3 tools/verify_packa
 add('workflow playback12 gate single', workflow.count('python3 tools/verify_playback_v2_12.py')==1)
 add('workflow concurrency enabled','cancel-in-progress: true' in workflow)
 add('workflow branch scoped','branches: [v340-playback-core-hotfix]' in workflow)
-add('workflow no merge conflict markers',not any(x in workflow for x in ('<<<<<<<','=======','>>>>>>>')))
+add('workflow no merge conflict markers', not has_conflict_marker(workflow))
 
 stale=['BLOFY PLAYER  •  v328','versionCode = 1000355','versionCode = 1000356','versionCode = 1000357','versionCode = 1000358','versionCode = 1000359','versionCode = 1000360','versionCode = 1000361']
 for token in stale:
